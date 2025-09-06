@@ -1,4 +1,4 @@
-ISC License
+# ISC License
 
 Copyright 2025 Deepgram Inc.
 
