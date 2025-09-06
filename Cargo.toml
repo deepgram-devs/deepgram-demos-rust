@@ -1,0 +1,5 @@
+[workspace]
+members = [
+  "flux-turn-taking",
+  "speech-to-text"
+]
