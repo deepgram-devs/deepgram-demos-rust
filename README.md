@@ -93,4 +93,4 @@ On some systems, you may need to grant microphone permissions to the terminal or
 
 ## License
 
-This project is provided as-is for educational and demonstration purposes.
+See `LICENSE.md`
