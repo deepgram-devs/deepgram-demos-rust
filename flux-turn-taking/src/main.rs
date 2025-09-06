@@ -4,7 +4,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
-use serde::{Deserialize};
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
@@ -15,6 +15,33 @@ struct DeepgramResponse {
     message_type: String,
     #[serde(flatten)]
     data: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct AudioInput {
+    encoding: String,
+    sample_rate: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct AudioOutput {
+    encoding: String,
+    sample_rate: u32,
+    bitrate: u32,
+    container: String,
+}
+
+#[derive(Debug, Serialize)]
+struct Audio {
+    input: AudioInput,
+    output: AudioOutput,
+}
+
+#[derive(Debug, Serialize)]
+struct SettingsMessage {
+    #[serde(rename = "type")]
+    message_type: String,
+    audio: Audio,
 }
 
 
@@ -104,6 +131,37 @@ async fn connect_to_deepgram(api_key: &str) -> Result<(tokio_tungstenite::WebSoc
     Ok((ws_stream, response))
 }
 
+async fn send_settings_message(
+    ws_sender: &mut futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        Message,
+    >,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let settings = SettingsMessage {
+        message_type: "Settings".to_string(),
+        audio: Audio {
+            input: AudioInput {
+                encoding: "linear16".to_string(),
+                sample_rate: 44100,
+            },
+            output: AudioOutput {
+                encoding: "mp3".to_string(),
+                sample_rate: 24000,
+                bitrate: 48000,
+                container: "none".to_string(),
+            },
+        },
+    };
+
+    let settings_json = serde_json::to_string(&settings)?;
+    info!("Sending settings message: {}", settings_json);
+    
+    ws_sender.send(Message::Text(settings_json.into())).await?;
+    info!("Settings message sent successfully");
+    
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
@@ -128,7 +186,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ws_stream, _response) = connect_to_deepgram(&api_key).await?;
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
     
-    // Configuration is handled via URL parameters, no need to send additional config
+    // Send settings message immediately after connection
+    send_settings_message(&mut ws_sender).await?;
     
     // Spawn task to handle WebSocket responses
     let response_handle = tokio::spawn(async move {
