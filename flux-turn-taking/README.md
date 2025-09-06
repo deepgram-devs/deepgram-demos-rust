@@ -78,7 +78,7 @@ Message types you might see:
 The application is configured to use:
 
 - **Model**: `flux-general-en` (Deepgram's Flux model for English)
-- **Sample Rate**: 16kHz
+- **Sample Rate**: 44.1kHz
 - **Encoding**: linear16 (16-bit PCM)
 - **Channels**: 1 (mono)
 
@@ -123,7 +123,7 @@ export DEEPGRAM_API_KEY="your_api_key_here"
 This application connects to the Deepgram Flux API WebSocket endpoint:
 
 ```text
-wss://api.preview.deepgram.com/v2/listen?model=flux-general-en&sample_rate=16000&encoding=linear16
+wss://api.preview.deepgram.com/v2/listen?model=flux-general-en&sample_rate=44100&encoding=linear16
 ```
 
 For more information about the Flux API, visit: [Flux Early Access](https://developers.deepgram.com/flux-early-access)
