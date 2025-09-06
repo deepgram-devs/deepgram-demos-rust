@@ -3,3 +3,4 @@ members = [
   "flux-turn-taking",
   "speech-to-text"
 ]
+resolver = "3"
