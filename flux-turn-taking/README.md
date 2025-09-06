@@ -6,7 +6,7 @@ A Rust application that captures audio from your microphone and streams it to th
 
 - Real-time audio capture from microphone
 - WebSocket connection to Deepgram Flux API
-- Streams 16kHz, 16-bit linear PCM audio data
+- Streams 44.1kHz, 16-bit linear PCM audio data
 - Displays all WebSocket message types and response data
 - Handles various message types (text, binary, close, ping, pong)
 - Clean shutdown with Ctrl+C
