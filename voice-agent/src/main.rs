@@ -1,5 +1,5 @@
 use std::env;
-use std::sync::Arc;
+
 use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -9,9 +9,11 @@ use log::{error, info};
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use std::sync::mpsc as std_mpsc;
 use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
+use rodio::{OutputStream, Sink, Source};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct VoiceAgentConfig {
@@ -162,20 +164,89 @@ impl AudioCapture {
 }
 
 struct AudioPlayer {
-    // For now, we'll just log audio reception since rodio setup is complex
-    // In a real implementation, you'd set up proper audio playback
+    _stream_handle: OutputStream,
+    sink: Sink,
 }
 
 impl AudioPlayer {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(AudioPlayer {})
+        let stream_handle = rodio::OutputStreamBuilder::open_default_stream()
+            .map_err(|e| format!("Failed to create audio output stream: {}", e))?;
+        let sink = Sink::connect_new(&stream_handle.mixer());
+        
+        Ok(AudioPlayer {
+            _stream_handle: stream_handle,
+            sink,
+        })
     }
     
     fn play_audio(&self, audio_data: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
         info!("🔊 Received audio data for playback: {} bytes", audio_data.len());
-        // TODO: Implement actual audio playback with rodio
-        // For now, we just log that we received audio
+        
+        if audio_data.is_empty() {
+            return Ok(());
+        }
+        
+        // The audio data from Deepgram is linear16 PCM at 24kHz (as configured)
+        // Convert bytes to f32 samples (rodio expects f32)
+        let mut samples = Vec::with_capacity(audio_data.len() / 2);
+        for chunk in audio_data.chunks_exact(2) {
+            let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
+            // Convert i16 to f32 in range [-1.0, 1.0]
+            let f32_sample = sample as f32 / i16::MAX as f32;
+            samples.push(f32_sample);
+        }
+        
+        // Create a source from the PCM data
+        let source = PCMSource::new(samples, 24000, 1);
+        
+        // Append to sink for playback
+        self.sink.append(source);
+        
         Ok(())
+    }
+}
+
+// Custom PCM source for rodio
+struct PCMSource {
+    samples: std::vec::IntoIter<f32>,
+    sample_rate: u32,
+    channels: u16,
+}
+
+impl PCMSource {
+    fn new(samples: Vec<f32>, sample_rate: u32, channels: u16) -> Self {
+        Self {
+            samples: samples.into_iter(),
+            sample_rate,
+            channels,
+        }
+    }
+}
+
+impl Iterator for PCMSource {
+    type Item = f32;
+    
+    fn next(&mut self) -> Option<Self::Item> {
+        self.samples.next()
+    }
+}
+
+impl Source for PCMSource {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+    
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+    
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+    
+    fn total_duration(&self) -> Option<Duration> {
+        None
     }
 }
 
@@ -241,7 +312,7 @@ fn create_agent_config(sample_rate: u32, _channels: u16) -> VoiceAgentConfig {
 
 async fn handle_voice_agent_responses(
     mut ws_receiver: futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
-    audio_player: Arc<AudioPlayer>,
+    audio_tx: std_mpsc::Sender<Vec<u8>>,
 ) {
     while let Some(message) = ws_receiver.next().await {
         match message {
@@ -259,8 +330,8 @@ async fn handle_voice_agent_responses(
                                     if let Some(audio_str) = audio_data.as_str() {
                                         // Decode base64 audio data
                                         if let Ok(decoded_audio) = general_purpose::STANDARD.decode(audio_str) {
-                                            if let Err(e) = audio_player.play_audio(decoded_audio) {
-                                                error!("Failed to play audio: {}", e);
+                                            if let Err(e) = audio_tx.send(decoded_audio) {
+                                                error!("Failed to send audio to player: {}", e);
                                             }
                                         }
                                     }
@@ -296,8 +367,8 @@ async fn handle_voice_agent_responses(
             Ok(Message::Binary(data)) => {
                 info!("🔊 Received binary audio data: {} bytes", data.len());
                 // Handle binary audio data directly
-                if let Err(e) = audio_player.play_audio(data.to_vec()) {
-                    error!("Failed to play binary audio: {}", e);
+                if let Err(e) = audio_tx.send(data.to_vec()) {
+                    error!("Failed to send binary audio to player: {}", e);
                 }
             }
             Ok(Message::Close(frame)) => {
@@ -342,11 +413,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     info!("Audio config - Sample rate: {}, Channels: {}", sample_rate, channels);
     
-    // Initialize audio player
-    let audio_player = Arc::new(AudioPlayer::new()?);
-    
-    // Create channel for audio data
+    // Create channels for audio data
     let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (playback_tx, playback_rx) = std_mpsc::channel::<Vec<u8>>();
+    
+    // Initialize audio player in a separate thread
+    std::thread::spawn(move || {
+        let audio_player = match AudioPlayer::new() {
+            Ok(player) => player,
+            Err(e) => {
+                error!("Failed to create audio player: {}", e);
+                return;
+            }
+        };
+        
+        for audio_data in playback_rx {
+            if let Err(e) = audio_player.play_audio(audio_data) {
+                error!("Failed to play audio: {}", e);
+            }
+        }
+    });
     
     // Start audio capture
     let _stream = audio_capture.start_capture(audio_tx)?;
@@ -368,9 +454,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     sleep(Duration::from_millis(500)).await;
     
     // Spawn task to handle WebSocket responses
-    let audio_player_clone = Arc::clone(&audio_player);
+    let playback_tx_clone = playback_tx.clone();
     let response_handle = tokio::spawn(async move {
-        handle_voice_agent_responses(ws_receiver, audio_player_clone).await;
+        handle_voice_agent_responses(ws_receiver, playback_tx_clone).await;
     });
     
     // Main loop: send audio data to WebSocket
