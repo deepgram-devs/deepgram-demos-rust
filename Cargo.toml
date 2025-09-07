@@ -2,5 +2,6 @@
 members = [
   "flux-turn-taking",
   "speech-to-text"
+, "voice-agent"
 ]
 resolver = "3"
