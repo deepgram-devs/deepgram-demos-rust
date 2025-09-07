@@ -7,8 +7,9 @@ This is a Rust application that demonstrates bidirectional conversation using De
 - **Real-time Audio Capture**: Captures audio from your computer's microphone using CPAL
 - **WebSocket Communication**: Connects to Deepgram's Voice Agent API via WebSocket
 - **Bidirectional Conversation**: Sends audio to the agent and receives responses
-- **Configurable Agent**: Uses Nova-2 for speech recognition, GPT-4 for thinking, and Aura Asteria for speech synthesis
-- **Audio Response Handling**: Receives and logs audio responses from the agent
+- **Configurable Agent**: Uses Nova-3 for speech recognition, GPT-4o-mini for thinking, and Aura-2 Thalia for speech synthesis
+- **Audio Response Handling**: Receives and plays back audio responses from the agent using rodio
+- **Smart Microphone Control**: Automatically disables microphone during agent speech and re-enables after 600ms of silence
 
 ## Prerequisites
 
@@ -60,9 +61,9 @@ cargo run
 
 The application is configured to use:
 
-- **Listen Model**: Nova-2 for speech recognition
-- **Think Provider**: OpenAI GPT-4 for conversation
-- **Speak Model**: Aura Asteria for speech synthesis
+- **Listen Model**: Nova-3 for speech recognition
+- **Think Provider**: OpenAI GPT-4o-mini for conversation
+- **Speak Model**: Aura-2 Thalia for speech synthesis
 - **Audio Input**: Linear16 PCM encoding
 - **Audio Output**: Linear16 PCM at 24kHz
 
@@ -74,7 +75,7 @@ The application consists of several key components:
 
 1. **AudioCapture**: Handles microphone input using CPAL
 2. **WebSocket Client**: Manages connection to Deepgram Voice Agent API
-3. **AudioPlayer**: Handles audio response playback (currently logs only)
+3. **AudioPlayer**: Handles audio response playback using rodio with automatic microphone control
 4. **Message Handlers**: Process different types of responses from the agent
 
 ## Troubleshooting
@@ -101,9 +102,16 @@ This application uses Deepgram's Voice Agent API. For more information:
 - [Deepgram Voice Agent Documentation](https://developers.deepgram.com/docs/voice-agent)
 - [Deepgram API Console](https://console.deepgram.com/)
 
+## Current Features
+
+- **Full Audio Playback**: Complete implementation of audio response playback using rodio
+- **Smart Microphone Management**: Automatic microphone disable/enable based on agent speech
+- **Real-time Audio Streaming**: Continuous audio capture and streaming to Deepgram
+- **Multiple Message Types**: Handles user transcripts, agent transcripts, thinking status, and audio data
+- **Binary and Text Audio**: Supports both base64-encoded and binary audio responses
+
 ## Future Enhancements
 
-- **Audio Playback**: Complete implementation of audio response playback using rodio
 - **Voice Activity Detection**: Add silence detection to optimize streaming
 - **Configuration File**: Allow runtime configuration without code changes
 - **Multiple Audio Formats**: Support for different audio input/output formats
