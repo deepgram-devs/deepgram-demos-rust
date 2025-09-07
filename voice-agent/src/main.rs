@@ -17,44 +17,13 @@ use url::Url;
 struct VoiceAgentConfig {
     #[serde(rename = "type")]
     message_type: String,
-    config: AgentConfig,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct AgentConfig {
+    tags: Vec<String>,
+    audio: AudioSettings,
     agent: AgentSettings,
-    audio: AudioConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct AgentSettings {
-    listen: ListenConfig,
-    think: ThinkConfig,
-    speak: SpeakConfig,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ListenConfig {
-    model: String,
-    language: String,
-    smart_format: bool,
-    interim_results: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ThinkConfig {
-    provider: String,
-    model: String,
-    instructions: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SpeakConfig {
-    model: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct AudioConfig {
+struct AudioSettings {
     input: AudioInputConfig,
     output: AudioOutputConfig,
 }
@@ -63,15 +32,58 @@ struct AudioConfig {
 struct AudioInputConfig {
     encoding: String,
     sample_rate: u32,
-    channels: u16,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AudioOutputConfig {
     encoding: String,
     sample_rate: u32,
-    channels: u16,
     container: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AgentSettings {
+    language: String,
+    listen: ListenConfig,
+    think: ThinkConfig,
+    speak: SpeakConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ListenConfig {
+    provider: ListenProviderConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ThinkConfig {
+    provider: ThinkProviderConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SpeakConfig {
+    provider: SpeakProviderConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ListenProviderConfig {
+    #[serde(rename = "type")]
+    provider_type: String,
+    model: String,
+    smart_format: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ThinkProviderConfig {
+    #[serde(rename = "type")]
+    provider_type: String,
+    model: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SpeakProviderConfig {
+    #[serde(rename = "type")]
+    provider_type: String,
+    model: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -173,7 +185,7 @@ async fn connect_to_voice_agent(api_key: &str, _sample_rate: u32, _channels: u16
     
     let request = tokio_tungstenite::tungstenite::handshake::client::Request::get(url.as_str())
         .header("Authorization", format!("Token {}", api_key))
-        .header("Host", url.host_str().unwrap_or("api.deepgram.com"))
+        .header("Host", url.host_str().unwrap_or("agent.deepgram.com"))
         .header("Upgrade", "websocket")
         .header("Connection", "Upgrade")
         .header("Sec-WebSocket-Key", tokio_tungstenite::tungstenite::handshake::client::generate_key())
@@ -187,37 +199,40 @@ async fn connect_to_voice_agent(api_key: &str, _sample_rate: u32, _channels: u16
     Ok(ws_stream)
 }
 
-fn create_agent_config(sample_rate: u32, channels: u16) -> VoiceAgentConfig {
+fn create_agent_config(sample_rate: u32, _channels: u16) -> VoiceAgentConfig {
     VoiceAgentConfig {
-        message_type: "agent_config".to_string(),
-        config: AgentConfig {
-            agent: AgentSettings {
-                listen: ListenConfig {
-                    model: "nova-2".to_string(),
-                    language: "en".to_string(),
-                    smart_format: true,
-                    interim_results: true,
-                },
-                think: ThinkConfig {
-                    provider: "open_ai".to_string(),
-                    model: "gpt-4".to_string(),
-                    instructions: "You are a helpful AI assistant. Keep your responses conversational and concise.".to_string(),
-                },
-                speak: SpeakConfig {
-                    model: "aura-asteria-en".to_string(),
+        message_type: "Settings".to_string(),
+        tags: vec!["demo".to_string(), "voice_agent".to_string()],
+        audio: AudioSettings {
+            input: AudioInputConfig {
+                encoding: "linear16".to_string(),
+                sample_rate,
+            },
+            output: AudioOutputConfig {
+                encoding: "linear16".to_string(),
+                sample_rate: 24000,
+                container: "none".to_string(),
+            },
+        },
+        agent: AgentSettings {
+            language: "en".to_string(),
+            listen: ListenConfig {
+                provider: ListenProviderConfig {
+                    provider_type: "deepgram".to_string(),
+                    model: "nova-3".to_string(),
+                    smart_format: false,
                 },
             },
-            audio: AudioConfig {
-                input: AudioInputConfig {
-                    encoding: "linear16".to_string(),
-                    sample_rate,
-                    channels,
+            think: ThinkConfig {
+                provider: ThinkProviderConfig {
+                    provider_type: "open_ai".to_string(),
+                    model: "gpt-4o-mini".to_string(),
                 },
-                output: AudioOutputConfig {
-                    encoding: "linear16".to_string(),
-                    sample_rate: 24000,
-                    channels: 1,
-                    container: "none".to_string(),
+            },
+            speak: SpeakConfig {
+                provider: SpeakProviderConfig {
+                    provider_type: "deepgram".to_string(),
+                    model: "aura-2-thalia-en".to_string(),
                 },
             },
         },
@@ -341,13 +356,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ws_stream = connect_to_voice_agent(&api_key, sample_rate, channels).await?;
     let (mut ws_sender, ws_receiver) = ws_stream.split();
     
-    // Send initial configuration
+    // Send Settings configuration
     let config = create_agent_config(sample_rate, channels);
     let config_json = serde_json::to_string(&config)?;
-    info!("📤 Sending agent configuration to WebSocket...");
+    info!("📤 Sending Settings configuration to WebSocket...");
     info!("📄 Config: {}", config_json);
     ws_sender.send(Message::Text(config_json.into())).await?;
-    info!("✅ Agent configuration sent successfully");
+    info!("✅ Settings configuration sent successfully");
     
     // Wait a moment for configuration to be processed
     sleep(Duration::from_millis(500)).await;
