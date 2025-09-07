@@ -13,47 +13,53 @@ This is a Rust application that demonstrates bidirectional conversation using De
 ## Prerequisites
 
 1. **Deepgram API Key**: You need a Deepgram API key with access to Voice Agent features
-2. **Rust**: Make sure you have Rust installed (https://rustup.rs/)
+2. **Rust**: Make sure you have [Rust toolchain installed](https://rustup.rs/)
 3. **Audio Device**: A working microphone for audio input
 
 ## Setup
 
 1. **Clone and navigate to the project**:
-   ```bash
-   cd voice-agent
-   ```
 
-2. **Set up environment variables**:
-   ```bash
-   cp .env.example .env
-   # Edit .env and add your Deepgram API key
-   ```
+```bash
+cd voice-agent
+```
 
-3. **Install dependencies**:
-   ```bash
-   cargo build
-   ```
+1. **Set up environment variables**:
+
+```bash
+cp .env.example .env
+# Edit .env and add your Deepgram API key
+```
+
+1. **Install dependencies**:
+
+```bash
+cargo build
+```
 
 ## Usage
 
 1. **Run the application**:
-   ```bash
-   cargo run
-   ```
 
-2. **Start speaking**: Once the application starts, it will begin capturing audio from your microphone and streaming it to Deepgram's Voice Agent.
+```bash
+cargo run
+```
 
-3. **Monitor the conversation**: The application will log:
+1. **Start speaking**: Once the application starts, it will begin capturing audio from your microphone and streaming it to Deepgram's Voice Agent.
+
+1. **Monitor the conversation**: The application will log:
+
    - Your speech transcriptions
    - Agent thinking status
    - Agent responses
    - Audio data reception
 
-4. **Stop the application**: Press `Ctrl+C` to stop the application.
+1. **Stop the application**: Press `Ctrl+C` to stop the application.
 
 ## Configuration
 
 The application is configured to use:
+
 - **Listen Model**: Nova-2 for speech recognition
 - **Think Provider**: OpenAI GPT-4 for conversation
 - **Speak Model**: Aura Asteria for speech synthesis
@@ -82,6 +88,7 @@ The application consists of several key components:
 ### Logging
 
 The application uses `env_logger`. You can control log levels with:
+
 ```bash
 RUST_LOG=debug cargo run  # For detailed logging
 RUST_LOG=info cargo run   # For normal logging (default)
@@ -90,6 +97,7 @@ RUST_LOG=info cargo run   # For normal logging (default)
 ## API Reference
 
 This application uses Deepgram's Voice Agent API. For more information:
+
 - [Deepgram Voice Agent Documentation](https://developers.deepgram.com/docs/voice-agent)
 - [Deepgram API Console](https://console.deepgram.com/)
 
