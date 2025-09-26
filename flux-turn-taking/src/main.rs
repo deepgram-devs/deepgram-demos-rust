@@ -82,7 +82,7 @@ impl AudioCapture {
 async fn connect_to_deepgram(api_key: &str) -> Result<(tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>), Box<dyn std::error::Error>> {
     
     let url = format!(
-        "wss://api.preview.deepgram.com/v2/listen?model=flux-general-en&sample_rate=44100&encoding=linear16"
+        "wss://api.deepgram.com/v2/listen?model=flux-general-en&sample_rate=44100&encoding=linear16"
     );
     
     let url = Url::parse(&url)?;
