@@ -3,26 +3,9 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig, SampleFormat};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize};
 use dotenv::dotenv;
 use std::env;
-
-#[derive(Debug, Serialize, Deserialize)]
-struct DeepgramConfig {
-    #[serde(rename = "type")]
-    message_type: String,
-    config: TranscriptionConfig,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct TranscriptionConfig {
-    encoding: String,
-    sample_rate: u32,
-    channels: u16,
-    interim_results: bool,
-    punctuate: bool,
-    smart_format: bool,
-}
 
 #[derive(Debug, Deserialize)]
 struct DeepgramResponse {

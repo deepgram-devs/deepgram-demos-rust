@@ -1,7 +1,8 @@
 [workspace]
 members = [
   "flux-turn-taking",
-  "speech-to-text"
-, "voice-agent"
+  "speech-to-text",
+  "text-to-speech",
+  "voice-agent",
 ]
 resolver = "3"
