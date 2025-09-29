@@ -42,12 +42,11 @@ Optional arguments:
 
 - `--voice`: Specify the voice model (eg. `aura-2-helena-en`)
 - `--tags`: Add optional request tags
-- `--callback-url`: Provide an optional callback URL
 
 Example:
 
 ```bash
-cargo run -- speak --voice aura-2 --language en-US
+cargo run -- speak --voice aura-2-thalia-en
 ```
 
 ### Interactive Usage

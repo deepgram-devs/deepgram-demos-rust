@@ -27,10 +27,6 @@ enum Commands {
         /// Optional request tags
         #[arg(long)]
         tags: Option<String>,
-
-        /// Optional callback URL
-        #[arg(long)]
-        callback_url: Option<String>,
     },
 }
 
@@ -45,7 +41,6 @@ async fn generate_tts(
     text: &str,
     voice: &str,
     tags: Option<String>,
-    callback_url: Option<String>,
 ) -> Result<Vec<u8>> {
     let request = TtsRequest {
         text: text.to_string(),
@@ -63,12 +58,6 @@ async fn generate_tts(
     if tags.is_some() {
         request = request.query(&[("tag", tags)]);
     }
-
-    // Add callback_url query string parameter, if user specified one
-    if callback_url.is_some() {
-        request = request.query(&[("callback_url", urlencoding::encode(callback_url.unwrap().as_str()))]);
-    }
-
 
     let response = request
         .send()
@@ -106,7 +95,6 @@ async fn main() -> Result<()> {
         Some(Commands::Speak {
             voice,
             tags,
-            callback_url,
         }) => {
             let (tx, rx) = mpsc::channel();
             let output_stream = OutputStreamBuilder::open_default_stream().unwrap();
@@ -140,7 +128,6 @@ async fn main() -> Result<()> {
                         &text,
                         &voice,
                         tags.clone(),
-                        callback_url.clone(),
                     )
                     .await
                     {
