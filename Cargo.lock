@@ -359,7 +359,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
 
 [[package]]
-name = "deepgram-streaming-rust"
+name = "dg-stt"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -373,6 +373,22 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.28.0",
  "url",
+]
+
+[[package]]
+name = "dg-tts"
+version = "0.1.3"
+dependencies = [
+ "anyhow",
+ "base64",
+ "clap",
+ "dotenv",
+ "reqwest",
+ "rodio",
+ "serde",
+ "serde_json",
+ "tokio",
+ "urlencoding",
 ]
 
 [[package]]
@@ -2014,22 +2030,6 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys 0.60.2",
-]
-
-[[package]]
-name = "text-to-speech"
-version = "0.1.3"
-dependencies = [
- "anyhow",
- "base64",
- "clap",
- "dotenv",
- "reqwest",
- "rodio",
- "serde",
- "serde_json",
- "tokio",
- "urlencoding",
 ]
 
 [[package]]

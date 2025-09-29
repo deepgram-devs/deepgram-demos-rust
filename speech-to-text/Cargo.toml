@@ -1,8 +1,8 @@
 [package]
-name = "deepgram-streaming-rust"
+name = "dg-stt"
 version = "0.1.0"
 edition = "2024"
-default-run = "deepgram-streaming-rust"
+default-run = "dg-stt"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
