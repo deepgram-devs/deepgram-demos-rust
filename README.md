@@ -47,6 +47,7 @@ Use these ideas to inspire business and application ideas you could build with D
 | [Text-to-Speech](text-to-speech/) | Command-line interface for generating and playing back speech | TTS |
 | [Voice Agent](voice-agent/) | Bidirectional conversation using Voice Agent WebSocket APIs | VA |
 | [Flux Turn-Taking](flux-turn-taking/) | Real-time audio streaming to Deepgram Flux API for speech recognition | STT |
+| [Audio Recorder](audio-recorder/) | An audio recording application, from local input devices | --- |
 
 ## License
 
