@@ -3,7 +3,27 @@ use clap::{Parser, Subcommand};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Host, SampleFormat, StreamConfig};
 use hound::{WavSpec, WavWriter};
+use mp3lame_encoder::{Builder, FlushNoGap, InterleavedPcm};
+use std::fs::File;
+use std::io::Write;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum AudioFormat {
+    Wav,
+    Mp3,
+}
+
+impl AudioFormat {
+    fn from_path(path: &str) -> Self {
+        let path = Path::new(path);
+        match path.extension().and_then(|s| s.to_str()) {
+            Some(ext) if ext.eq_ignore_ascii_case("mp3") => AudioFormat::Mp3,
+            _ => AudioFormat::Wav,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "audio-recorder")]
@@ -116,7 +136,14 @@ fn record_audio(output_path: &str, device_name: Option<&str>, duration: Option<u
         config.sample_format()
     );
     
-    println!("Recording to: {}", output_path);
+    // Detect output format from file extension
+    let format = AudioFormat::from_path(output_path);
+    let format_name = match format {
+        AudioFormat::Wav => "WAV",
+        AudioFormat::Mp3 => "MP3",
+    };
+    
+    println!("Recording to: {} (format: {})", output_path, format_name);
     if let Some(secs) = duration {
         println!("Duration: {} seconds", secs);
     } else {
@@ -125,16 +152,27 @@ fn record_audio(output_path: &str, device_name: Option<&str>, duration: Option<u
     
     let stream_config: StreamConfig = config.clone().into();
     
-    // Start recording based on sample format
-    match config.sample_format() {
-        SampleFormat::F32 => record_with_format::<f32>(&device, &stream_config, output_path, duration),
-        SampleFormat::I16 => record_with_format::<i16>(&device, &stream_config, output_path, duration),
-        SampleFormat::U16 => {
-            // U16 is not directly supported by hound, so we convert to I16
-            println!("Note: Converting U16 samples to I16 for WAV file compatibility");
-            record_with_format_u16(&device, &stream_config, output_path, duration)
-        },
-        _ => Err(anyhow::anyhow!("Unsupported sample format: {:?}", config.sample_format())),
+    // Start recording based on format and sample format
+    match format {
+        AudioFormat::Wav => {
+            match config.sample_format() {
+                SampleFormat::F32 => record_wav_with_format::<f32>(&device, &stream_config, output_path, duration),
+                SampleFormat::I16 => record_wav_with_format::<i16>(&device, &stream_config, output_path, duration),
+                SampleFormat::U16 => {
+                    println!("Note: Converting U16 samples to I16 for WAV file compatibility");
+                    record_wav_with_format_u16(&device, &stream_config, output_path, duration)
+                },
+                _ => Err(anyhow::anyhow!("Unsupported sample format: {:?}", config.sample_format())),
+            }
+        }
+        AudioFormat::Mp3 => {
+            match config.sample_format() {
+                SampleFormat::F32 => record_mp3_with_format_f32(&device, &stream_config, output_path, duration),
+                SampleFormat::I16 => record_mp3_with_format_i16(&device, &stream_config, output_path, duration),
+                SampleFormat::U16 => record_mp3_with_format_u16(&device, &stream_config, output_path, duration),
+                _ => Err(anyhow::anyhow!("Unsupported sample format: {:?}", config.sample_format())),
+            }
+        }
     }
 }
 
@@ -154,7 +192,7 @@ fn find_device_by_name(host: &Host, name: &str) -> Result<Device> {
     Err(anyhow::anyhow!("Device '{}' not found", name))
 }
 
-fn record_with_format<T>(
+fn record_wav_with_format<T>(
     device: &Device,
     config: &StreamConfig,
     output_path: &str,
@@ -236,7 +274,262 @@ where
     Ok(())
 }
 
-fn record_with_format_u16(
+fn record_mp3_with_format_i16(
+    device: &Device,
+    config: &StreamConfig,
+    output_path: &str,
+    duration: Option<u64>,
+) -> Result<()> {
+
+    println!("MP3 encoding: Using i16 format");
+
+    // Create MP3 encoder
+    let mut builder = Builder::new().expect("Failed to create MP3 encoder");
+    builder.set_num_channels(1).expect("Failed to set channels");
+    builder.set_sample_rate(config.sample_rate.0/2).expect("Failed to set sample rate");
+    builder.set_brate(mp3lame_encoder::Bitrate::Kbps64).expect("Failed to set bitrate");
+    builder.set_quality(mp3lame_encoder::Quality::VeryNice).expect("Failed to set quality");
+    builder.set_mode(mp3lame_encoder::Mode::Mono).expect("Failed to set channel mode");
+    let mut encoder = builder.build().expect("Failed to build MP3 encoder");
+    
+    let mut file = File::create(output_path)
+        .context("Failed to create MP3 file")?;
+    
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let buffer_clone = buffer.clone();
+    let start_time = std::time::Instant::now();
+    
+    let err_fn = |err| eprintln!("Error during recording: {}", err);
+    
+    let stream = device.build_input_stream(
+        config,
+        move |data: &[i16], _: &cpal::InputCallbackInfo| {
+            if let Some(max_duration) = duration {
+                if start_time.elapsed().as_secs() >= max_duration {
+                    return;
+                }
+            }
+            
+            if let Ok(mut guard) = buffer_clone.lock() {
+                guard.extend_from_slice(data);
+            }
+        },
+        err_fn,
+        None,
+    )
+    .context("Failed to build input stream")?;
+    
+    stream.play().context("Failed to start recording")?;
+    
+    if let Some(secs) = duration {
+        std::thread::sleep(std::time::Duration::from_secs(secs));
+    } else {
+        println!("\nRecording... Press Ctrl+C to stop");
+        let (tx, rx) = std::sync::mpsc::channel();
+        ctrlc::set_handler(move || {
+            let _ = tx.send(());
+        })
+        .context("Error setting Ctrl+C handler")?;
+        
+        rx.recv().context("Error waiting for Ctrl+C")?;
+    }
+    
+    drop(stream);
+    
+    // Encode to MP3
+    let samples = buffer.lock().unwrap();
+    let input = InterleavedPcm(samples.as_slice());
+    let mut mp3_buffer = Vec::new();
+    mp3_buffer.reserve(mp3lame_encoder::max_required_buffer_size(samples.len()));
+    
+    let encoded_size = encoder.encode(input, mp3_buffer.spare_capacity_mut())
+        .map_err(|e| anyhow::anyhow!("Failed to encode MP3: {:?}", e))?;
+    unsafe { mp3_buffer.set_len(encoded_size); }
+    
+    let encoded_size = encoder.flush::<FlushNoGap>(mp3_buffer.spare_capacity_mut())
+        .map_err(|e| anyhow::anyhow!("Failed to flush MP3 encoder: {:?}", e))?;
+    unsafe { mp3_buffer.set_len(mp3_buffer.len() + encoded_size); }
+    
+    file.write_all(&mp3_buffer)
+        .context("Failed to write MP3 file")?;
+    
+    println!("\nRecording saved to: {}", output_path);
+    Ok(())
+}
+
+fn record_mp3_with_format_f32(
+    device: &Device,
+    config: &StreamConfig,
+    output_path: &str,
+    duration: Option<u64>,
+) -> Result<()> {
+
+    println!("MP3 encoding: Using f32 format");
+
+    // Create MP3 encoder
+    let mut builder = Builder::new().expect("Failed to create MP3 encoder");
+    builder.set_num_channels(1).expect("Failed to set channels");
+    builder.set_sample_rate(config.sample_rate.0/2).expect("Failed to set sample rate");
+    builder.set_brate(mp3lame_encoder::Bitrate::Kbps64).expect("Failed to set bitrate");
+    builder.set_quality(mp3lame_encoder::Quality::VeryNice).expect("Failed to set quality");
+    let mut encoder = builder.build().expect("Failed to build MP3 encoder");
+    
+    let mut file = File::create(output_path)
+        .context("Failed to create MP3 file")?;
+    
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let buffer_clone = buffer.clone();
+    let start_time = std::time::Instant::now();
+    
+    let err_fn = |err| eprintln!("Error during recording: {}", err);
+    
+    let stream = device.build_input_stream(
+        config,
+        move |data: &[f32], _: &cpal::InputCallbackInfo| {
+            if let Some(max_duration) = duration {
+                if start_time.elapsed().as_secs() >= max_duration {
+                    return;
+                }
+            }
+            
+            if let Ok(mut guard) = buffer_clone.lock() {
+                // Convert f32 samples to i16
+                for &sample in data {
+                    let sample_i16 = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
+                    guard.push(sample_i16);
+                }
+            }
+        },
+        err_fn,
+        None,
+    )
+    .context("Failed to build input stream")?;
+    
+    stream.play().context("Failed to start recording")?;
+    
+    if let Some(secs) = duration {
+        std::thread::sleep(std::time::Duration::from_secs(secs));
+    } else {
+        println!("\nRecording... Press Ctrl+C to stop");
+        let (tx, rx) = std::sync::mpsc::channel();
+        ctrlc::set_handler(move || {
+            let _ = tx.send(());
+        })
+        .context("Error setting Ctrl+C handler")?;
+        
+        rx.recv().context("Error waiting for Ctrl+C")?;
+    }
+    
+    drop(stream);
+    
+    // Encode to MP3
+    let samples = buffer.lock().unwrap();
+    let input = InterleavedPcm(samples.as_slice());
+    let mut mp3_buffer = Vec::new();
+    mp3_buffer.reserve(mp3lame_encoder::max_required_buffer_size(samples.len()));
+    
+    let encoded_size = encoder.encode(input, mp3_buffer.spare_capacity_mut())
+        .map_err(|e| anyhow::anyhow!("Failed to encode MP3: {:?}", e))?;
+    unsafe { mp3_buffer.set_len(encoded_size); }
+    
+    let encoded_size = encoder.flush::<FlushNoGap>(mp3_buffer.spare_capacity_mut())
+        .map_err(|e| anyhow::anyhow!("Failed to flush MP3 encoder: {:?}", e))?;
+    unsafe { mp3_buffer.set_len(mp3_buffer.len() + encoded_size); }
+    
+    file.write_all(&mp3_buffer)
+        .context("Failed to write MP3 file")?;
+    
+    println!("\nRecording saved to: {}", output_path);
+    Ok(())
+}
+
+fn record_mp3_with_format_u16(
+    device: &Device,
+    config: &StreamConfig,
+    output_path: &str,
+    duration: Option<u64>,
+) -> Result<()> {
+    
+    println!("MP3 encoding: Using u16 format");
+
+    // Create MP3 encoder
+    let mut builder = Builder::new().expect("Failed to create MP3 encoder");
+    builder.set_num_channels(1).expect("Failed to set channels");
+    builder.set_sample_rate(config.sample_rate.0/2).expect("Failed to set sample rate");
+    builder.set_brate(mp3lame_encoder::Bitrate::Kbps64).expect("Failed to set bitrate");
+    builder.set_quality(mp3lame_encoder::Quality::VeryNice).expect("Failed to set quality");
+    let mut encoder = builder.build().expect("Failed to build MP3 encoder");
+    
+    let mut file = File::create(output_path)
+        .context("Failed to create MP3 file")?;
+    
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let buffer_clone = buffer.clone();
+    let start_time = std::time::Instant::now();
+    
+    let err_fn = |err| eprintln!("Error during recording: {}", err);
+    
+    let stream = device.build_input_stream(
+        config,
+        move |data: &[u16], _: &cpal::InputCallbackInfo| {
+            if let Some(max_duration) = duration {
+                if start_time.elapsed().as_secs() >= max_duration {
+                    return;
+                }
+            }
+            
+            if let Ok(mut guard) = buffer_clone.lock() {
+                // Convert u16 to i16
+                for &sample in data {
+                    let converted = (sample as i32 - 32768) as i16;
+                    guard.push(converted);
+                }
+            }
+        },
+        err_fn,
+        None,
+    )
+    .context("Failed to build input stream")?;
+    
+    stream.play().context("Failed to start recording")?;
+    
+    if let Some(secs) = duration {
+        std::thread::sleep(std::time::Duration::from_secs(secs));
+    } else {
+        println!("\nRecording... Press Ctrl+C to stop");
+        let (tx, rx) = std::sync::mpsc::channel();
+        ctrlc::set_handler(move || {
+            let _ = tx.send(());
+        })
+        .context("Error setting Ctrl+C handler")?;
+        
+        rx.recv().context("Error waiting for Ctrl+C")?;
+    }
+    
+    drop(stream);
+    
+    // Encode to MP3
+    let samples = buffer.lock().unwrap();
+    let input = InterleavedPcm(samples.as_slice());
+    let mut mp3_buffer = Vec::new();
+    mp3_buffer.reserve(mp3lame_encoder::max_required_buffer_size(samples.len()));
+    
+    let encoded_size = encoder.encode(input, mp3_buffer.spare_capacity_mut())
+        .map_err(|e| anyhow::anyhow!("Failed to encode MP3: {:?}", e))?;
+    unsafe { mp3_buffer.set_len(encoded_size); }
+    
+    let encoded_size = encoder.flush::<FlushNoGap>(mp3_buffer.spare_capacity_mut())
+        .map_err(|e| anyhow::anyhow!("Failed to flush MP3 encoder: {:?}", e))?;
+    unsafe { mp3_buffer.set_len(mp3_buffer.len() + encoded_size); }
+    
+    file.write_all(&mp3_buffer)
+        .context("Failed to write MP3 file")?;
+    
+    println!("\nRecording saved to: {}", output_path);
+    Ok(())
+}
+
+fn record_wav_with_format_u16(
     device: &Device,
     config: &StreamConfig,
     output_path: &str,
