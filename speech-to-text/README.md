@@ -35,10 +35,14 @@ cargo build
 
 ## Usage
 
-Run the application:
+The application now supports two modes: microphone streaming and file streaming.
+
+### Microphone Mode
+
+Stream audio from your microphone for real-time transcription:
 
 ```bash
-cargo run
+cargo run -- microphone
 ```
 
 The application will:
@@ -49,6 +53,56 @@ The application will:
 4. Display transcription results in real-time
 
 Press `Ctrl+C` to stop the application.
+
+### File Mode
+
+Transcribe audio from a file (supports MP3, WAV, and FLAC formats):
+
+```bash
+cargo run -- file --file path/to/audio.mp3
+```
+
+#### Real-time Streaming (Default)
+
+By default, the file is streamed at real-time rate, simulating live audio:
+
+```bash
+cargo run -- file --file recording.wav
+```
+
+#### Fast Streaming
+
+Use the `--fast` flag to stream the file as quickly as possible for faster transcription:
+
+```bash
+cargo run -- file --file podcast.mp3 --fast
+```
+
+### Examples
+
+```bash
+# Transcribe from microphone
+cargo run -- microphone
+
+# Transcribe a WAV file at real-time rate
+cargo run -- file --file recording.wav
+
+# Transcribe an MP3 file as fast as possible
+cargo run -- file --file podcast.mp3 --fast
+
+# Transcribe a FLAC file
+cargo run -- file --file music.flac
+```
+
+### Help
+
+View all available options:
+
+```bash
+cargo run -- --help
+cargo run -- microphone --help
+cargo run -- file --help
+```
 
 ## How It Works
 
