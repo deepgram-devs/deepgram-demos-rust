@@ -1,5 +1,5 @@
 [workspace]
-members = [
+members = ["audio-recorder",
   "flux-turn-taking",
   "speech-to-text",
   "text-to-speech",
