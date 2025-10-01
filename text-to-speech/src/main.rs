@@ -5,6 +5,7 @@ use reqwest::Client;
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::fs::File;
 use std::io::{Cursor, Write};
 use std::sync::mpsc;
 use std::thread;
@@ -20,6 +21,24 @@ struct Cli {
 enum Commands {
     /// Speak text using Deepgram TTS
     Speak {
+        /// Voice model to use (e.g., "aura-2")
+        #[arg(long, default_value = "aura-2-thalia-en")]
+        voice: String,
+
+        /// Optional request tags
+        #[arg(long)]
+        tags: Option<String>,
+    },
+    /// Save text-to-speech audio to a file
+    Save {
+        /// Text to convert to speech
+        #[arg(long)]
+        text: String,
+
+        /// Output file path
+        #[arg(long)]
+        output: String,
+
         /// Voice model to use (e.g., "aura-2")
         #[arg(long, default_value = "aura-2-thalia-en")]
         voice: String,
@@ -79,6 +98,17 @@ fn play_audio(audio_bytes: Vec<u8>, output_stream: &OutputStream) -> Result<()> 
     sink.append(source);
 
     sink.sleep_until_end();
+    Ok(())
+}
+
+fn save_audio(audio_bytes: Vec<u8>, output_path: &str) -> Result<()> {
+    let mut file = File::create(output_path)
+        .context(format!("Failed to create output file: {}", output_path))?;
+    
+    file.write_all(&audio_bytes)
+        .context("Failed to write audio data to file")?;
+    
+    println!("Audio saved to: {}", output_path);
     Ok(())
 }
 
@@ -144,6 +174,27 @@ async fn main() -> Result<()> {
 
             input_thread.join().unwrap();
             // tts_thread.await?;
+        }
+        Some(Commands::Save {
+            text,
+            output,
+            voice,
+            tags,
+        }) => {
+            println!("Generating audio for: {}", text);
+            
+            match generate_tts(&client, &api_key, text, voice, tags.clone()).await {
+                Ok(audio_bytes) => {
+                    if let Err(e) = save_audio(audio_bytes, output) {
+                        eprintln!("Error saving audio: {}", e);
+                        return Err(e);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("TTS generation error: {:?}", e);
+                    return Err(e);
+                }
+            }
         }
         None => {
             println!("No command specified. Use --help for usage information.");

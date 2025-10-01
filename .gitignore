@@ -1,2 +1,15 @@
 **/target
 .env
+**.mp3
+**.wav
+**.flac
+**.mpeg
+**.mkv
+**.aac
+**.webm
+**.aiff
+**.ogg
+**.spx
+**.opus
+**.oga
+**.ogv

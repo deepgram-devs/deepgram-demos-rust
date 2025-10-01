@@ -32,7 +32,9 @@ DEEPGRAM_API_KEY=your_api_key_here
 
 ## Usage
 
-Run the application with the `speak` subcommand:
+### Speak Command (Interactive Playback)
+
+Run the application with the `speak` subcommand for interactive text-to-speech playback:
 
 ```bash
 cargo run -- speak
@@ -40,25 +42,51 @@ cargo run -- speak
 
 Optional arguments:
 
-- `--voice`: Specify the voice model (eg. `aura-2-helena-en`)
+- `--voice`: Specify the voice model (default: `aura-2-thalia-en`)
 - `--tags`: Add optional request tags
 
 Example:
 
 ```bash
-cargo run -- speak --voice aura-2-thalia-en
+cargo run -- speak --voice aura-2-helena-en
 ```
 
-### Interactive Usage
+**Interactive Usage:**
 
 - Enter text to generate and playback speech
 - Type 'quit' to exit the application
 
+### Save Command (Save to File)
+
+Use the `save` subcommand to generate audio and save it to a file:
+
+```bash
+cargo run -- save --text "Hello, world!" --output output.mp3
+```
+
+Required arguments:
+
+- `--text`: The text to convert to speech
+- `--output`: The output file path (e.g., `output.mp3`, `audio.wav`)
+
+Optional arguments:
+
+- `--voice`: Specify the voice model (default: `aura-2-thalia-en`)
+- `--tags`: Add optional request tags
+
+Example with custom voice:
+
+```bash
+cargo run -- save --text "Welcome to Deepgram" --output welcome.mp3 --voice aura-2-thalia-en
+```
+
 ## Features
 
 - Asynchronous text-to-speech generation
-- Real-time audio playback
-- Configurable voice
+- Real-time audio playback with interactive input
+- Save generated audio to files
+- Configurable voice models
+- Support for custom request tags
 
 ## Dependencies
 
