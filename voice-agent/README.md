@@ -2,6 +2,8 @@
 
 This is a Rust application that demonstrates bidirectional conversation using Deepgram's Voice Agent WebSocket APIs. The application captures audio from your computer's microphone, streams it to Deepgram's Voice Agent, and handles the responses.
 
+⚠️ **IMPORTANT**: Please use headphones to avoid spoken audio, from the agent, back-feeding through your microphone.
+
 ## Features
 
 - **Real-time Audio Capture**: Captures audio from your computer's microphone using CPAL
@@ -48,14 +50,14 @@ cargo run
 
 1. **Start speaking**: Once the application starts, it will begin capturing audio from your microphone and streaming it to Deepgram's Voice Agent.
 
-1. **Monitor the conversation**: The application will log:
+2. **Monitor the conversation**: The application will log:
 
    - Your speech transcriptions
    - Agent thinking status
    - Agent responses
    - Audio data reception
 
-1. **Stop the application**: Press `Ctrl+C` to stop the application.
+3. **Stop the application**: Press `Ctrl+C` to stop the application.
 
 ## Configuration
 
