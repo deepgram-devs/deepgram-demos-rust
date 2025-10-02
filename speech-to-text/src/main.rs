@@ -1,4 +1,4 @@
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -139,8 +139,10 @@ impl AudioFileReader {
     async fn stream_file(
         &self,
         tx: mpsc::UnboundedSender<Vec<u8>>,
+        config_tx: oneshot::Sender<(u32, u16)>,
+        ready_rx: Option<oneshot::Receiver<()>>,
         fast_mode: bool,
-    ) -> Result<(u32, u16), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let file = File::open(&self.path)?;
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
         
@@ -170,6 +172,15 @@ impl AudioFileReader {
         let channels = codec_params.channels.ok_or("Channels not found")?.count() as u16;
         
         println!("File audio config - Sample rate: {}, Channels: {}", sample_rate, channels);
+        
+        // Send the audio configuration immediately so Deepgram client can start
+        let _ = config_tx.send((sample_rate, channels));
+        
+        // In fast mode, wait for WebSocket to be ready before streaming
+        if let Some(rx) = ready_rx {
+            let _ = rx.await;
+            println!("WebSocket ready, starting fast audio stream...");
+        }
         
         let dec_opts: DecoderOptions = Default::default();
         let mut decoder = symphonia::default::get_codecs()
@@ -234,7 +245,7 @@ impl AudioFileReader {
             }
         }
         
-        Ok((sample_rate, channels))
+        Ok(())
     }
 }
 
@@ -243,6 +254,7 @@ async fn run_deepgram_client(
     sample_rate: u32,
     channels: u16,
     mut audio_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    ready_tx: Option<oneshot::Sender<()>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let url = format!(
         "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate={}&channels={}&interim_results=true&punctuate=true&smart_format=true",
@@ -268,52 +280,84 @@ async fn run_deepgram_client(
     let (ws_stream, _) = connect_async(request).await?;
     println!("Connected to Deepgram!");
     
+    // Signal that we're ready to receive audio
+    if let Some(tx) = ready_tx {
+        let _ = tx.send(());
+    }
+    
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
     
+    let (result_tx, mut result_rx) = mpsc::unbounded_channel::<()>();
+    
     let response_handler = tokio::spawn(async move {
-        while let Some(msg) = ws_receiver.next().await {
-            match msg {
-                Ok(Message::Text(text)) => {
-                    match serde_json::from_str::<DeepgramResponse>(&text) {
-                        Ok(response) => {
-                            if response.message_type == "Results" {
-                                if let Some(channel) = response.channel {
-                                    for alternative in channel.alternatives {
-                                        if !alternative.transcript.trim().is_empty() {
-                                            print!("\rTranscript: {}", alternative.transcript);
-                                            if let Some(confidence) = alternative.confidence {
-                                                print!(" (Confidence: {:.1}%)", confidence * 100.0);
+        let mut last_message_time = tokio::time::Instant::now();
+        let timeout_duration = Duration::from_secs(2);
+        
+        loop {
+            tokio::select! {
+                msg = ws_receiver.next() => {
+                    match msg {
+                        Some(Ok(Message::Text(text))) => {
+                            last_message_time = tokio::time::Instant::now();
+                            match serde_json::from_str::<DeepgramResponse>(&text) {
+                                Ok(response) => {
+                                    if response.message_type == "Results" {
+                                        if let Some(channel) = response.channel {
+                                            for alternative in channel.alternatives {
+                                                if !alternative.transcript.trim().is_empty() {
+                                                    print!("\rTranscript: {}", alternative.transcript);
+                                                    if let Some(confidence) = alternative.confidence {
+                                                        print!(" (Confidence: {:.1}%)", confidence * 100.0);
+                                                    }
+                                                    println!();
+                                                }
                                             }
-                                            println!();
                                         }
                                     }
                                 }
+                                Err(e) => eprintln!("Failed to parse response: {}", e),
                             }
                         }
-                        Err(e) => eprintln!("Failed to parse response: {}", e),
+                        Some(Ok(Message::Close(_))) => {
+                            println!("WebSocket connection closed by server");
+                            break;
+                        }
+                        Some(Err(e)) => {
+                            eprintln!("WebSocket error: {}", e);
+                            break;
+                        }
+                        None => break,
+                        _ => {}
                     }
                 }
-                Ok(Message::Close(_)) => {
-                    println!("WebSocket connection closed by server");
+                _ = tokio::time::sleep_until(last_message_time + timeout_duration) => {
+                    // No messages received for timeout duration, we're done
+                    println!("No more messages received, finishing...");
                     break;
                 }
-                Err(e) => {
-                    eprintln!("WebSocket error: {}", e);
-                    break;
-                }
-                _ => {}
             }
         }
+        let _ = result_tx.send(());
     });
     
+    let mut audio_count = 0;
     while let Some(audio_data) = audio_rx.recv().await {
+        audio_count += 1;
         if let Err(e) = ws_sender.send(Message::Binary(audio_data.into())).await {
             eprintln!("Failed to send audio to WebSocket: {}", e);
             break;
         }
     }
     
+    println!("Sent {} audio chunks, waiting for transcription results...", audio_count);
+    
+    // Wait for the response handler to signal it's done (no more messages)
+    let _ = result_rx.recv().await;
+    
+    // Close the sender
     let _ = ws_sender.close().await;
+    
+    // Wait for the response handler to finish
     let _ = response_handler.await;
     
     Ok(())
@@ -334,7 +378,7 @@ async fn run_microphone_mode(api_key: String) -> Result<(), Box<dyn std::error::
     
     println!("Listening for audio... Press Ctrl+C to stop.");
     
-    let deepgram_task = tokio::spawn(run_deepgram_client(api_key, sample_rate, channels, audio_rx));
+    let deepgram_task = tokio::spawn(run_deepgram_client(api_key, sample_rate, channels, audio_rx, None));
     
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
@@ -358,25 +402,46 @@ async fn run_file_mode(api_key: String, file_path: PathBuf, fast: bool) -> Resul
     println!("Mode: {}", if fast { "Fast" } else { "Real-time" });
     
     let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (config_tx, config_rx) = oneshot::channel::<(u32, u16)>();
     
     let file_reader = AudioFileReader::new(file_path);
     
+    // Create a ready signal channel for fast mode
+    let (ready_tx, ready_rx) = if fast {
+        let (tx, rx) = oneshot::channel();
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+    
+    // Start streaming file audio in the background
     let stream_task = tokio::spawn(async move {
-        file_reader.stream_file(audio_tx, fast).await
+        file_reader.stream_file(audio_tx, config_tx, ready_rx, fast).await
     });
     
-    match stream_task.await {
-        Ok(Ok((sr, ch))) => {
-            let deepgram_task = tokio::spawn(run_deepgram_client(api_key, sr, ch, audio_rx));
-            
-            match deepgram_task.await {
-                Ok(Ok(())) => println!("\nTranscription completed successfully"),
-                Ok(Err(e)) => eprintln!("Deepgram client error: {}", e),
-                Err(e) => eprintln!("Task join error: {}", e),
-            }
-        }
-        Ok(Err(e)) => return Err(e),
-        Err(e) => return Err(format!("Task join error: {}", e).into()),
+    // Wait for the audio configuration to be sent
+    let (sample_rate, channels) = config_rx.await
+        .map_err(|_| "Failed to receive audio configuration")?;
+    
+    println!("Sample rate: {}, Channels: {}", sample_rate, channels);
+    
+    // Start the Deepgram client (now both tasks run concurrently)
+    let deepgram_task = tokio::spawn(run_deepgram_client(api_key, sample_rate, channels, audio_rx, ready_tx));
+    
+    // Wait for both tasks to complete
+    let (stream_result, deepgram_result) = tokio::join!(stream_task, deepgram_task);
+    
+    // Handle results
+    match stream_result {
+        Ok(Ok(())) => {},
+        Ok(Err(e)) => eprintln!("File streaming error: {}", e),
+        Err(e) => eprintln!("Stream task join error: {}", e),
+    }
+    
+    match deepgram_result {
+        Ok(Ok(())) => println!("\nTranscription completed successfully"),
+        Ok(Err(e)) => eprintln!("Deepgram client error: {}", e),
+        Err(e) => eprintln!("Deepgram task join error: {}", e),
     }
     
     Ok(())
