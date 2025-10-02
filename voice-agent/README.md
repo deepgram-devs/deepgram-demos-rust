@@ -24,6 +24,7 @@ This is a Rust application that demonstrates bidirectional conversation using De
 1. **Clone and navigate to the project**:
 
 ```bash
+git clone git@github.com:deepgram-devs/deepgram-demos-rust.git
 cd voice-agent
 ```
 
