@@ -72,7 +72,7 @@ cargo run -- file --file recording.wav
 
 #### Fast Streaming
 
-Use the `--fast` flag to stream the file as quickly as possible for faster transcription:
+Use the `--fast` flag to stream the file as quickly as possible (may not be much faster than live)):
 
 ```bash
 cargo run -- file --file podcast.mp3 --fast

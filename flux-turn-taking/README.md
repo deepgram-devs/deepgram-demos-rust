@@ -2,6 +2,8 @@
 
 A Rust application that captures audio from your microphone and streams it to the Deepgram Flux API via WebSocket for real-time speech recognition.
 
+**NOTE**: This is a not a bidirectional Voice Agent (VA) example. It is purely using the Flux model for speech-to-text transcription.
+
 ## Features
 
 - Real-time audio capture from microphone
