@@ -78,6 +78,28 @@ Use the `--fast` flag to stream the file as quickly as possible (may not be much
 cargo run -- file --file podcast.mp3 --fast
 ```
 
+### Callback Support
+
+Both microphone and file modes support sending transcription results to a callback URL via HTTP POST:
+
+```bash
+# Microphone mode with callback
+cargo run -- microphone --callback https://example.com/webhook
+
+# File mode with callback
+cargo run -- file --file audio.mp3 --callback https://example.com/webhook
+
+# Use --silent flag to suppress console output when using callbacks
+cargo run -- file --file audio.mp3 --callback https://example.com/webhook --silent
+```
+
+When a callback URL is provided:
+
+- Deepgram will send transcription results to your specified URL via HTTP POST
+- The callback method is automatically set to POST
+- Console output continues by default unless `--silent` flag is used
+- The `--silent` flag suppresses transcript output to the console
+
 ### Examples
 
 ```bash
@@ -92,6 +114,15 @@ cargo run -- file --file podcast.mp3 --fast
 
 # Transcribe a FLAC file
 cargo run -- file --file music.flac
+
+# Microphone with callback
+cargo run -- microphone --callback https://example.com/webhook
+
+# File with callback and silent mode
+cargo run -- file --file audio.mp3 --callback https://example.com/webhook --silent
+
+# Fast file streaming with callback
+cargo run -- file --file podcast.mp3 --fast --callback https://example.com/webhook
 ```
 
 ### Help

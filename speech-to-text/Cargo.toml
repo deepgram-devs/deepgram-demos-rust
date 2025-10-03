@@ -18,3 +18,4 @@ dotenv = "0.15"
 bytes = "1"
 clap = { version = "4.5", features = ["derive"] }
 symphonia = { version = "0.5", features = ["mp3", "wav", "flac"] }
+urlencoding = "2.1"

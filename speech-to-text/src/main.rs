@@ -29,7 +29,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Stream audio from microphone for real-time transcription
-    Microphone,
+    Microphone {
+        /// Callback URL for receiving transcription results
+        #[arg(long)]
+        callback: Option<String>,
+        
+        /// Suppress console output of transcripts
+        #[arg(long)]
+        silent: bool,
+    },
     /// Stream audio from a file for transcription
     File {
         /// Path to the audio file (supports MP3, WAV, FLAC)
@@ -39,6 +47,14 @@ enum Commands {
         /// Stream audio as fast as possible instead of real-time rate
         #[arg(long)]
         fast: bool,
+        
+        /// Callback URL for receiving transcription results
+        #[arg(long)]
+        callback: Option<String>,
+        
+        /// Suppress console output of transcripts
+        #[arg(long)]
+        silent: bool,
     },
 }
 
@@ -255,11 +271,18 @@ async fn run_deepgram_client(
     channels: u16,
     mut audio_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     ready_tx: Option<oneshot::Sender<()>>,
+    callback: Option<String>,
+    silent: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!(
+    let mut url = format!(
         "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate={}&channels={}&interim_results=true&punctuate=true&smart_format=true",
         sample_rate, channels
     );
+    
+    // Add callback parameters if provided
+    if let Some(callback_url) = &callback {
+        url.push_str(&format!("&callback={}&callback_method=post", urlencoding::encode(callback_url)));
+    }
     
     println!("Connecting to Deepgram WebSocket...");
     
@@ -304,7 +327,7 @@ async fn run_deepgram_client(
                                     if response.message_type == "Results" {
                                         if let Some(channel) = response.channel {
                                             for alternative in channel.alternatives {
-                                                if !alternative.transcript.trim().is_empty() {
+                                                if !alternative.transcript.trim().is_empty() && !silent {
                                                     print!("\rTranscript: {}", alternative.transcript);
                                                     if let Some(confidence) = alternative.confidence {
                                                         print!(" (Confidence: {:.1}%)", confidence * 100.0);
@@ -319,7 +342,9 @@ async fn run_deepgram_client(
                             }
                         }
                         Some(Ok(Message::Close(_))) => {
-                            println!("WebSocket connection closed by server");
+                            if !silent {
+                                println!("WebSocket connection closed by server");
+                            }
                             break;
                         }
                         Some(Err(e)) => {
@@ -332,7 +357,9 @@ async fn run_deepgram_client(
                 }
                 _ = tokio::time::sleep_until(last_message_time + timeout_duration) => {
                     // No messages received for timeout duration, we're done
-                    println!("No more messages received, finishing...");
+                    if !silent {
+                        println!("No more messages received, finishing...");
+                    }
                     break;
                 }
             }
@@ -363,7 +390,7 @@ async fn run_deepgram_client(
     Ok(())
 }
 
-async fn run_microphone_mode(api_key: String) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_microphone_mode(api_key: String, callback: Option<String>, silent: bool) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Deepgram real-time transcription from microphone...");
     
     let audio_capture = AudioCapture::new()?;
@@ -378,7 +405,7 @@ async fn run_microphone_mode(api_key: String) -> Result<(), Box<dyn std::error::
     
     println!("Listening for audio... Press Ctrl+C to stop.");
     
-    let deepgram_task = tokio::spawn(run_deepgram_client(api_key, sample_rate, channels, audio_rx, None));
+    let deepgram_task = tokio::spawn(run_deepgram_client(api_key, sample_rate, channels, audio_rx, None, callback, silent));
     
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
@@ -396,7 +423,7 @@ async fn run_microphone_mode(api_key: String) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
-async fn run_file_mode(api_key: String, file_path: PathBuf, fast: bool) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_file_mode(api_key: String, file_path: PathBuf, fast: bool, callback: Option<String>, silent: bool) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Deepgram transcription from file...");
     println!("File: {}", file_path.display());
     println!("Mode: {}", if fast { "Fast" } else { "Real-time" });
@@ -426,7 +453,7 @@ async fn run_file_mode(api_key: String, file_path: PathBuf, fast: bool) -> Resul
     println!("Sample rate: {}, Channels: {}", sample_rate, channels);
     
     // Start the Deepgram client (now both tasks run concurrently)
-    let deepgram_task = tokio::spawn(run_deepgram_client(api_key, sample_rate, channels, audio_rx, ready_tx));
+    let deepgram_task = tokio::spawn(run_deepgram_client(api_key, sample_rate, channels, audio_rx, ready_tx, callback, silent));
     
     // Wait for both tasks to complete
     let (stream_result, deepgram_result) = tokio::join!(stream_task, deepgram_task);
@@ -457,8 +484,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     
     match cli.command {
-        Commands::Microphone => run_microphone_mode(api_key).await?,
-        Commands::File { file, fast } => run_file_mode(api_key, file, fast).await?,
+        Commands::Microphone { callback, silent } => run_microphone_mode(api_key, callback, silent).await?,
+        Commands::File { file, fast, callback, silent } => run_file_mode(api_key, file, fast, callback, silent).await?,
     }
     
     Ok(())
