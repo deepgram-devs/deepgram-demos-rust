@@ -30,32 +30,87 @@ export DEEPGRAM_API_KEY="your_api_key_here"
 
 ## Usage
 
-1. Build the application:
+The application supports two modes: streaming from microphone or from an audio file.
+
+### Build the Application
 
 ```bash
 cargo build --release
 ```
 
-1. Run the application:
+### Microphone Mode
+
+Stream audio from your microphone to Deepgram Flux API:
 
 ```bash
-cargo run
+cargo run -- microphone
 ```
 
-   Or run the built binary:
+Or with the built binary:
 
 ```bash
-./target/release/rust-flux
+./target/release/rust-flux microphone
 ```
 
-1. The application will:
+**Options:**
 
-   - Connect to your default microphone
-   - Establish a WebSocket connection to Deepgram Flux API
-   - Start streaming audio data
-   - Display all responses from the API including message types
+- `--endpoint <URL>` - Custom endpoint base URL (e.g., `ws://localhost:8119/`)
+- `--sample-rate <HZ>` - Sample rate in Hz (default: 44100)
+- `--encoding <FORMAT>` - Audio encoding format (default: linear16)
 
-1. To stop the application, press `Ctrl+C`
+**Example with custom options:**
+
+```bash
+cargo run -- microphone --sample-rate 16000 --encoding linear16
+```
+
+### File Mode
+
+Stream audio from a file to Deepgram Flux API:
+
+```bash
+cargo run -- file --file path/to/audio.wav
+```
+
+Or with the built binary:
+
+```bash
+./target/release/rust-flux file --file path/to/audio.wav
+```
+
+**Options:**
+
+- `--file <PATH>` - Path to the audio file to transcribe (required)
+- `--endpoint <URL>` - Custom endpoint base URL (e.g., `ws://localhost:8119/`)
+- `--sample-rate <HZ>` - Sample rate in Hz (default: 44100)
+- `--encoding <FORMAT>` - Audio encoding format (default: linear16)
+
+**Example with custom options:**
+
+```bash
+cargo run -- file --file audio.wav --sample-rate 16000 --encoding mulaw
+```
+
+### Help
+
+To see all available commands and options:
+
+```bash
+cargo run -- --help
+cargo run -- microphone --help
+cargo run -- file --help
+```
+
+### What Happens
+
+The application will:
+
+- Connect to your microphone (microphone mode) or read the specified file (file mode)
+- Establish a WebSocket connection to Deepgram Flux API
+- Start streaming audio data
+- Display all responses from the API including message types
+
+To stop the application, press `Ctrl+C`
 
 ## Output Format
 
