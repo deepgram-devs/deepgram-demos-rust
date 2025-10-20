@@ -37,6 +37,38 @@ enum Commands {
         /// Suppress console output of transcripts
         #[arg(long)]
         silent: bool,
+        
+        /// Override the Deepgram API base URL
+        #[arg(long)]
+        endpoint: Option<String>,
+        
+        /// Audio encoding format (e.g., linear16, mulaw, flac)
+        #[arg(long)]
+        encoding: Option<String>,
+        
+        /// Audio sample rate in Hz∫∫
+        #[arg(long)]
+        sample_rate: Option<u32>,
+        
+        /// Number of audio channels
+        #[arg(long)]
+        channels: Option<u16>,
+        
+        /// Enable interim results
+        #[arg(long)]
+        interim_results: Option<bool>,
+        
+        /// Enable punctuation
+        #[arg(long)]
+        punctuate: Option<bool>,
+        
+        /// Enable smart formatting
+        #[arg(long)]
+        smart_format: Option<bool>,
+        
+        /// Deepgram model to use (e.g., nova-2, enhanced, base)
+        #[arg(long)]
+        model: Option<String>,
     },
     /// Stream audio from a file for transcription
     File {
@@ -55,6 +87,38 @@ enum Commands {
         /// Suppress console output of transcripts
         #[arg(long)]
         silent: bool,
+        
+        /// Override the Deepgram API base URL
+        #[arg(long)]
+        endpoint: Option<String>,
+        
+        /// Audio encoding format (e.g., linear16, mulaw, flac)
+        #[arg(long)]
+        encoding: Option<String>,
+        
+        /// Audio sample rate in Hz
+        #[arg(long)]
+        sample_rate: Option<u32>,
+        
+        /// Number of audio channels
+        #[arg(long)]
+        channels: Option<u16>,
+        
+        /// Enable interim results
+        #[arg(long)]
+        interim_results: Option<bool>,
+        
+        /// Enable punctuation
+        #[arg(long)]
+        punctuate: Option<bool>,
+        
+        /// Enable smart formatting
+        #[arg(long)]
+        smart_format: Option<bool>,
+        
+        /// Deepgram model to use (e.g., nova-2, enhanced, base)
+        #[arg(long)]
+        model: Option<String>,
     },
 }
 
@@ -267,17 +331,63 @@ impl AudioFileReader {
 
 async fn run_deepgram_client(
     api_key: String,
-    sample_rate: u32,
-    channels: u16,
+    detected_sample_rate: u32,
+    detected_channels: u16,
     mut audio_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     ready_tx: Option<oneshot::Sender<()>>,
     callback: Option<String>,
     silent: bool,
+    endpoint: Option<String>,
+    encoding: Option<String>,
+    sample_rate_override: Option<u32>,
+    channels_override: Option<u16>,
+    interim_results: Option<bool>,
+    punctuate: Option<bool>,
+    smart_format: Option<bool>,
+    model: Option<String>,
+    mut shutdown_rx: mpsc::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut url = format!(
-        "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate={}&channels={}&interim_results=true&punctuate=true&smart_format=true",
-        sample_rate, channels
-    );
+    // Use custom endpoint or default to Deepgram API
+    let base_url = endpoint.unwrap_or_else(|| "wss://api.deepgram.com".to_string());
+    
+    // Start building the URL
+    let mut url = format!("{}/v1/listen?", base_url);
+    let mut params = Vec::new();
+    
+    // Add encoding parameter (default to linear16 if not specified)
+    let encoding_value = encoding.unwrap_or_else(|| "linear16".to_string());
+    params.push(format!("encoding={}", encoding_value));
+    
+    // Add sample_rate parameter (use override if provided, otherwise use detected)
+    let sample_rate_value = sample_rate_override.unwrap_or(detected_sample_rate);
+    params.push(format!("sample_rate={}", sample_rate_value));
+    
+    // Add channels parameter (use override if provided, otherwise use detected)
+    let channels_value = channels_override.unwrap_or(detected_channels);
+    params.push(format!("channels={}", channels_value));
+    
+    // Add interim_results parameter if specified
+    if let Some(interim) = interim_results {
+        params.push(format!("interim_results={}", interim));
+    }
+    
+    // Add punctuate parameter if specified
+    if let Some(punct) = punctuate {
+        params.push(format!("punctuate={}", punct));
+    }
+    
+    // Add smart_format parameter if specified
+    if let Some(smart) = smart_format {
+        params.push(format!("smart_format={}", smart));
+    }
+    
+    // Add model parameter if specified
+    if let Some(model_name) = model {
+        params.push(format!("model={}", model_name));
+    }
+    
+    // Join all parameters
+    url.push_str(&params.join("&"));
     
     // Add callback parameters if provided
     if let Some(callback_url) = &callback {
@@ -288,6 +398,8 @@ async fn run_deepgram_client(
     
     let url_parsed = url::Url::parse(&url)?;
     let host = url_parsed.host_str().ok_or("Invalid host in URL")?;
+
+    println!("Connecting to Deepgram URL: {0}", &url);
     
     let request = tokio_tungstenite::tungstenite::http::Request::builder()
         .method("GET")
@@ -308,13 +420,42 @@ async fn run_deepgram_client(
         let _ = tx.send(());
     }
     
-    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
+    let (ws_sender, mut ws_receiver) = ws_stream.split();
     
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<()>();
+    let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<Message>();
+    
+    // Spawn a task to handle sending messages to WebSocket
+    let sender_task = tokio::spawn(async move {
+        let mut ws_sender = ws_sender;
+        while let Some(msg) = msg_rx.recv().await {
+            if ws_sender.send(msg).await.is_err() {
+                break;
+            }
+        }
+    });
+    
+    // Spawn a keep-alive task that sends a message every 5 seconds
+    let keepalive_tx = msg_tx.clone();
+    let keepalive_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        interval.tick().await; // Skip the first immediate tick
+        
+        loop {
+            interval.tick().await;
+            // Send keep-alive message
+            let keepalive_msg = serde_json::json!({"type": "KeepAlive"});
+            if let Ok(msg_str) = serde_json::to_string(&keepalive_msg) {
+                if keepalive_tx.send(Message::Text(msg_str.into())).is_err() {
+                    break;
+                }
+            }
+        }
+    });
     
     let response_handler = tokio::spawn(async move {
         let mut last_message_time = tokio::time::Instant::now();
-        let timeout_duration = Duration::from_secs(2);
+        let timeout_duration = Duration::from_secs(10);
         
         loop {
             tokio::select! {
@@ -368,11 +509,25 @@ async fn run_deepgram_client(
     });
     
     let mut audio_count = 0;
-    while let Some(audio_data) = audio_rx.recv().await {
-        audio_count += 1;
-        if let Err(e) = ws_sender.send(Message::Binary(audio_data.into())).await {
-            eprintln!("Failed to send audio to WebSocket: {}", e);
-            break;
+    loop {
+        tokio::select! {
+            Some(audio_data) = audio_rx.recv() => {
+                audio_count += 1;
+                if msg_tx.send(Message::Binary(audio_data.into())).is_err() {
+                    eprintln!("Failed to send audio to WebSocket");
+                    break;
+                }
+            }
+            _ = shutdown_rx.recv() => {
+                println!("\nReceived shutdown signal, sending CloseStream message...");
+                // Send CloseStream message
+                let close_stream_msg = serde_json::json!({"type": "CloseStream"});
+                if let Ok(msg_str) = serde_json::to_string(&close_stream_msg) {
+                    let _ = msg_tx.send(Message::Text(msg_str.into()));
+                }
+                break;
+            }
+            else => break,
         }
     }
     
@@ -381,16 +536,30 @@ async fn run_deepgram_client(
     // Wait for the response handler to signal it's done (no more messages)
     let _ = result_rx.recv().await;
     
-    // Close the sender
-    let _ = ws_sender.close().await;
+    // Stop sending messages
+    drop(msg_tx);
     
-    // Wait for the response handler to finish
+    // Wait for all tasks to finish
+    let _ = keepalive_task.await;
+    let _ = sender_task.await;
     let _ = response_handler.await;
     
     Ok(())
 }
 
-async fn run_microphone_mode(api_key: String, callback: Option<String>, silent: bool) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_microphone_mode(
+    api_key: String,
+    callback: Option<String>,
+    silent: bool,
+    endpoint: Option<String>,
+    encoding: Option<String>,
+    sample_rate_override: Option<u32>,
+    channels_override: Option<u16>,
+    interim_results: Option<bool>,
+    punctuate: Option<bool>,
+    smart_format: Option<bool>,
+    model: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Deepgram real-time transcription from microphone...");
     
     let audio_capture = AudioCapture::new()?;
@@ -400,18 +569,44 @@ async fn run_microphone_mode(api_key: String, callback: Option<String>, silent: 
     println!("Audio config - Sample rate: {}, Channels: {}", sample_rate, channels);
     
     let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>(1);
     
     let _stream = audio_capture.start_capture(audio_tx)?;
     
     println!("Listening for audio... Press Ctrl+C to stop.");
     
-    let deepgram_task = tokio::spawn(run_deepgram_client(api_key, sample_rate, channels, audio_rx, None, callback, silent));
+    let mut deepgram_task = tokio::spawn(run_deepgram_client(
+        api_key,
+        sample_rate,
+        channels,
+        audio_rx,
+        None,
+        callback,
+        silent,
+        endpoint,
+        encoding,
+        sample_rate_override,
+        channels_override,
+        interim_results,
+        punctuate,
+        smart_format,
+        model,
+        shutdown_rx,
+    ));
     
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
-            println!("\nShutting down...");
+            println!("\nReceived Ctrl+C, initiating graceful shutdown...");
+            let _ = shutdown_tx.send(()).await;
+            
+            // Wait for the Deepgram task to finish after sending shutdown signal
+            match deepgram_task.await {
+                Ok(Ok(())) => println!("Deepgram client finished successfully"),
+                Ok(Err(e)) => eprintln!("Deepgram client error: {}", e),
+                Err(e) => eprintln!("Task join error: {}", e),
+            }
         }
-        result = deepgram_task => {
+        result = &mut deepgram_task => {
             match result {
                 Ok(Ok(())) => println!("Deepgram client finished successfully"),
                 Ok(Err(e)) => eprintln!("Deepgram client error: {}", e),
@@ -423,13 +618,28 @@ async fn run_microphone_mode(api_key: String, callback: Option<String>, silent: 
     Ok(())
 }
 
-async fn run_file_mode(api_key: String, file_path: PathBuf, fast: bool, callback: Option<String>, silent: bool) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_file_mode(
+    api_key: String,
+    file_path: PathBuf,
+    fast: bool,
+    callback: Option<String>,
+    silent: bool,
+    endpoint: Option<String>,
+    encoding: Option<String>,
+    sample_rate_override: Option<u32>,
+    channels_override: Option<u16>,
+    interim_results: Option<bool>,
+    punctuate: Option<bool>,
+    smart_format: Option<bool>,
+    model: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Deepgram transcription from file...");
     println!("File: {}", file_path.display());
     println!("Mode: {}", if fast { "Fast" } else { "Real-time" });
     
     let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let (config_tx, config_rx) = oneshot::channel::<(u32, u16)>();
+    let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>(1);
     
     let file_reader = AudioFileReader::new(file_path);
     
@@ -453,22 +663,69 @@ async fn run_file_mode(api_key: String, file_path: PathBuf, fast: bool, callback
     println!("Sample rate: {}, Channels: {}", sample_rate, channels);
     
     // Start the Deepgram client (now both tasks run concurrently)
-    let deepgram_task = tokio::spawn(run_deepgram_client(api_key, sample_rate, channels, audio_rx, ready_tx, callback, silent));
+    let deepgram_task = tokio::spawn(run_deepgram_client(
+        api_key,
+        sample_rate,
+        channels,
+        audio_rx,
+        ready_tx,
+        callback,
+        silent,
+        endpoint,
+        encoding,
+        sample_rate_override,
+        channels_override,
+        interim_results,
+        punctuate,
+        smart_format,
+        model,
+        shutdown_rx,
+    ));
     
-    // Wait for both tasks to complete
-    let (stream_result, deepgram_result) = tokio::join!(stream_task, deepgram_task);
+    // Wait for either CTRL+C or both tasks to complete
+    let ctrl_c_future = tokio::signal::ctrl_c();
+    let tasks_future = async {
+        tokio::join!(stream_task, deepgram_task)
+    };
     
-    // Handle results
-    match stream_result {
-        Ok(Ok(())) => {},
-        Ok(Err(e)) => eprintln!("File streaming error: {}", e),
-        Err(e) => eprintln!("Stream task join error: {}", e),
-    }
+    tokio::pin!(ctrl_c_future);
+    tokio::pin!(tasks_future);
     
-    match deepgram_result {
-        Ok(Ok(())) => println!("\nTranscription completed successfully"),
-        Ok(Err(e)) => eprintln!("Deepgram client error: {}", e),
-        Err(e) => eprintln!("Deepgram task join error: {}", e),
+    tokio::select! {
+        _ = &mut ctrl_c_future => {
+            println!("\nReceived Ctrl+C, initiating graceful shutdown...");
+            let _ = shutdown_tx.send(()).await;
+            
+            // Wait for tasks to finish after shutdown signal
+            let (stream_result, deepgram_result) = tasks_future.await;
+            
+            match stream_result {
+                Ok(Ok(())) => {},
+                Ok(Err(e)) => eprintln!("File streaming error: {}", e),
+                Err(e) => eprintln!("Stream task join error: {}", e),
+            }
+            
+            match deepgram_result {
+                Ok(Ok(())) => println!("Deepgram client finished successfully"),
+                Ok(Err(e)) => eprintln!("Deepgram client error: {}", e),
+                Err(e) => eprintln!("Deepgram task join error: {}", e),
+            }
+        }
+        result = &mut tasks_future => {
+            let (stream_result, deepgram_result) = result;
+            
+            match stream_result {
+                Ok(Ok(())) => {},
+                Ok(Err(e)) => eprintln!("File streaming error: {}", e),
+                Err(e) => eprintln!("Stream task join error: {}", e),
+            }
+            
+            match deepgram_result {
+                Ok(Ok(())) => println!("\nTranscription completed successfully"),
+                Ok(Err(e)) => eprintln!("Deepgram client error: {}", e),
+                Err(e) => eprintln!("Deepgram task join error: {}", e),
+            }
+        }
     }
     
     Ok(())
@@ -484,8 +741,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     
     match cli.command {
-        Commands::Microphone { callback, silent } => run_microphone_mode(api_key, callback, silent).await?,
-        Commands::File { file, fast, callback, silent } => run_file_mode(api_key, file, fast, callback, silent).await?,
+        Commands::Microphone {
+            callback,
+            silent,
+            endpoint,
+            encoding,
+            sample_rate,
+            channels,
+            interim_results,
+            punctuate,
+            smart_format,
+            model,
+        } => {
+            run_microphone_mode(
+                api_key,
+                callback,
+                silent,
+                endpoint,
+                encoding,
+                sample_rate,
+                channels,
+                interim_results,
+                punctuate,
+                smart_format,
+                model,
+            )
+            .await?
+        }
+        Commands::File {
+            file,
+            fast,
+            callback,
+            silent,
+            endpoint,
+            encoding,
+            sample_rate,
+            channels,
+            interim_results,
+            punctuate,
+            smart_format,
+            model,
+        } => {
+            run_file_mode(
+                api_key,
+                file,
+                fast,
+                callback,
+                silent,
+                endpoint,
+                encoding,
+                sample_rate,
+                channels,
+                interim_results,
+                punctuate,
+                smart_format,
+                model,
+            )
+            .await?
+        }
     }
     
     Ok(())
