@@ -69,6 +69,10 @@ enum Commands {
         /// Deepgram model to use (e.g., nova-2, enhanced, base)
         #[arg(long)]
         model: Option<String>,
+        
+        /// Redact entities (comma-separated). Can include specific entities or categories: phi, pii, pci, other
+        #[arg(long)]
+        redact: Option<String>,
     },
     /// Stream audio from a file for transcription
     File {
@@ -119,6 +123,10 @@ enum Commands {
         /// Deepgram model to use (e.g., nova-2, enhanced, base)
         #[arg(long)]
         model: Option<String>,
+        
+        /// Redact entities (comma-separated). Can include specific entities or categories: phi, pii, pci, other
+        #[arg(long)]
+        redact: Option<String>,
     },
 }
 
@@ -345,6 +353,7 @@ async fn run_deepgram_client(
     punctuate: Option<bool>,
     smart_format: Option<bool>,
     model: Option<String>,
+    redact: Option<String>,
     mut shutdown_rx: mpsc::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Use custom endpoint or default to Deepgram API
@@ -384,6 +393,15 @@ async fn run_deepgram_client(
     // Add model parameter if specified
     if let Some(model_name) = model {
         params.push(format!("model={}", model_name));
+    }
+    
+    // Add redact parameter if specified
+    if let Some(redact_value) = redact {
+        // Parse the redact value to handle categories and individual entities
+        let redact_entities = parse_redact_entities(&redact_value);
+        if !redact_entities.is_empty() {
+            params.push(format!("redact={}", redact_entities.join("&redact=")));
+        }
     }
     
     // Join all parameters
@@ -547,6 +565,27 @@ async fn run_deepgram_client(
     Ok(())
 }
 
+fn parse_redact_entities(redact_value: &str) -> Vec<String> {
+    let mut entities = Vec::new();
+    
+    // Split by comma and trim whitespace
+    for item in redact_value.split(',') {
+        let item = item.trim();
+        
+        if !item.is_empty() {
+            // Keep categories and individual entities as-is
+            // The API will handle category expansion on the server side
+            entities.push(item.to_lowercase());
+        }
+    }
+    
+    // Remove duplicates while preserving order
+    let mut seen = std::collections::HashSet::new();
+    entities.retain(|e| seen.insert(e.clone()));
+    
+    entities
+}
+
 async fn run_microphone_mode(
     api_key: String,
     callback: Option<String>,
@@ -559,6 +598,7 @@ async fn run_microphone_mode(
     punctuate: Option<bool>,
     smart_format: Option<bool>,
     model: Option<String>,
+    redact: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Deepgram real-time transcription from microphone...");
     
@@ -591,6 +631,7 @@ async fn run_microphone_mode(
         punctuate,
         smart_format,
         model,
+        redact,
         shutdown_rx,
     ));
     
@@ -632,6 +673,7 @@ async fn run_file_mode(
     punctuate: Option<bool>,
     smart_format: Option<bool>,
     model: Option<String>,
+    redact: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Deepgram transcription from file...");
     println!("File: {}", file_path.display());
@@ -679,6 +721,7 @@ async fn run_file_mode(
         punctuate,
         smart_format,
         model,
+        redact,
         shutdown_rx,
     ));
     
@@ -752,6 +795,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             punctuate,
             smart_format,
             model,
+            redact,
         } => {
             run_microphone_mode(
                 api_key,
@@ -765,6 +809,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 punctuate,
                 smart_format,
                 model,
+                redact,
             )
             .await?
         }
@@ -781,6 +826,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             punctuate,
             smart_format,
             model,
+            redact,
         } => {
             run_file_mode(
                 api_key,
@@ -796,6 +842,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 punctuate,
                 smart_format,
                 model,
+                redact,
             )
             .await?
         }
