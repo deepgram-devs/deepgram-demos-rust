@@ -8,6 +8,7 @@ A real-time speech-to-text application using Rust that connects to the Deepgram 
 - WebSocket connection to Deepgram API for live transcription
 - Cross-platform support (Windows, macOS, Linux)
 - Displays transcription results with confidence scores in real-time
+- Redaction of certain data, based on the Deepgram [supported entity types](https://developers.deepgram.com/docs/supported-entity-types)
 
 ## Prerequisites
 
@@ -105,6 +106,9 @@ When a callback URL is provided:
 ```bash
 # Transcribe from microphone
 cargo run -- microphone
+
+# Transcribe from microphone with redaction
+cargo run -- microphone --redact pii,blood_type
 
 # Transcribe a WAV file at real-time rate
 cargo run -- file --file recording.wav
