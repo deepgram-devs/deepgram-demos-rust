@@ -40,6 +40,14 @@ struct Args {
     /// Think provider model to use for LLM processing
     #[arg(long, default_value = "gpt-4o-mini")]
     think_model: String,
+    
+    /// Custom endpoint URL for think provider
+    #[arg(long)]
+    think_endpoint: Option<String>,
+    
+    /// Custom headers for think provider in format "key=value" (can be specified multiple times)
+    #[arg(long)]
+    think_header: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -86,6 +94,14 @@ struct ListenConfig {
 #[derive(Debug, Serialize, Deserialize)]
 struct ThinkConfig {
     provider: ThinkProviderConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    endpoint: Option<ThinkEndpointConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ThinkEndpointConfig {
+    url: String,
+    headers: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -368,7 +384,21 @@ async fn connect_to_voice_agent(api_key: &str, endpoint: &str, _sample_rate: u32
     Ok(ws_stream)
 }
 
-fn create_agent_config(sample_rate: u32, _channels: u16, speak_model: &str, think_type: &str, think_model: &str) -> VoiceAgentConfig {
+fn create_agent_config(sample_rate: u32, _channels: u16, speak_model: &str, think_type: &str, think_model: &str, think_endpoint: Option<&str>, think_headers: &[String]) -> VoiceAgentConfig {
+    // Parse think headers from "key=value" format
+    let mut headers = std::collections::HashMap::new();
+    for header in think_headers {
+        if let Some((key, value)) = header.split_once('=') {
+            headers.insert(key.to_string(), value.to_string());
+        }
+    }
+    
+    // Create endpoint config if think_endpoint is provided
+    let endpoint_config = think_endpoint.map(|url| ThinkEndpointConfig {
+        url: url.to_string(),
+        headers,
+    });
+    
     VoiceAgentConfig {
         message_type: "Settings".to_string(),
         tags: vec!["demo".to_string(), "voice_agent".to_string()],
@@ -398,6 +428,7 @@ fn create_agent_config(sample_rate: u32, _channels: u16, speak_model: &str, thin
                     model: think_model.to_string(),
                     temperature: 0.7,
                 },
+                endpoint: endpoint_config,
             },
             speak: SpeakConfig {
                 provider: SpeakProviderConfig {
@@ -563,7 +594,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (mut ws_sender, ws_receiver) = ws_stream.split();
     
     // Send Settings configuration
-    let config = create_agent_config(sample_rate, channels, &args.speak_model, &args.think_type, &args.think_model);
+    let config = create_agent_config(
+        sample_rate, 
+        channels, 
+        &args.speak_model, 
+        &args.think_type, 
+        &args.think_model,
+        args.think_endpoint.as_deref(),
+        &args.think_header
+    );
     let config_json = serde_json::to_string(&config)?;
     info!("📤 Sending Settings configuration to WebSocket...");
     info!("📄 Config: {}", config_json);
