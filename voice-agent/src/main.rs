@@ -18,6 +18,17 @@ use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
 use rodio::{OutputStream, Sink, Source};
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(name = "voice-agent")]
+#[command(about = "A Deepgram Voice Agent client")]
+#[command(version)]
+struct Args {
+    /// Custom Deepgram endpoint URL to connect to
+    #[arg(long, default_value = "wss://agent.deepgram.com")]
+    endpoint: String,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct VoiceAgentConfig {
@@ -325,9 +336,8 @@ impl Source for PCMSource {
     }
 }
 
-async fn connect_to_voice_agent(api_key: &str, _sample_rate: u32, _channels: u16) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Box<dyn std::error::Error>> {
-    let url = "wss://agent.deepgram.com/v1/agent/converse";
-    let url = Url::parse(url)?;
+async fn connect_to_voice_agent(api_key: &str, endpoint: &str, _sample_rate: u32, _channels: u16) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Box<dyn std::error::Error>> {
+    let url = Url::parse(format!("{0}/v1/agent/converse", endpoint).as_str())?;
     
     let request = tokio_tungstenite::tungstenite::handshake::client::Request::get(url.as_str())
         .header("Authorization", format!("Token {}", api_key))
@@ -479,6 +489,9 @@ async fn handle_voice_agent_responses(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Parse command-line arguments
+    let args = Args::parse();
+    
     // Initialize logging
     env_logger::init();
     
@@ -489,6 +502,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
     
     info!("Starting Deepgram Voice Agent...");
+    info!("Using endpoint: {}", args.endpoint);
     
     // Initialize audio capture
     let audio_capture = AudioCapture::new()?;
@@ -528,7 +542,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Audio capture started");
     
     // Connect to Deepgram Voice Agent
-    let ws_stream = connect_to_voice_agent(&api_key, sample_rate, channels).await?;
+    let ws_stream = connect_to_voice_agent(&api_key, &args.endpoint, sample_rate, channels).await?;
     let (mut ws_sender, ws_receiver) = ws_stream.split();
     
     // Send Settings configuration

@@ -17,3 +17,4 @@ base64 = "0.22.1"
 log = "0.4"
 env_logger = "0.11.8"
 rodio = "0.21.1"
+clap = { version = "4.0", features = ["derive"] }
