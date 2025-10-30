@@ -28,6 +28,18 @@ struct Args {
     /// Custom Deepgram endpoint URL to connect to
     #[arg(long, default_value = "wss://agent.deepgram.com")]
     endpoint: String,
+    
+    /// Speak provider model to use for text-to-speech
+    #[arg(long, default_value = "aura-2-thalia-en")]
+    speak_model: String,
+    
+    /// Think provider type to use for LLM processing
+    #[arg(long, default_value = "open_ai")]
+    think_type: String,
+    
+    /// Think provider model to use for LLM processing
+    #[arg(long, default_value = "gpt-4o-mini")]
+    think_model: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -94,6 +106,7 @@ struct ThinkProviderConfig {
     #[serde(rename = "type")]
     provider_type: String,
     model: String,
+    temperature: f32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -355,7 +368,7 @@ async fn connect_to_voice_agent(api_key: &str, endpoint: &str, _sample_rate: u32
     Ok(ws_stream)
 }
 
-fn create_agent_config(sample_rate: u32, _channels: u16) -> VoiceAgentConfig {
+fn create_agent_config(sample_rate: u32, _channels: u16, speak_model: &str, think_type: &str, think_model: &str) -> VoiceAgentConfig {
     VoiceAgentConfig {
         message_type: "Settings".to_string(),
         tags: vec!["demo".to_string(), "voice_agent".to_string()],
@@ -381,14 +394,15 @@ fn create_agent_config(sample_rate: u32, _channels: u16) -> VoiceAgentConfig {
             },
             think: ThinkConfig {
                 provider: ThinkProviderConfig {
-                    provider_type: "open_ai".to_string(),
-                    model: "gpt-4o-mini".to_string(),
+                    provider_type: think_type.to_string(),
+                    model: think_model.to_string(),
+                    temperature: 0.7,
                 },
             },
             speak: SpeakConfig {
                 provider: SpeakProviderConfig {
                     provider_type: "deepgram".to_string(),
-                    model: "aura-2-thalia-en".to_string(),
+                    model: speak_model.to_string(),
                 },
             },
         },
@@ -442,6 +456,9 @@ async fn handle_voice_agent_responses(
                             }
                             "agent_speaking" => {
                                 info!("🗣️ Agent is speaking...");
+                            }
+                            "SettingsApplied" => {
+                                info!("✅ Settings have been applied successfully by the server");
                             }
                             _ => {
                                 info!("📄 Response: {}", serde_json::to_string_pretty(&response.data).unwrap_or_default());
@@ -546,7 +563,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (mut ws_sender, ws_receiver) = ws_stream.split();
     
     // Send Settings configuration
-    let config = create_agent_config(sample_rate, channels);
+    let config = create_agent_config(sample_rate, channels, &args.speak_model, &args.think_type, &args.think_model);
     let config_json = serde_json::to_string(&config)?;
     info!("📤 Sending Settings configuration to WebSocket...");
     info!("📄 Config: {}", config_json);
