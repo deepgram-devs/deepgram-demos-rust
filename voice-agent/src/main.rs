@@ -48,6 +48,10 @@ struct Args {
     /// Custom headers for think provider in format "key=value" (can be specified multiple times)
     #[arg(long)]
     think_header: Vec<String>,
+    
+    /// Enable verbose output including full Settings JSON message
+    #[arg(long)]
+    verbose: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -121,8 +125,10 @@ struct ListenProviderConfig {
 struct ThinkProviderConfig {
     #[serde(rename = "type")]
     provider_type: String,
-    model: String,
-    temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -425,8 +431,8 @@ fn create_agent_config(sample_rate: u32, _channels: u16, speak_model: &str, thin
             think: ThinkConfig {
                 provider: ThinkProviderConfig {
                     provider_type: think_type.to_string(),
-                    model: think_model.to_string(),
-                    temperature: 0.7,
+                    model: if think_model.is_empty() { None } else { Some(think_model.to_string()) },
+                    temperature: None,
                 },
                 endpoint: endpoint_config,
             },
@@ -540,8 +546,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command-line arguments
     let args = Args::parse();
     
-    // Initialize logging
-    env_logger::init();
+    // Initialize logging to output to terminal
+    env_logger::Builder::from_default_env()
+        .target(env_logger::Target::Stdout)
+        .filter_level(log::LevelFilter::Info)
+        .init();
     
     // Load environment variables
     dotenv::dotenv().ok();
@@ -605,7 +614,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let config_json = serde_json::to_string(&config)?;
     info!("📤 Sending Settings configuration to WebSocket...");
-    info!("📄 Config: {}", config_json);
+    
+    if args.verbose {
+        // Print the entire JSON Settings message with pretty formatting
+        let pretty_config = serde_json::to_string_pretty(&config)?;
+        info!("📄 Complete Settings JSON message:\n{}", pretty_config);
+    }
+    
     ws_sender.send(Message::Text(config_json.into())).await?;
     info!("✅ Settings configuration sent successfully");
     
