@@ -30,6 +30,10 @@ enum Commands {
         /// Optional request tags
         #[arg(long)]
         tags: Option<String>,
+
+        /// Override the base URL endpoint (e.g., "https://api.deepgram.com")
+        #[arg(long, default_value = "https://api.deepgram.com")]
+        endpoint: String,
     },
     /// Save text-to-speech audio to a file
     Save {
@@ -48,6 +52,10 @@ enum Commands {
         /// Optional request tags
         #[arg(long)]
         tags: Option<String>,
+
+        /// Override the base URL endpoint (e.g., "https://api.deepgram.com")
+        #[arg(long, default_value = "https://api.deepgram.com")]
+        endpoint: String,
     },
     /// Stream text-to-speech using WebSocket connection
     Stream {
@@ -58,6 +66,10 @@ enum Commands {
         /// Optional request tags
         #[arg(long)]
         tags: Option<String>,
+
+        /// Override the base URL endpoint (e.g., "wss://api.deepgram.com")
+        #[arg(long, default_value = "wss://api.deepgram.com")]
+        endpoint: String,
     },
 }
 
@@ -72,6 +84,7 @@ async fn generate_tts(
     text: &str,
     voice: &str,
     tags: Option<String>,
+    endpoint: &str,
 ) -> Result<Vec<u8>> {
     let request = TtsRequest {
         text: text.to_string(),
@@ -79,8 +92,9 @@ async fn generate_tts(
 
     // println!("Request is: {0}", serde_json::to_string(&request)?);
 
+    let url = format!("{}/v1/speak", endpoint);
     let mut request = client
-        .post("https://api.deepgram.com/v1/speak")
+        .post(&url)
         .header("Authorization", format!("Token {}", api_key))
         .header("Content-Type", "application/json")
         .query(&[("model", voice)])
@@ -137,6 +151,7 @@ async fn main() -> Result<()> {
         Some(Commands::Speak {
             voice,
             tags,
+            endpoint,
         }) => {
             let (tx, rx) = mpsc::channel();
             let output_stream = OutputStreamBuilder::open_default_stream().unwrap();
@@ -170,6 +185,7 @@ async fn main() -> Result<()> {
                         &text,
                         &voice,
                         tags.clone(),
+                        &endpoint,
                     )
                     .await
                     {
@@ -192,10 +208,11 @@ async fn main() -> Result<()> {
             output,
             voice,
             tags,
+            endpoint,
         }) => {
             println!("Generating audio for: {}", text);
             
-            match generate_tts(&client, &api_key, text, voice, tags.clone()).await {
+            match generate_tts(&client, &api_key, text, voice, tags.clone(), endpoint).await {
                 Ok(audio_bytes) => {
                     if let Err(e) = save_audio(audio_bytes, output) {
                         eprintln!("Error saving audio: {}", e);
@@ -211,8 +228,9 @@ async fn main() -> Result<()> {
         Some(Commands::Stream {
             voice,
             tags,
+            endpoint,
         }) => {
-            stream::run_stream(&api_key, voice, tags.clone()).await?;
+            stream::run_stream(&api_key, voice, tags.clone(), endpoint).await?;
         }
         None => {
             println!("No command specified. Use --help for usage information.");

@@ -14,10 +14,11 @@ struct TtsStreamRequest {
     text: String,
 }
 
-pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>) -> Result<()> {
+pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>, endpoint: &str) -> Result<()> {
     // Build WebSocket URL
     let mut url = format!(
-        "wss://api.deepgram.com/v1/speak?model={}&encoding=linear16&sample_rate=24000",
+        "{}/v1/speak?model={}&encoding=linear16&sample_rate=24000",
+        endpoint,
         voice
     );
     
@@ -27,13 +28,16 @@ pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>) -> Res
 
     println!("Connecting to Deepgram TTS WebSocket...");
 
+    // Extract host from endpoint for the host header
+    let host = endpoint.replace("wss://", "").replace("ws://", "");
+
     // Connect to WebSocket with required headers
     let request = tokio_tungstenite::tungstenite::http::Request::builder()
         .uri(&url)
         // .header("Authorization", format!("Token {}", api_key))
         .header("upgrade", "websocket")
         .header("connection", "Upgrade")
-        .header("host", "wss://api.deepgram.com/")
+        .header("host", &host)
         .header("sec-websocket-key", "YXNkZmFzZGZhc2RmYXNkZgo=")
         .header("Sec-WebSocket-Version", "13")
         .header("Sec-WebSocket-Protocol", format!("token, {}", api_key))

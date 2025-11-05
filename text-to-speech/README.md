@@ -117,6 +117,24 @@ cargo run --release -- save --text "Hello" --output out.mp3 --tags "production"
 cargo run --release -- stream --tags "websocket,demo"
 ```
 
+### Endpoint Override
+
+Override the default Deepgram API endpoint (useful for testing or using alternative deployments):
+
+```bash
+# For HTTP-based commands (speak and save)
+cargo run --release -- speak --endpoint "https://api.deepgram.com"
+cargo run --release -- save --text "Hello" --output out.mp3 --endpoint "https://api.deepgram.com"
+
+# For WebSocket streaming
+cargo run --release -- stream --endpoint "wss://api.deepgram.com"
+```
+
+The default endpoints are:
+
+- HTTP commands: `https://api.deepgram.com`
+- Stream command: `wss://api.deepgram.com`
+
 ## Architecture
 
 - **main.rs**: CLI interface and command routing
