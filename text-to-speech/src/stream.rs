@@ -49,7 +49,7 @@ pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>, endpoi
         .context("Failed to connect to WebSocket")?;
 
     println!("Connected! Type your text and press Enter to hear it spoken.");
-    println!("Type 'exit' to quit.\n");
+    println!("Type 'quit' to quit.\n");
 
     let (mut write, mut read) = ws_stream.split();
 
@@ -127,8 +127,8 @@ pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>, endpoi
 
         let input = input.trim();
 
-        if input == "exit" {
-            println!("Exiting...");
+        if input == "quit" {
+            println!("Quitting Deepgram TTS streaming application...");
             break;
         }
 
