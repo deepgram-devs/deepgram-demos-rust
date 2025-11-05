@@ -1,96 +1,134 @@
-# Deepgram Text-to-Speech CLI
+# Deepgram Text-to-Speech (TTS) Demo
 
-This Rust application provides a command-line interface for generating and playing back speech using the Deepgram [Text-to-Speech API](https://developers.deepgram.com/docs/text-to-speech).
+A Rust CLI application demonstrating Deepgram's Text-to-Speech API with multiple modes of operation.
+
+## Features
+
+- **Speak Mode**: Interactive text-to-speech with immediate playback
+- **Save Mode**: Convert text to speech and save to an audio file
+- **Stream Mode**: WebSocket-based streaming TTS with real-time audio playback
 
 ## Prerequisites
 
-- [Rust Toolchain](https://rustup.rs) (latest stable version)
-- Deepgram API Key
+- Rust (latest stable version)
+- A Deepgram API key
 
 ## Setup
 
-1. Clone the repository
-2. Set your Deepgram API key as an environment variable:
-
-In bash or zsh:
+1. Set your Deepgram API key as an environment variable:
 
 ```bash
-export DEEPGRAM_API_KEY=your_api_key_here
+export DEEPGRAM_API_KEY="your-api-key-here"
 ```
 
-In PowerShell:
+   Or create a `.env` file in the project directory:
 
-```pwsh
-$env:DEEPGRAM_API_KEY = 'your_api_key_here'
+```bash
+DEEPGRAM_API_KEY=your-api-key-here
 ```
 
-Or create a `.env` file in the project root with:
+1. Build the project:
 
-```toml
-DEEPGRAM_API_KEY=your_api_key_here
+```bash
+cargo build --release
 ```
 
 ## Usage
 
-### Speak Command (Interactive Playback)
+### Speak Mode (Interactive)
 
-Run the application with the `speak` subcommand for interactive text-to-speech playback:
-
-```bash
-cargo run -- speak
-```
-
-Optional arguments:
-
-- `--voice`: Specify the voice model (default: `aura-2-thalia-en`)
-- `--tags`: Add optional request tags
-
-Example:
+Speak text interactively with immediate audio playback:
 
 ```bash
-cargo run -- speak --voice aura-2-helena-en
+cargo run --release -- speak
 ```
 
-**Interactive Usage:**
-
-- Enter text to generate and playback speech
-- Type 'quit' to exit the application
-
-### Save Command (Save to File)
-
-Use the `save` subcommand to generate audio and save it to a file:
+Or with a custom voice:
 
 ```bash
-cargo run -- save --text "Hello, world!" --output output.mp3
+cargo run --release -- speak --voice aura-2-asteria-en
 ```
 
-Required arguments:
+Type your text and press Enter to hear it spoken. Type `quit` to exit.
 
-- `--text`: The text to convert to speech
-- `--output`: The output file path (e.g., `output.mp3`, `audio.wav`)
+### Save Mode
 
-Optional arguments:
-
-- `--voice`: Specify the voice model (default: `aura-2-thalia-en`)
-- `--tags`: Add optional request tags
-
-Example with custom voice:
+Convert text to speech and save to a file:
 
 ```bash
-cargo run -- save --text "Welcome to Deepgram" --output welcome.mp3 --voice aura-2-thalia-en
+cargo run --release -- save --text "Hello, world!" --output output.mp3
 ```
 
-## Features
+With custom voice:
 
-- Asynchronous text-to-speech generation
-- Real-time audio playback with interactive input
-- Save generated audio to files
-- Configurable voice models
-- Support for custom request tags
+```bash
+cargo run --release -- save --text "Hello, world!" --output output.mp3 --voice aura-2-asteria-en
+```
 
-## Dependencies
+### Stream Mode (WebSocket)
 
-- Tokio for async runtime
-- Reqwest for HTTP requests
-- Clap for CLI parsing
-- Rodio for audio playback
+Use WebSocket streaming for real-time text-to-speech:
+
+```bash
+cargo run --release -- stream
+```
+
+Or with a custom voice:
+
+```bash
+cargo run --release -- stream --voice aura-2-asteria-en
+```
+
+In stream mode:
+
+- Type your text and press Enter to hear it spoken immediately
+- Audio is streamed and played back in real-time
+- Type `exit` to quit
+
+## Available Voices
+
+Deepgram offers various voice models. Some examples:
+
+- `aura-2-thalia-en` (default)
+- `aura-2-asteria-en`
+- `aura-2-luna-en`
+- `aura-2-stella-en`
+- `aura-2-athena-en`
+- `aura-2-hera-en`
+- `aura-2-orion-en`
+- `aura-2-arcas-en`
+- `aura-2-perseus-en`
+- `aura-2-angus-en`
+- `aura-2-orpheus-en`
+- `aura-2-helios-en`
+- `aura-2-zeus-en`
+
+For the complete list of available voices, visit the [Deepgram documentation](https://developers.deepgram.com/docs/tts-models).
+
+## Optional Parameters
+
+### Tags
+
+Add custom tags to your requests for tracking and analytics:
+
+```bash
+cargo run --release -- speak --tags "demo,testing"
+cargo run --release -- save --text "Hello" --output out.mp3 --tags "production"
+cargo run --release -- stream --tags "websocket,demo"
+```
+
+## Architecture
+
+- **main.rs**: CLI interface and command routing
+- **stream.rs**: WebSocket streaming implementation with real-time audio playback
+
+The streaming implementation uses:
+
+- `tokio-tungstenite` for WebSocket connections
+- `rodio` for audio playback
+- Async/await for concurrent message handling
+- Thread-based audio playback for optimal performance
+
+## License
+
+See LICENSE.md in the repository root.

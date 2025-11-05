@@ -1,3 +1,5 @@
+mod stream;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use dotenv::dotenv;
@@ -39,6 +41,16 @@ enum Commands {
         #[arg(long)]
         output: String,
 
+        /// Voice model to use (e.g., "aura-2")
+        #[arg(long, default_value = "aura-2-thalia-en")]
+        voice: String,
+
+        /// Optional request tags
+        #[arg(long)]
+        tags: Option<String>,
+    },
+    /// Stream text-to-speech using WebSocket connection
+    Stream {
         /// Voice model to use (e.g., "aura-2")
         #[arg(long, default_value = "aura-2-thalia-en")]
         voice: String,
@@ -195,6 +207,12 @@ async fn main() -> Result<()> {
                     return Err(e);
                 }
             }
+        }
+        Some(Commands::Stream {
+            voice,
+            tags,
+        }) => {
+            stream::run_stream(&api_key, voice, tags.clone()).await?;
         }
         None => {
             println!("No command specified. Use --help for usage information.");
