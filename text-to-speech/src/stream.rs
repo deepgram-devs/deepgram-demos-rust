@@ -54,7 +54,7 @@ pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>) -> Res
 
     // Spawn audio playback thread
     let audio_thread = thread::spawn(move || {
-        println!("Starting audio playback thread ...");
+        // println!("Starting audio playback thread ...");
         let output_stream = match OutputStreamBuilder::open_default_stream() {
             Ok(stream) => stream,
             Err(e) => {
@@ -66,9 +66,9 @@ pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>) -> Res
         // Create a single sink that will be reused for all audio chunks
         let sink = Sink::connect_new(&output_stream.mixer());
 
-        println!("Waiting for audio data ...");
+        // println!("Waiting for audio data ...");
         while let Ok(audio_bytes) = audio_rx.recv() {
-            println!("Received audio chunk of {} bytes", audio_bytes.len());
+            // println!("Received audio chunk of {} bytes", audio_bytes.len());
             if let Err(e) = append_audio_to_sink(audio_bytes, &sink) {
                 eprintln!("Error appending audio: {}", e);
             }
@@ -92,9 +92,9 @@ pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>) -> Res
                         break;
                     }
                 }
-                Ok(Message::Text(text)) => {
+                Ok(Message::Text(_text)) => {
                     // Handle any text messages from server (metadata, errors, etc.)
-                    println!("Server message: {}", text);
+                    // println!("Server message: {}", text);
                 }
                 Ok(Message::Close(_)) => {
                     println!("WebSocket connection closed by server");
@@ -105,7 +105,7 @@ pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>) -> Res
                     break;
                 }
                 _ => {
-                    println!("Other response received ...");
+                    // println!("Other response received ...");
                 }
             }
         }
