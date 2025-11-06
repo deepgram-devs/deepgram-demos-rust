@@ -1,13 +1,13 @@
 [package]
 name = "dg-tts"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2024"
 default-run = "dg-tts"
 
 [dependencies]
-tokio = { version = "1.47.1", features = ["full"] }
-reqwest = { version = "0.12.23", features = ["json", "multipart"] }
-clap = { version = "4.4.18", features = ["derive"] }
+tokio = { version = "1.48.0", features = ["full"] }
+reqwest = { version = "0.12.24", features = ["json", "multipart"] }
+clap = { version = "4.5.51", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
