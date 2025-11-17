@@ -73,6 +73,10 @@ enum Commands {
         /// Redact entities (comma-separated). Can include specific entities or categories: phi, pii, pci, other
         #[arg(long)]
         redact: Option<String>,
+        
+        /// Language code for transcription (e.g., en, es, fr, de)
+        #[arg(long)]
+        language: Option<String>,
     },
     /// Stream audio from a file for transcription
     File {
@@ -127,6 +131,10 @@ enum Commands {
         /// Redact entities (comma-separated). Can include specific entities or categories: phi, pii, pci, other
         #[arg(long)]
         redact: Option<String>,
+        
+        /// Language code for transcription (e.g., en, es, fr, de)
+        #[arg(long)]
+        language: Option<String>,
     },
 }
 
@@ -354,6 +362,7 @@ async fn run_deepgram_client(
     smart_format: Option<bool>,
     model: Option<String>,
     redact: Option<String>,
+    language: Option<String>,
     mut shutdown_rx: mpsc::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Use custom endpoint or default to Deepgram API
@@ -402,6 +411,11 @@ async fn run_deepgram_client(
         if !redact_entities.is_empty() {
             params.push(format!("redact={}", redact_entities.join("&redact=")));
         }
+    }
+    
+    // Add language parameter if specified
+    if let Some(lang) = language {
+        params.push(format!("language={}", lang));
     }
     
     // Join all parameters
@@ -599,6 +613,7 @@ async fn run_microphone_mode(
     smart_format: Option<bool>,
     model: Option<String>,
     redact: Option<String>,
+    language: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Deepgram real-time transcription from microphone...");
     
@@ -632,6 +647,7 @@ async fn run_microphone_mode(
         smart_format,
         model,
         redact,
+        language,
         shutdown_rx,
     ));
     
@@ -674,6 +690,7 @@ async fn run_file_mode(
     smart_format: Option<bool>,
     model: Option<String>,
     redact: Option<String>,
+    language: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Deepgram transcription from file...");
     println!("File: {}", file_path.display());
@@ -722,6 +739,7 @@ async fn run_file_mode(
         smart_format,
         model,
         redact,
+        language,
         shutdown_rx,
     ));
     
@@ -796,6 +814,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             smart_format,
             model,
             redact,
+            language,
         } => {
             run_microphone_mode(
                 api_key,
@@ -810,6 +829,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 smart_format,
                 model,
                 redact,
+                language,
             )
             .await?
         }
@@ -827,6 +847,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             smart_format,
             model,
             redact,
+            language,
         } => {
             run_file_mode(
                 api_key,
@@ -843,6 +864,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 smart_format,
                 model,
                 redact,
+                language,
             )
             .await?
         }

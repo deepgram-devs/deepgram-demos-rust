@@ -1,5 +1,9 @@
 # Changelog for Deepgram Rust Speech-to-Text (STT) CLI
 
+## 2025-11-16
+
+* Added CLI parameter for `--language`
+
 ## 2025-10-20
 
 Version: `0.1.3`
