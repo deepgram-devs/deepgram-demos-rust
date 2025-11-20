@@ -1,0 +1,24 @@
+[package]
+name = "tts-tui"
+version = "0.1.0"
+edition = "2021" # Use 2021 edition
+
+[dependencies]
+ratatui = { version = "0.29.0", features = ["crossterm"] }
+crossterm = { version = "0.29.0", features = ["events", "serde"] }
+# reqwest needs `json` and `rustls-tls` or `native-tls`. For simplicity, I'll use `native-tls` here.
+# For async operations, we need to use the `tokio` runtime.
+reqwest = { version = "0.12.24", features = ["json", "stream", "rustls-tls"], default-features = false }
+tokio = { version = "1.38.0", features = ["full"] }
+rodio = "0.18.0"
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.111"
+dotenvy = "0.15.7"
+directories = "5.0.1"
+sha2 = "0.10.8"
+anyhow = "1.0.81"
+url = "2.5.0"
+async-trait = "0.1.77"
+base64 = "0.22.1"
+uuid = { version = "1.8.0", features = ["v4", "fast-rng", "serde"] }
+lazy_static = "1.4.0"
