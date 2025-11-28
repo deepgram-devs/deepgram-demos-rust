@@ -1,5 +1,9 @@
 # Changelog for Deepgram Rust Speech-to-Text (STT) CLI
 
+## 2025-11-28
+
+* Exit immediately after the final transcription message is received + timeout (wait) period
+
 ## 2025-11-16
 
 * Added CLI parameter for `--language`

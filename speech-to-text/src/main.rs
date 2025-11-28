@@ -532,6 +532,7 @@ async fn run_deepgram_client(
                     // No messages received for timeout duration, we're done
                     if !silent {
                         println!("No more messages received, finishing...");
+                        std::process::exit(0);
                     }
                     break;
                 }
