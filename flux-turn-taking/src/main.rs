@@ -7,7 +7,7 @@ use cpal::{Device, Stream, StreamConfig};
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
 use serde::Deserialize;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
 
@@ -34,32 +34,40 @@ enum Commands {
         /// Custom endpoint base URL (e.g., ws://localhost:8119/)
         #[arg(long)]
         endpoint: Option<String>,
-        
+
         /// Sample rate in Hz (default: 44100)
         #[arg(long, default_value = "44100")]
         sample_rate: u32,
-        
+
         /// Audio encoding format (default: linear16)
         #[arg(long, default_value = "linear16")]
         encoding: String,
+
+        /// Number of concurrent threads/connections (default: 1)
+        #[arg(long, default_value = "1")]
+        threads: usize,
     },
     /// Stream audio from a file to Deepgram Flux API
     File {
         /// Path to the audio file to transcribe
         #[arg(long)]
         file: PathBuf,
-        
+
         /// Custom endpoint base URL (e.g., ws://localhost:8119/)
         #[arg(long)]
         endpoint: Option<String>,
-        
+
         /// Sample rate in Hz (default: 44100)
         #[arg(long, default_value = "44100")]
         sample_rate: u32,
-        
+
         /// Audio encoding format (default: linear16)
         #[arg(long, default_value = "linear16")]
         encoding: String,
+
+        /// Number of concurrent threads/connections (default: 1)
+        #[arg(long, default_value = "1")]
+        threads: usize,
     },
 }
 
@@ -103,10 +111,8 @@ impl AudioCapture {
 
     fn start_capture(
         &self,
-        tx: mpsc::UnboundedSender<Vec<u8>>,
+        tx: broadcast::Sender<Vec<u8>>,
     ) -> Result<Stream, Box<dyn std::error::Error>> {
-        let tx_clone = tx.clone();
-
         let stream = self.device.build_input_stream(
             &self.config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
@@ -119,7 +125,9 @@ impl AudioCapture {
                     bytes.extend_from_slice(&sample_i16.to_le_bytes());
                 }
 
-                if let Err(e) = tx_clone.send(bytes) {
+                // broadcast::Sender::send returns Result<usize, SendError>
+                // The usize is the number of receivers that received the message
+                if let Err(e) = tx.send(bytes) {
                     error!("Failed to send audio data: {}", e);
                 }
             },
@@ -173,6 +181,7 @@ async fn connect_to_deepgram(
 }
 
 async fn handle_websocket_responses(
+    thread_id: usize,
     mut ws_receiver: futures_util::stream::SplitStream<
         tokio_tungstenite::WebSocketStream<
             tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -183,125 +192,204 @@ async fn handle_websocket_responses(
         match message {
             Ok(Message::Text(text)) => match serde_json::from_str::<DeepgramResponse>(&text) {
                 Ok(response) => {
-                    println!("📨 Message Type: {}", response.message_type);
+                    println!("[Thread {}] 📨 Message Type: {}", thread_id, response.message_type);
                     println!(
-                        "📄 Response Data: {}",
+                        "[Thread {}] 📄 Response Data: {}",
+                        thread_id,
                         serde_json::to_string_pretty(&response.data).unwrap_or_default()
                     );
                     println!("---");
                 }
                 Err(e) => {
-                    error!("Failed to parse response: {}", e);
-                    println!("📨 Raw response: {}", text);
+                    error!("[Thread {}] Failed to parse response: {}", thread_id, e);
+                    println!("[Thread {}] 📨 Raw response: {}", thread_id, text);
                     println!("---");
                 }
             },
             Ok(Message::Binary(data)) => {
-                println!("📨 Message Type: Binary");
-                println!("📄 Binary data received: {} bytes", data.len());
+                println!("[Thread {}] 📨 Message Type: Binary", thread_id);
+                println!("[Thread {}] 📄 Binary data received: {} bytes", thread_id, data.len());
                 println!("---");
             }
             Ok(Message::Close(frame)) => {
-                println!("📨 Message Type: Close");
+                println!("[Thread {}] 📨 Message Type: Close", thread_id);
                 if let Some(frame) = frame {
-                    println!("📄 Close frame: code={}, reason={}", frame.code, frame.reason);
+                    println!("[Thread {}] 📄 Close frame: code={}, reason={}", thread_id, frame.code, frame.reason);
                 }
                 println!("---");
                 break;
             }
             Ok(Message::Ping(data)) => {
-                println!("📨 Message Type: Ping ({} bytes)", data.len());
+                println!("[Thread {}] 📨 Message Type: Ping ({} bytes)", thread_id, data.len());
             }
             Ok(Message::Pong(data)) => {
-                println!("📨 Message Type: Pong ({} bytes)", data.len());
+                println!("[Thread {}] 📨 Message Type: Pong ({} bytes)", thread_id, data.len());
             }
             Ok(Message::Frame(_)) => {
-                println!("📨 Message Type: Frame");
+                println!("[Thread {}] 📨 Message Type: Frame", thread_id);
             }
             Err(e) => {
-                error!("WebSocket error: {}", e);
+                error!("[Thread {}] WebSocket error: {}", thread_id, e);
                 break;
             }
         }
     }
 }
 
+fn run_thread_worker(
+    thread_id: usize,
+    mut audio_rx: broadcast::Receiver<Vec<u8>>,
+    api_key: String,
+    endpoint: Option<String>,
+    sample_rate: u32,
+    encoding: String,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Create thread-local Tokio runtime
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+    runtime.block_on(async move {
+        // Connect to Deepgram WebSocket
+        info!("[Thread {}] Connecting to Deepgram WebSocket...", thread_id);
+
+        let (ws_stream, _response) = match connect_to_deepgram(&api_key, endpoint.as_deref(), sample_rate, &encoding).await {
+            Ok(result) => {
+                info!("[Thread {}] Connected successfully", thread_id);
+                result
+            }
+            Err(e) => {
+                error!("[Thread {}] Failed to connect: {}", thread_id, e);
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to connect: {}", e)
+                )) as Box<dyn std::error::Error + Send + Sync>);
+            }
+        };
+
+        let (mut ws_sender, ws_receiver) = ws_stream.split();
+
+        // Spawn response handler task
+        let response_handle = tokio::spawn(async move {
+            handle_websocket_responses(thread_id, ws_receiver).await;
+        });
+
+        // Main loop: receive audio from broadcast and send to WebSocket
+        let mut total_bytes_sent = 0u64;
+        let mut packet_count = 0u64;
+
+        loop {
+            match audio_rx.recv().await {
+                Ok(audio_data) => {
+                    packet_count += 1;
+                    total_bytes_sent += audio_data.len() as u64;
+
+                    // Print audio data info every 50 packets to avoid spam
+                    if packet_count % 50 == 0 {
+                        println!(
+                            "[Thread {}] 📤 Sent packet #{}: {} bytes (Total: {} bytes)",
+                            thread_id,
+                            packet_count,
+                            audio_data.len(),
+                            total_bytes_sent
+                        );
+                    }
+
+                    if let Err(e) = ws_sender.send(Message::Binary(audio_data.into())).await {
+                        error!("[Thread {}] Failed to send audio data: {}", thread_id, e);
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    log::warn!("[Thread {}] Lagged by {} messages, audio skipped", thread_id, n);
+                    continue;
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    info!("[Thread {}] Channel closed, exiting", thread_id);
+                    break;
+                }
+            }
+        }
+
+        // Wait for response handler to finish
+        let _ = response_handle.await;
+
+        info!("[Thread {}] Worker thread exiting", thread_id);
+        Ok(())
+    })
+}
+
 async fn run_microphone(
     endpoint: Option<String>,
     sample_rate: u32,
     encoding: String,
+    threads: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get API key from environment variable
     let api_key =
         env::var("DEEPGRAM_API_KEY").map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
 
-    info!("Starting microphone streaming to Deepgram Flux...");
+    info!("Starting microphone streaming to Deepgram Flux with {} thread(s)...", threads);
 
     // Initialize audio capture
     let audio_capture = AudioCapture::new()?;
 
-    // Create channel for audio data
-    let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    // Create broadcast channel for audio data (1000 message buffer)
+    let (audio_tx, _) = broadcast::channel::<Vec<u8>>(1000);
 
     // Start audio capture
-    let _stream = audio_capture.start_capture(audio_tx)?;
+    let _stream = audio_capture.start_capture(audio_tx.clone())?;
     info!("Audio capture started");
 
-    // Connect to Deepgram WebSocket
-    let (ws_stream, _response) = connect_to_deepgram(&api_key, endpoint.as_deref(), sample_rate, &encoding).await?;
-    let (mut ws_sender, ws_receiver) = ws_stream.split();
-
-    // Spawn task to handle WebSocket responses
-    let response_handle = tokio::spawn(async move {
-        handle_websocket_responses(ws_receiver).await;
-    });
-
-    // Main loop: send audio data to WebSocket
-    info!("Starting audio streaming to Deepgram...");
     println!("🎤 Listening to microphone and streaming to Deepgram Flux API...");
+    println!("Spawning {} worker thread(s)...", threads);
     println!("Press Ctrl+C to stop");
     println!("===");
 
-    let mut audio_handle = tokio::spawn(async move {
-        let mut total_bytes_sent = 0u64;
-        let mut packet_count = 0u64;
+    // Spawn worker threads
+    let mut thread_handles = Vec::new();
 
-        while let Some(audio_data) = audio_rx.recv().await {
-            packet_count += 1;
-            total_bytes_sent += audio_data.len() as u64;
+    for thread_id in 0..threads {
+        let audio_rx = audio_tx.subscribe();
+        let api_key_clone = api_key.clone();
+        let endpoint_clone = endpoint.clone();
+        let encoding_clone = encoding.clone();
 
-            // Print audio data info every 50 packets to avoid spam
-            if packet_count % 50 == 0 {
-                println!(
-                    "📤 Sent packet #{}: {} bytes (Total: {} bytes)",
-                    packet_count,
-                    audio_data.len(),
-                    total_bytes_sent
-                );
-            }
+        let handle = std::thread::spawn(move || {
+            run_thread_worker(
+                thread_id,
+                audio_rx,
+                api_key_clone,
+                endpoint_clone,
+                sample_rate,
+                encoding_clone,
+            )
+        });
 
-            if let Err(e) = ws_sender.send(Message::Binary(audio_data.into())).await {
-                error!("Failed to send audio data: {}", e);
-                break;
-            }
-        }
-    });
-
-    // Wait for either task to complete or for Ctrl+C
-    tokio::select! {
-        _ = response_handle => {
-            info!("Response handler completed");
-        }
-        _ = &mut audio_handle => {
-            info!("Audio handler completed");
-        }
-        _ = tokio::signal::ctrl_c() => {
-            info!("Received Ctrl+C, shutting down...");
-        }
+        thread_handles.push(handle);
     }
 
-    // Clean shutdown
-    audio_handle.abort();
+    // Wait for Ctrl+C
+    tokio::signal::ctrl_c().await?;
+    info!("Received Ctrl+C, shutting down...");
+
+    // Drop the audio_tx to signal all threads to exit
+    drop(audio_tx);
+
+    // Wait for all threads to finish
+    println!("Waiting for worker threads to finish...");
+    for (thread_id, handle) in thread_handles.into_iter().enumerate() {
+        match handle.join() {
+            Ok(Ok(())) => {
+                info!("Thread {} exited successfully", thread_id);
+            }
+            Ok(Err(e)) => {
+                error!("Thread {} exited with error: {}", thread_id, e);
+            }
+            Err(e) => {
+                error!("Thread {} panicked: {:?}", thread_id, e);
+            }
+        }
+    }
 
     println!("🛑 Application stopped");
     Ok(())
@@ -312,12 +400,13 @@ async fn run_file(
     endpoint: Option<String>,
     sample_rate: u32,
     encoding: String,
+    threads: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get API key from environment variable
     let api_key =
         env::var("DEEPGRAM_API_KEY").map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
 
-    info!("Starting file streaming to Deepgram Flux...");
+    info!("Starting file streaming to Deepgram Flux with {} thread(s)...", threads);
 
     // Verify file exists
     if !file_path.exists() {
@@ -330,21 +419,39 @@ async fn run_file(
     let audio_data = tokio::fs::read(&file_path).await?;
     info!("File loaded: {} bytes", audio_data.len());
 
-    // Connect to Deepgram WebSocket
-    let (ws_stream, _response) = connect_to_deepgram(&api_key, endpoint.as_deref(), sample_rate, &encoding).await?;
-    let (mut ws_sender, ws_receiver) = ws_stream.split();
-
-    // Spawn task to handle WebSocket responses
-    let response_handle = tokio::spawn(async move {
-        handle_websocket_responses(ws_receiver).await;
-    });
+    // Create broadcast channel for audio data (1000 message buffer)
+    let (audio_tx, _) = broadcast::channel::<Vec<u8>>(1000);
 
     println!("📁 Streaming file to Deepgram Flux API...");
     println!("File: {}", file_path.display());
+    println!("Spawning {} worker thread(s)...", threads);
     println!("Press Ctrl+C to stop");
     println!("===");
 
-    // Stream the audio data in chunks
+    // Spawn worker threads
+    let mut thread_handles = Vec::new();
+
+    for thread_id in 0..threads {
+        let audio_rx = audio_tx.subscribe();
+        let api_key_clone = api_key.clone();
+        let endpoint_clone = endpoint.clone();
+        let encoding_clone = encoding.clone();
+
+        let handle = std::thread::spawn(move || {
+            run_thread_worker(
+                thread_id,
+                audio_rx,
+                api_key_clone,
+                endpoint_clone,
+                sample_rate,
+                encoding_clone,
+            )
+        });
+
+        thread_handles.push(handle);
+    }
+
+    // Stream the audio data in chunks to the broadcast channel
     let chunk_size = 8192*4;
     let mut offset = 0;
     let mut chunk_count = 0;
@@ -358,11 +465,11 @@ async fn run_file(
 
         chunk_count += 1;
         total_bytes_sent += chunk.len();
-        
+
         // Print progress for every chunk initially, then every 10 chunks
         if chunk_count <= 5 || chunk_count % 10 == 0 {
             println!(
-                "📤 Sending chunk #{}: {} bytes (Progress: {:.1}%, Total sent: {} bytes)",
+                "📤 Broadcasting chunk #{}: {} bytes (Progress: {:.1}%, Total: {} bytes)",
                 chunk_count,
                 chunk.len(),
                 (total_bytes_sent as f64 / audio_data.len() as f64) * 100.0,
@@ -370,12 +477,13 @@ async fn run_file(
             );
         }
 
-        match ws_sender.send(Message::Binary(chunk.to_vec().into())).await {
-            Ok(_) => {
-                info!("Successfully sent chunk #{} ({} bytes)", chunk_count, chunk.len());
+        // Send to broadcast channel (all threads will receive it)
+        match audio_tx.send(chunk.to_vec()) {
+            Ok(receiver_count) => {
+                info!("Successfully broadcast chunk #{} to {} receiver(s)", chunk_count, receiver_count);
             }
             Err(e) => {
-                error!("Failed to send audio data chunk #{}: {}", chunk_count, e);
+                error!("Failed to broadcast audio data chunk #{}: {}", chunk_count, e);
                 break;
             }
         }
@@ -388,19 +496,22 @@ async fn run_file(
 
     println!("✅ File streaming complete: {} chunks sent ({} total bytes)", chunk_count, total_bytes_sent);
 
-    // Send close frame to signal end of audio
-    let _ = ws_sender.close().await;
+    // Drop the audio_tx to signal all threads that streaming is complete
+    drop(audio_tx);
 
-    // Wait for response handler to complete or timeout
-    tokio::select! {
-        _ = response_handle => {
-            info!("Response handler completed");
-        }
-        _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {
-            info!("Timeout waiting for final responses");
-        }
-        _ = tokio::signal::ctrl_c() => {
-            info!("Received Ctrl+C, shutting down...");
+    // Wait for all threads to finish
+    println!("Waiting for worker threads to finish...");
+    for (thread_id, handle) in thread_handles.into_iter().enumerate() {
+        match handle.join() {
+            Ok(Ok(())) => {
+                info!("Thread {} exited successfully", thread_id);
+            }
+            Ok(Err(e)) => {
+                error!("Thread {} exited with error: {}", thread_id, e);
+            }
+            Err(e) => {
+                error!("Thread {} panicked: {:?}", thread_id, e);
+            }
         }
     }
 
@@ -415,11 +526,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Microphone { endpoint, sample_rate, encoding } => {
-            run_microphone(endpoint, sample_rate, encoding).await?;
+        Commands::Microphone { endpoint, sample_rate, encoding, threads } => {
+            run_microphone(endpoint, sample_rate, encoding, threads).await?;
         }
-        Commands::File { file, endpoint, sample_rate, encoding } => {
-            run_file(file, endpoint, sample_rate, encoding).await?;
+        Commands::File { file, endpoint, sample_rate, encoding, threads } => {
+            run_file(file, endpoint, sample_rate, encoding, threads).await?;
         }
     }
 
