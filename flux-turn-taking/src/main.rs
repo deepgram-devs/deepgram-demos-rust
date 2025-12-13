@@ -756,7 +756,11 @@ fn display_stats_table(stats: &StatsMap) {
         thread_stats.sort_by_key(|s| s.thread_id);
 
         if !thread_stats.is_empty() {
-            let table = Table::new(&thread_stats).to_string();
+            use tabled::settings::Style;
+
+            let table = Table::new(&thread_stats)
+                .with(Style::sharp())
+                .to_string();
 
             // Clear screen and move cursor to top
             let mut stdout = std::io::stdout();
