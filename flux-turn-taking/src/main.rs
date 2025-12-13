@@ -1,12 +1,16 @@
+use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use clap::{Parser, Subcommand};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
+use crossterm::{cursor, terminal, ExecutableCommand};
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
 use serde::Deserialize;
+use tabled::{Table, Tabled};
 use tokio::sync::broadcast;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
@@ -18,6 +22,28 @@ struct DeepgramResponse {
     #[serde(flatten)]
     data: serde_json::Value,
 }
+
+#[derive(Debug, Clone, Default, Tabled)]
+struct ThreadStats {
+    #[tabled(rename = "Thread")]
+    thread_id: usize,
+    #[tabled(rename = "Bytes Sent")]
+    bytes_sent: u64,
+    #[tabled(rename = "Bytes Recv")]
+    bytes_received: u64,
+    #[tabled(rename = "Results")]
+    results_count: u64,
+    #[tabled(rename = "SpeechStarted")]
+    speech_started_count: u64,
+    #[tabled(rename = "UtteranceEnd")]
+    utterance_end_count: u64,
+    #[tabled(rename = "Metadata")]
+    metadata_count: u64,
+    #[tabled(rename = "Other")]
+    other_count: u64,
+}
+
+type StatsMap = Arc<Mutex<HashMap<usize, ThreadStats>>>;
 
 #[derive(Parser)]
 #[command(name = "rust-flux")]
@@ -46,6 +72,10 @@ enum Commands {
         /// Number of concurrent threads/connections (default: 1)
         #[arg(long, default_value = "1")]
         threads: usize,
+
+        /// Print all response messages instead of statistics table
+        #[arg(long, short = 'v')]
+        verbose: bool,
     },
     /// Stream audio from a file to Deepgram Flux API
     File {
@@ -68,6 +98,10 @@ enum Commands {
         /// Number of concurrent threads/connections (default: 1)
         #[arg(long, default_value = "1")]
         threads: usize,
+
+        /// Print all response messages instead of statistics table
+        #[arg(long, short = 'v')]
+        verbose: bool,
     },
 }
 
@@ -155,7 +189,10 @@ async fn connect_to_deepgram(
     Box<dyn std::error::Error>,
 > {
     let base_url = endpoint.unwrap_or("wss://api.deepgram.com");
-    
+
+    // Remove trailing slashes from base_url to avoid double slashes
+    let base_url = base_url.trim_end_matches('/');
+
     let url = format!(
         "{}/v2/listen?model=flux-general-en&sample_rate={}&encoding={}",
         base_url, sample_rate, encoding
@@ -173,7 +210,7 @@ async fn connect_to_deepgram(
         .header("Sec-WebSocket-Version", "13")
         .body(())?;
 
-    info!("Connecting to Deepgram WebSocket at {}...", base_url);
+    info!("Connecting to Deepgram WebSocket at {}...", url.as_str());
     let (ws_stream, response) = connect_async(request).await?;
     info!("Connected to Deepgram WebSocket successfully");
 
@@ -187,46 +224,91 @@ async fn handle_websocket_responses(
             tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
         >,
     >,
+    stats: StatsMap,
+    verbose: bool,
 ) {
     while let Some(message) = ws_receiver.next().await {
         match message {
-            Ok(Message::Text(text)) => match serde_json::from_str::<DeepgramResponse>(&text) {
-                Ok(response) => {
-                    println!("[Thread {}] 📨 Message Type: {}", thread_id, response.message_type);
-                    println!(
-                        "[Thread {}] 📄 Response Data: {}",
-                        thread_id,
-                        serde_json::to_string_pretty(&response.data).unwrap_or_default()
-                    );
-                    println!("---");
+            Ok(Message::Text(text)) => {
+                // Update bytes received
+                if let Ok(mut stats_map) = stats.lock() {
+                    if let Some(thread_stats) = stats_map.get_mut(&thread_id) {
+                        thread_stats.bytes_received += text.len() as u64;
+                    }
                 }
-                Err(e) => {
-                    error!("[Thread {}] Failed to parse response: {}", thread_id, e);
-                    println!("[Thread {}] 📨 Raw response: {}", thread_id, text);
-                    println!("---");
+
+                match serde_json::from_str::<DeepgramResponse>(&text) {
+                    Ok(response) => {
+                        // Update message type counts
+                        if let Ok(mut stats_map) = stats.lock() {
+                            if let Some(thread_stats) = stats_map.get_mut(&thread_id) {
+                                match response.message_type.as_str() {
+                                    "Results" => thread_stats.results_count += 1,
+                                    "SpeechStarted" => thread_stats.speech_started_count += 1,
+                                    "UtteranceEnd" => thread_stats.utterance_end_count += 1,
+                                    "Metadata" => thread_stats.metadata_count += 1,
+                                    _ => thread_stats.other_count += 1,
+                                }
+                            }
+                        }
+
+                        if verbose {
+                            println!("[Thread {}] 📨 Message Type: {}", thread_id, response.message_type);
+                            println!(
+                                "[Thread {}] 📄 Response Data: {}",
+                                thread_id,
+                                serde_json::to_string_pretty(&response.data).unwrap_or_default()
+                            );
+                            println!("---");
+                        }
+                    }
+                    Err(e) => {
+                        error!("[Thread {}] Failed to parse response: {}", thread_id, e);
+                        if verbose {
+                            println!("[Thread {}] 📨 Raw response: {}", thread_id, text);
+                            println!("---");
+                        }
+                    }
                 }
-            },
+            }
             Ok(Message::Binary(data)) => {
-                println!("[Thread {}] 📨 Message Type: Binary", thread_id);
-                println!("[Thread {}] 📄 Binary data received: {} bytes", thread_id, data.len());
-                println!("---");
+                // Update bytes received
+                if let Ok(mut stats_map) = stats.lock() {
+                    if let Some(thread_stats) = stats_map.get_mut(&thread_id) {
+                        thread_stats.bytes_received += data.len() as u64;
+                    }
+                }
+
+                if verbose {
+                    println!("[Thread {}] 📨 Message Type: Binary", thread_id);
+                    println!("[Thread {}] 📄 Binary data received: {} bytes", thread_id, data.len());
+                    println!("---");
+                }
             }
             Ok(Message::Close(frame)) => {
-                println!("[Thread {}] 📨 Message Type: Close", thread_id);
-                if let Some(frame) = frame {
-                    println!("[Thread {}] 📄 Close frame: code={}, reason={}", thread_id, frame.code, frame.reason);
+                if verbose {
+                    println!("[Thread {}] 📨 Message Type: Close", thread_id);
+                    if let Some(frame) = &frame {
+                        println!("[Thread {}] 📄 Close frame: code={}, reason={}", thread_id, frame.code, frame.reason);
+                    }
+                    println!("---");
                 }
-                println!("---");
                 break;
             }
             Ok(Message::Ping(data)) => {
-                println!("[Thread {}] 📨 Message Type: Ping ({} bytes)", thread_id, data.len());
+                if verbose {
+                    println!("[Thread {}] 📨 Message Type: Ping ({} bytes)", thread_id, data.len());
+                }
             }
             Ok(Message::Pong(data)) => {
-                println!("[Thread {}] 📨 Message Type: Pong ({} bytes)", thread_id, data.len());
+                if verbose {
+                    println!("[Thread {}] 📨 Message Type: Pong ({} bytes)", thread_id, data.len());
+                }
             }
             Ok(Message::Frame(_)) => {
-                println!("[Thread {}] 📨 Message Type: Frame", thread_id);
+                if verbose {
+                    println!("[Thread {}] 📨 Message Type: Frame", thread_id);
+                }
             }
             Err(e) => {
                 error!("[Thread {}] WebSocket error: {}", thread_id, e);
@@ -243,6 +325,8 @@ fn run_thread_worker(
     endpoint: Option<String>,
     sample_rate: u32,
     encoding: String,
+    stats: StatsMap,
+    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Create thread-local Tokio runtime
     let runtime = tokio::runtime::Runtime::new()
@@ -269,27 +353,39 @@ fn run_thread_worker(
         let (mut ws_sender, ws_receiver) = ws_stream.split();
 
         // Spawn response handler task
+        let stats_clone = stats.clone();
         let response_handle = tokio::spawn(async move {
-            handle_websocket_responses(thread_id, ws_receiver).await;
+            handle_websocket_responses(thread_id, ws_receiver, stats_clone, verbose).await;
         });
 
         // Main loop: receive audio from broadcast and send to WebSocket
-        let mut total_bytes_sent = 0u64;
         let mut packet_count = 0u64;
 
         loop {
             match audio_rx.recv().await {
                 Ok(audio_data) => {
                     packet_count += 1;
-                    total_bytes_sent += audio_data.len() as u64;
+                    let bytes_len = audio_data.len() as u64;
 
-                    // Print audio data info every 50 packets to avoid spam
-                    if packet_count % 50 == 0 {
+                    // Update bytes sent in stats
+                    if let Ok(mut stats_map) = stats.lock() {
+                        if let Some(thread_stats) = stats_map.get_mut(&thread_id) {
+                            thread_stats.bytes_sent += bytes_len;
+                        }
+                    }
+
+                    // Print audio data info every 50 packets to avoid spam in verbose mode
+                    if verbose && packet_count % 50 == 0 {
+                        let total_bytes_sent = if let Ok(stats_map) = stats.lock() {
+                            stats_map.get(&thread_id).map(|s| s.bytes_sent).unwrap_or(0)
+                        } else {
+                            0
+                        };
                         println!(
                             "[Thread {}] 📤 Sent packet #{}: {} bytes (Total: {} bytes)",
                             thread_id,
                             packet_count,
-                            audio_data.len(),
+                            bytes_len,
                             total_bytes_sent
                         );
                     }
@@ -323,6 +419,7 @@ async fn run_microphone(
     sample_rate: u32,
     encoding: String,
     threads: usize,
+    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get API key from environment variable
     let api_key =
@@ -337,12 +434,27 @@ async fn run_microphone(
     let (audio_tx, _) = broadcast::channel::<Vec<u8>>(1000);
 
     // Start audio capture
-    let _stream = audio_capture.start_capture(audio_tx.clone())?;
+    let stream = audio_capture.start_capture(audio_tx.clone())?;
     info!("Audio capture started");
+
+    // Initialize stats map
+    let stats: StatsMap = Arc::new(Mutex::new(HashMap::new()));
+    for thread_id in 0..threads {
+        stats.lock().unwrap().insert(
+            thread_id,
+            ThreadStats {
+                thread_id,
+                ..Default::default()
+            },
+        );
+    }
 
     println!("🎤 Listening to microphone and streaming to Deepgram Flux API...");
     println!("Spawning {} worker thread(s)...", threads);
     println!("Press Ctrl+C to stop");
+    if !verbose {
+        println!("Use --verbose to see all messages");
+    }
     println!("===");
 
     // Spawn worker threads
@@ -353,6 +465,7 @@ async fn run_microphone(
         let api_key_clone = api_key.clone();
         let endpoint_clone = endpoint.clone();
         let encoding_clone = encoding.clone();
+        let stats_clone = stats.clone();
 
         let handle = std::thread::spawn(move || {
             run_thread_worker(
@@ -362,37 +475,89 @@ async fn run_microphone(
                 endpoint_clone,
                 sample_rate,
                 encoding_clone,
+                stats_clone,
+                verbose,
             )
         });
 
         thread_handles.push(handle);
     }
 
+    // Spawn stats display task if not in verbose mode
+    let display_task = if !verbose {
+        let stats_clone = stats.clone();
+        Some(tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                display_stats_table(&stats_clone);
+            }
+        }))
+    } else {
+        None
+    };
+
     // Wait for Ctrl+C
     tokio::signal::ctrl_c().await?;
     info!("Received Ctrl+C, shutting down...");
 
+    // Stop audio capture first
+    drop(stream);
+
     // Drop the audio_tx to signal all threads to exit
     drop(audio_tx);
 
-    // Wait for all threads to finish
-    println!("Waiting for worker threads to finish...");
+    // Cancel display task if it exists
+    if let Some(task) = display_task {
+        task.abort();
+    }
+
+    // Wait for all threads to finish with 2 second timeout
+    println!("\nWaiting for worker threads to finish (2 second timeout)...");
+
+    let shutdown_timeout = tokio::time::Duration::from_secs(2);
+    let thread_count = thread_handles.len();
+
+    // Spawn tasks to wait for each thread
+    let mut join_tasks = Vec::new();
     for (thread_id, handle) in thread_handles.into_iter().enumerate() {
-        match handle.join() {
-            Ok(Ok(())) => {
-                info!("Thread {} exited successfully", thread_id);
+        let task = tokio::task::spawn_blocking(move || {
+            (thread_id, handle.join())
+        });
+        join_tasks.push(task);
+    }
+
+    // Wait for all threads with timeout
+    match tokio::time::timeout(shutdown_timeout, async {
+        for task in join_tasks {
+            if let Ok((thread_id, join_result)) = task.await {
+                match join_result {
+                    Ok(Ok(())) => {
+                        info!("Thread {} exited successfully", thread_id);
+                    }
+                    Ok(Err(e)) => {
+                        error!("Thread {} exited with error: {}", thread_id, e);
+                    }
+                    Err(e) => {
+                        error!("Thread {} panicked: {:?}", thread_id, e);
+                    }
+                }
             }
-            Ok(Err(e)) => {
-                error!("Thread {} exited with error: {}", thread_id, e);
-            }
-            Err(e) => {
-                error!("Thread {} panicked: {:?}", thread_id, e);
-            }
+        }
+    }).await {
+        Ok(_) => {
+            info!("All {} threads exited successfully", thread_count);
+        }
+        Err(_) => {
+            error!("Shutdown timeout exceeded after 2 seconds, forcing exit");
+            println!("🛑 Application stopped (forced)");
+            std::process::exit(0);
         }
     }
 
     println!("🛑 Application stopped");
-    Ok(())
+
+    // Force exit to ensure immediate termination
+    std::process::exit(0);
 }
 
 async fn run_file(
@@ -401,6 +566,7 @@ async fn run_file(
     sample_rate: u32,
     encoding: String,
     threads: usize,
+    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get API key from environment variable
     let api_key =
@@ -422,10 +588,25 @@ async fn run_file(
     // Create broadcast channel for audio data (1000 message buffer)
     let (audio_tx, _) = broadcast::channel::<Vec<u8>>(1000);
 
+    // Initialize stats map
+    let stats: StatsMap = Arc::new(Mutex::new(HashMap::new()));
+    for thread_id in 0..threads {
+        stats.lock().unwrap().insert(
+            thread_id,
+            ThreadStats {
+                thread_id,
+                ..Default::default()
+            },
+        );
+    }
+
     println!("📁 Streaming file to Deepgram Flux API...");
     println!("File: {}", file_path.display());
     println!("Spawning {} worker thread(s)...", threads);
     println!("Press Ctrl+C to stop");
+    if !verbose {
+        println!("Use --verbose to see all messages");
+    }
     println!("===");
 
     // Spawn worker threads
@@ -436,6 +617,7 @@ async fn run_file(
         let api_key_clone = api_key.clone();
         let endpoint_clone = endpoint.clone();
         let encoding_clone = encoding.clone();
+        let stats_clone = stats.clone();
 
         let handle = std::thread::spawn(move || {
             run_thread_worker(
@@ -445,11 +627,26 @@ async fn run_file(
                 endpoint_clone,
                 sample_rate,
                 encoding_clone,
+                stats_clone,
+                verbose,
             )
         });
 
         thread_handles.push(handle);
     }
+
+    // Spawn stats display task if not in verbose mode
+    let display_task = if !verbose {
+        let stats_clone = stats.clone();
+        Some(tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                display_stats_table(&stats_clone);
+            }
+        }))
+    } else {
+        None
+    };
 
     // Stream the audio data in chunks to the broadcast channel
     let chunk_size = 8192*4;
@@ -499,24 +696,76 @@ async fn run_file(
     // Drop the audio_tx to signal all threads that streaming is complete
     drop(audio_tx);
 
-    // Wait for all threads to finish
-    println!("Waiting for worker threads to finish...");
+    // Cancel display task if it exists
+    if let Some(task) = display_task {
+        task.abort();
+    }
+
+    // Wait for all threads to finish with 2 second timeout
+    println!("\nWaiting for worker threads to finish (2 second timeout)...");
+
+    let shutdown_timeout = tokio::time::Duration::from_secs(2);
+    let thread_count = thread_handles.len();
+
+    // Spawn tasks to wait for each thread
+    let mut join_tasks = Vec::new();
     for (thread_id, handle) in thread_handles.into_iter().enumerate() {
-        match handle.join() {
-            Ok(Ok(())) => {
-                info!("Thread {} exited successfully", thread_id);
+        let task = tokio::task::spawn_blocking(move || {
+            (thread_id, handle.join())
+        });
+        join_tasks.push(task);
+    }
+
+    // Wait for all threads with timeout
+    match tokio::time::timeout(shutdown_timeout, async {
+        for task in join_tasks {
+            if let Ok((thread_id, join_result)) = task.await {
+                match join_result {
+                    Ok(Ok(())) => {
+                        info!("Thread {} exited successfully", thread_id);
+                    }
+                    Ok(Err(e)) => {
+                        error!("Thread {} exited with error: {}", thread_id, e);
+                    }
+                    Err(e) => {
+                        error!("Thread {} panicked: {:?}", thread_id, e);
+                    }
+                }
             }
-            Ok(Err(e)) => {
-                error!("Thread {} exited with error: {}", thread_id, e);
-            }
-            Err(e) => {
-                error!("Thread {} panicked: {:?}", thread_id, e);
-            }
+        }
+    }).await {
+        Ok(_) => {
+            info!("All {} threads exited successfully", thread_count);
+        }
+        Err(_) => {
+            error!("Shutdown timeout exceeded after 2 seconds, forcing exit");
+            println!("🛑 Application stopped (forced)");
+            std::process::exit(0);
         }
     }
 
     println!("🛑 Application stopped");
-    Ok(())
+
+    // Force exit to ensure immediate termination
+    std::process::exit(0);
+}
+
+fn display_stats_table(stats: &StatsMap) {
+    if let Ok(stats_map) = stats.lock() {
+        let mut thread_stats: Vec<ThreadStats> = stats_map.values().cloned().collect();
+        thread_stats.sort_by_key(|s| s.thread_id);
+
+        if !thread_stats.is_empty() {
+            let table = Table::new(&thread_stats).to_string();
+
+            // Clear screen and move cursor to top
+            let mut stdout = std::io::stdout();
+            let _ = stdout.execute(cursor::MoveTo(0, 0));
+            let _ = stdout.execute(terminal::Clear(terminal::ClearType::FromCursorDown));
+
+            println!("{}", table);
+        }
+    }
 }
 
 #[tokio::main]
@@ -526,11 +775,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Microphone { endpoint, sample_rate, encoding, threads } => {
-            run_microphone(endpoint, sample_rate, encoding, threads).await?;
+        Commands::Microphone { endpoint, sample_rate, encoding, threads, verbose } => {
+            run_microphone(endpoint, sample_rate, encoding, threads, verbose).await?;
         }
-        Commands::File { file, endpoint, sample_rate, encoding, threads } => {
-            run_file(file, endpoint, sample_rate, encoding, threads).await?;
+        Commands::File { file, endpoint, sample_rate, encoding, threads, verbose } => {
+            run_file(file, endpoint, sample_rate, encoding, threads, verbose).await?;
         }
     }
 
