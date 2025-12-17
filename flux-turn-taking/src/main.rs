@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::env;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -14,6 +16,19 @@ use tabled::{Table, Tabled};
 use tokio::sync::broadcast;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
+
+// Thread-safe writer for logging to file
+struct ThreadSafeWriter(Arc<Mutex<std::fs::File>>);
+
+impl Write for ThreadSafeWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.lock().unwrap().flush()
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct DeepgramResponse {
@@ -478,6 +493,7 @@ async fn run_microphone(
 
     println!("🎤 Listening to microphone and streaming to Deepgram Flux API...");
     println!("Spawning {} worker thread(s)...", threads);
+    println!("📝 Writing logs to: flux-turn-taking.log");
     println!("Press Ctrl+C to stop");
     if !verbose {
         println!("Use --verbose to see all messages");
@@ -630,6 +646,7 @@ async fn run_file(
     println!("📁 Streaming file to Deepgram Flux API...");
     println!("File: {}", file_path.display());
     println!("Spawning {} worker thread(s)...", threads);
+    println!("📝 Writing logs to: flux-turn-taking.log");
     println!("Press Ctrl+C to stop");
     if !verbose {
         println!("Use --verbose to see all messages");
@@ -801,7 +818,19 @@ fn display_stats_table(stats: &StatsMap) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+    // Configure logging to write to file
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("flux-turn-taking.log")?;
+
+    let writer = ThreadSafeWriter(Arc::new(Mutex::new(log_file)));
+
+    env_logger::Builder::from_default_env()
+        .target(env_logger::Target::Pipe(Box::new(writer)))
+        .init();
+
+    info!("=== Flux Turn-Taking Load Test Started ===");
 
     let cli = Cli::parse();
 
