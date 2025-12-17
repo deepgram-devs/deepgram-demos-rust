@@ -450,6 +450,11 @@ fn run_thread_worker(
             }
         }
 
+        // Wait for the inactivity timeout period to ensure all responses are received
+        info!("[Thread {}] Audio streaming complete, waiting {}ms for final responses...", thread_id, inactivity_timeout_ms);
+        tokio::time::sleep(tokio::time::Duration::from_millis(inactivity_timeout_ms)).await;
+        info!("[Thread {}] Inactivity period complete", thread_id);
+
         // Send CloseStream message before exiting
         let close_message = r#"{"type":"CloseStream"}"#;
         if let Err(e) = ws_sender.send(Message::Text(close_message.to_string().into())).await {
