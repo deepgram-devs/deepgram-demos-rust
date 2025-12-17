@@ -227,7 +227,26 @@ async fn handle_websocket_responses(
     stats: StatsMap,
     verbose: bool,
 ) {
-    while let Some(message) = ws_receiver.next().await {
+    let inactivity_timeout = tokio::time::Duration::from_millis(3000);
+
+    loop {
+        // Wait for next message with timeout
+        let message_result = tokio::time::timeout(inactivity_timeout, ws_receiver.next()).await;
+
+        let message = match message_result {
+            Ok(Some(msg)) => msg,
+            Ok(None) => {
+                // Stream ended naturally
+                info!("[Thread {}] WebSocket stream ended", thread_id);
+                break;
+            }
+            Err(_) => {
+                // Timeout - no message received in 3000ms
+                info!("[Thread {}] No message received for 3000ms, assuming stream is finished", thread_id);
+                break;
+            }
+        };
+
         match message {
             Ok(Message::Text(text)) => {
                 // Update bytes received
