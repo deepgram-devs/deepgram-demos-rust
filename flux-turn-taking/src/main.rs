@@ -88,6 +88,10 @@ enum Commands {
         #[arg(long, default_value = "1")]
         threads: usize,
 
+        /// Inactivity timeout in milliseconds (default: 10000)
+        #[arg(long, default_value = "10000")]
+        inactivity_timeout: u64,
+
         /// Print all response messages instead of statistics table
         #[arg(long, short = 'v')]
         verbose: bool,
@@ -113,6 +117,10 @@ enum Commands {
         /// Number of concurrent threads/connections (default: 1)
         #[arg(long, default_value = "1")]
         threads: usize,
+
+        /// Inactivity timeout in milliseconds (default: 10000)
+        #[arg(long, default_value = "10000")]
+        inactivity_timeout: u64,
 
         /// Print all response messages instead of statistics table
         #[arg(long, short = 'v')]
@@ -241,8 +249,9 @@ async fn handle_websocket_responses(
     >,
     stats: StatsMap,
     verbose: bool,
+    inactivity_timeout_ms: u64,
 ) {
-    let inactivity_timeout = tokio::time::Duration::from_millis(3000);
+    let inactivity_timeout = tokio::time::Duration::from_millis(inactivity_timeout_ms);
 
     loop {
         // Wait for next message with timeout
@@ -256,8 +265,8 @@ async fn handle_websocket_responses(
                 break;
             }
             Err(_) => {
-                // Timeout - no message received in 3000ms
-                info!("[Thread {}] No message received for 3000ms, assuming stream is finished", thread_id);
+                // Timeout - no message received
+                info!("[Thread {}] No message received for {}ms, assuming stream is finished", thread_id, inactivity_timeout_ms);
                 break;
             }
         };
@@ -361,6 +370,7 @@ fn run_thread_worker(
     encoding: String,
     stats: StatsMap,
     verbose: bool,
+    inactivity_timeout_ms: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Create thread-local Tokio runtime
     let runtime = tokio::runtime::Runtime::new()
@@ -389,7 +399,7 @@ fn run_thread_worker(
         // Spawn response handler task
         let stats_clone = stats.clone();
         let response_handle = tokio::spawn(async move {
-            handle_websocket_responses(thread_id, ws_receiver, stats_clone, verbose).await;
+            handle_websocket_responses(thread_id, ws_receiver, stats_clone, verbose, inactivity_timeout_ms).await;
         });
 
         // Main loop: receive audio from broadcast and send to WebSocket
@@ -461,6 +471,7 @@ async fn run_microphone(
     sample_rate: u32,
     encoding: String,
     threads: usize,
+    inactivity_timeout_ms: u64,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get API key from environment variable
@@ -520,6 +531,7 @@ async fn run_microphone(
                 encoding_clone,
                 stats_clone,
                 verbose,
+                inactivity_timeout_ms,
             )
         });
 
@@ -609,6 +621,7 @@ async fn run_file(
     sample_rate: u32,
     encoding: String,
     threads: usize,
+    inactivity_timeout_ms: u64,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get API key from environment variable
@@ -673,6 +686,7 @@ async fn run_file(
                 encoding_clone,
                 stats_clone,
                 verbose,
+                inactivity_timeout_ms,
             )
         });
 
@@ -835,11 +849,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Microphone { endpoint, sample_rate, encoding, threads, verbose } => {
-            run_microphone(endpoint, sample_rate, encoding, threads, verbose).await?;
+        Commands::Microphone { endpoint, sample_rate, encoding, threads, inactivity_timeout, verbose } => {
+            run_microphone(endpoint, sample_rate, encoding, threads, inactivity_timeout, verbose).await?;
         }
-        Commands::File { file, endpoint, sample_rate, encoding, threads, verbose } => {
-            run_file(file, endpoint, sample_rate, encoding, threads, verbose).await?;
+        Commands::File { file, endpoint, sample_rate, encoding, threads, inactivity_timeout, verbose } => {
+            run_file(file, endpoint, sample_rate, encoding, threads, inactivity_timeout, verbose).await?;
         }
     }
 
