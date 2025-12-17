@@ -406,6 +406,14 @@ fn run_thread_worker(
             }
         }
 
+        // Send CloseStream message before exiting
+        let close_message = r#"{"type":"CloseStream"}"#;
+        if let Err(e) = ws_sender.send(Message::Text(close_message.to_string().into())).await {
+            error!("[Thread {}] Failed to send CloseStream message: {}", thread_id, e);
+        } else {
+            info!("[Thread {}] Sent CloseStream message", thread_id);
+        }
+
         // Wait for response handler to finish
         let _ = response_handle.await;
 
