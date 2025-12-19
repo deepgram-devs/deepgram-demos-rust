@@ -63,9 +63,17 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
 
     // Render Voice Menu Panel
     let voice_block_title = if app.focused_panel == Panel::VoiceMenu {
-        " Deepgram Voices (Focused) "
+        if app.voice_filter.is_empty() {
+            " Deepgram Voices (Focused) ".to_string()
+        } else {
+            format!(" Deepgram Voices (Focused) - Filter: {} ", app.voice_filter)
+        }
     } else {
-        " Deepgram Voices "
+        if app.voice_filter.is_empty() {
+            " Deepgram Voices ".to_string()
+        } else {
+            format!(" Deepgram Voices - Filter: {} ", app.voice_filter)
+        }
     };
     let voice_block_style = if app.focused_panel == Panel::VoiceMenu {
         Style::default().fg(ratatui::style::Color::Cyan).add_modifier(Modifier::BOLD)
@@ -79,8 +87,8 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         .border_type(BorderType::Rounded)
         .title(voice_block_title);
 
-    let voice_items: Vec<ListItem> = app
-        .voices
+    let filtered_voices = app.get_filtered_voices();
+    let voice_items: Vec<ListItem> = filtered_voices
         .iter()
         .enumerate()
         .map(|(i, voice)| {
@@ -89,7 +97,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             } else {
                 Style::default()
             };
-            ListItem::new(format!("{} - {}", voice.name, voice.vendor)).style(style)
+            ListItem::new(format!("{} - {}", voice.name, voice.language)).style(style)
         })
         .collect();
 
@@ -132,12 +140,51 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
 
         let area = centered_rect(60, 20, size);
         f.render_widget(Clear, area); // Clear the area under the popup
-        
+
         let input_paragraph = Paragraph::new(app.input_buffer.clone())
             .block(popup_block)
             .style(Style::default().fg(ratatui::style::Color::White));
-            
+
         f.render_widget(input_paragraph, area);
+    }
+
+    // Render Help Screen
+    if app.current_screen == CurrentScreen::Help {
+        let help_text = vec![
+            "Keyboard Shortcuts:",
+            "",
+            "Main Screen:",
+            "  q         - Quit application",
+            "  n         - Add new text",
+            "  d         - Delete selected text",
+            "  Enter     - Play selected text with selected voice",
+            "  Up/Down   - Navigate text list or voice menu",
+            "  Left      - Focus previous panel",
+            "  Right/Tab - Focus next panel",
+            "  ?         - Show this help screen",
+            "",
+            "Text Entry Screen:",
+            "  Enter     - Save text",
+            "  Esc       - Cancel",
+            "  Ctrl+V    - Paste from clipboard",
+            "  Backspace - Delete character",
+            "",
+            "Press ESC to close this help screen",
+        ];
+
+        let help_block = Block::default()
+            .title(" Help ")
+            .borders(Borders::ALL)
+            .style(Style::default().bg(ratatui::style::Color::DarkGray));
+
+        let area = centered_rect(70, 60, size);
+        f.render_widget(Clear, area);
+
+        let help_paragraph = Paragraph::new(help_text.join("\n"))
+            .block(help_block)
+            .style(Style::default().fg(ratatui::style::Color::White));
+
+        f.render_widget(help_paragraph, area);
     }
 }
 
