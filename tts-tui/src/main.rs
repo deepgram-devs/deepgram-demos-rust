@@ -42,7 +42,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
         terminal.draw(|f| ui::render_ui(f, app))?;
 
         if event::poll(Duration::from_millis(250))? {
-            if let CrosstermEvent::Key(key) = event::read()? {
+            match event::read()? {
+                CrosstermEvent::Paste(content) => {
+                    if app.current_screen == CurrentScreen::Editing {
+                        app.input_buffer.push_str(&content);
+                    }
+                }
+                CrosstermEvent::Key(key) => {
                 if key.kind == event::KeyEventKind::Release {
                     // Skip events that are not KeyEventKind::Press
                     continue;
@@ -50,16 +56,22 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                 match app.current_screen {
                     CurrentScreen::Main => match key.code {
                         KeyCode::Char('q') => {
-                            return Ok(());
+                            if app.focused_panel == app::Panel::TextList {
+                                return Ok(());
+                            }
                         }
                         KeyCode::Char('?') => {
                             app.show_help_screen();
                         }
                         KeyCode::Char('n') => {
-                            app.enter_input_mode();
+                            if app.focused_panel == app::Panel::TextList {
+                                app.enter_input_mode();
+                            }
                         }
                         KeyCode::Char('d') => {
-                            app.delete_selected_text();
+                            if app.focused_panel == app::Panel::TextList {
+                                app.delete_selected_text();
+                            }
                         }
                         KeyCode::Down => app.scroll_text_list(1),
                         KeyCode::Up => app.scroll_text_list(-1),
@@ -137,6 +149,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         _ => {}
                     },
                 }
+                }
+                _ => {}
             }
         }
     }
