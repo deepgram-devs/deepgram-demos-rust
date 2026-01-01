@@ -1,3 +1,6 @@
+mod stream;
+mod transcribe;
+
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
@@ -18,6 +21,9 @@ use symphonia::core::probe::Hint;
 use std::fs::File;
 use std::time::Duration;
 
+use crate::stream::StreamSource;
+use crate::transcribe::TranscribeArgs;
+
 #[derive(Parser)]
 #[command(name = "dg-stt")]
 #[command(about = "Deepgram Speech-to-Text CLI", long_about = None)]
@@ -28,113 +34,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Stream audio from microphone for real-time transcription
-    Microphone {
-        /// Callback URL for receiving transcription results
-        #[arg(long)]
-        callback: Option<String>,
-        
-        /// Suppress console output of transcripts
-        #[arg(long)]
-        silent: bool,
-        
-        /// Override the Deepgram API base URL
-        #[arg(long)]
-        endpoint: Option<String>,
-        
-        /// Audio encoding format (e.g., linear16, mulaw, flac)
-        #[arg(long)]
-        encoding: Option<String>,
-        
-        /// Audio sample rate in Hz∫∫
-        #[arg(long)]
-        sample_rate: Option<u32>,
-        
-        /// Number of audio channels
-        #[arg(long)]
-        channels: Option<u16>,
-        
-        /// Enable interim results
-        #[arg(long)]
-        interim_results: Option<bool>,
-        
-        /// Enable punctuation
-        #[arg(long)]
-        punctuate: Option<bool>,
-        
-        /// Enable smart formatting
-        #[arg(long)]
-        smart_format: Option<bool>,
-        
-        /// Deepgram model to use (e.g., nova-2, enhanced, base)
-        #[arg(long)]
-        model: Option<String>,
-        
-        /// Redact entities (comma-separated). Can include specific entities or categories: phi, pii, pci, other
-        #[arg(long)]
-        redact: Option<String>,
-        
-        /// Language code for transcription (e.g., en, es, fr, de)
-        #[arg(long)]
-        language: Option<String>,
+    /// Stream audio for real-time transcription
+    Stream {
+        #[command(subcommand)]
+        source: StreamSource,
     },
-    /// Stream audio from a file for transcription
-    File {
-        /// Path to the audio file (supports MP3, WAV, FLAC)
-        #[arg(short, long)]
-        file: PathBuf,
-        
-        /// Stream audio as fast as possible instead of real-time rate
-        #[arg(long)]
-        fast: bool,
-        
-        /// Callback URL for receiving transcription results
-        #[arg(long)]
-        callback: Option<String>,
-        
-        /// Suppress console output of transcripts
-        #[arg(long)]
-        silent: bool,
-        
-        /// Override the Deepgram API base URL
-        #[arg(long)]
-        endpoint: Option<String>,
-        
-        /// Audio encoding format (e.g., linear16, mulaw, flac)
-        #[arg(long)]
-        encoding: Option<String>,
-        
-        /// Audio sample rate in Hz
-        #[arg(long)]
-        sample_rate: Option<u32>,
-        
-        /// Number of audio channels
-        #[arg(long)]
-        channels: Option<u16>,
-        
-        /// Enable interim results
-        #[arg(long)]
-        interim_results: Option<bool>,
-        
-        /// Enable punctuation
-        #[arg(long)]
-        punctuate: Option<bool>,
-        
-        /// Enable smart formatting
-        #[arg(long)]
-        smart_format: Option<bool>,
-        
-        /// Deepgram model to use (e.g., nova-2, enhanced, base)
-        #[arg(long)]
-        model: Option<String>,
-        
-        /// Redact entities (comma-separated). Can include specific entities or categories: phi, pii, pci, other
-        #[arg(long)]
-        redact: Option<String>,
-        
-        /// Language code for transcription (e.g., en, es, fr, de)
-        #[arg(long)]
-        language: Option<String>,
+    /// Transcribe pre-recorded audio file using HTTP API
+    Transcribe {
+        #[command(flatten)]
+        args: TranscribeArgs,
     },
 }
 
@@ -357,6 +265,7 @@ async fn run_deepgram_client(
     encoding: Option<String>,
     sample_rate_override: Option<u32>,
     channels_override: Option<u16>,
+    multichannel: bool,
     interim_results: Option<bool>,
     punctuate: Option<bool>,
     smart_format: Option<bool>,
@@ -383,7 +292,12 @@ async fn run_deepgram_client(
     // Add channels parameter (use override if provided, otherwise use detected)
     let channels_value = channels_override.unwrap_or(detected_channels);
     params.push(format!("channels={}", channels_value));
-    
+
+    // Add multichannel parameter
+    if multichannel {
+        params.push("multichannel=true".to_string());
+    }
+
     // Add interim_results parameter if specified
     if let Some(interim) = interim_results {
         params.push(format!("interim_results={}", interim));
@@ -609,6 +523,7 @@ async fn run_microphone_mode(
     encoding: Option<String>,
     sample_rate_override: Option<u32>,
     channels_override: Option<u16>,
+    multichannel: bool,
     interim_results: Option<bool>,
     punctuate: Option<bool>,
     smart_format: Option<bool>,
@@ -643,6 +558,7 @@ async fn run_microphone_mode(
         encoding,
         sample_rate_override,
         channels_override,
+        multichannel,
         interim_results,
         punctuate,
         smart_format,
@@ -686,6 +602,7 @@ async fn run_file_mode(
     encoding: Option<String>,
     sample_rate_override: Option<u32>,
     channels_override: Option<u16>,
+    multichannel: bool,
     interim_results: Option<bool>,
     punctuate: Option<bool>,
     smart_format: Option<bool>,
@@ -735,6 +652,7 @@ async fn run_file_mode(
         encoding,
         sample_rate_override,
         channels_override,
+        multichannel,
         interim_results,
         punctuate,
         smart_format,
@@ -801,57 +719,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
     
     let cli = Cli::parse();
-    
+
     match cli.command {
-        Commands::Microphone {
-            callback,
-            silent,
-            endpoint,
-            encoding,
-            sample_rate,
-            channels,
-            interim_results,
-            punctuate,
-            smart_format,
-            model,
-            redact,
-            language,
-        } => {
-            run_microphone_mode(
-                api_key,
+        Commands::Transcribe { args } => {
+            transcribe::run_transcribe_mode(api_key, args).await?
+        }
+        Commands::Stream { source } => match source {
+            StreamSource::Microphone {
                 callback,
                 silent,
                 endpoint,
                 encoding,
                 sample_rate,
                 channels,
+                multichannel,
                 interim_results,
                 punctuate,
                 smart_format,
                 model,
                 redact,
                 language,
-            )
-            .await?
-        }
-        Commands::File {
-            file,
-            fast,
-            callback,
-            silent,
-            endpoint,
-            encoding,
-            sample_rate,
-            channels,
-            interim_results,
-            punctuate,
-            smart_format,
-            model,
-            redact,
-            language,
-        } => {
-            run_file_mode(
-                api_key,
+            } => {
+                run_microphone_mode(
+                    api_key,
+                    callback,
+                    silent,
+                    endpoint,
+                    encoding,
+                    sample_rate,
+                    channels,
+                    multichannel,
+                    interim_results,
+                    punctuate,
+                    smart_format,
+                    model,
+                    redact,
+                    language,
+                )
+                .await?
+            }
+            StreamSource::File {
                 file,
                 fast,
                 callback,
@@ -860,16 +767,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 encoding,
                 sample_rate,
                 channels,
+                multichannel,
                 interim_results,
                 punctuate,
                 smart_format,
                 model,
                 redact,
                 language,
-            )
-            .await?
+            } => {
+                run_file_mode(
+                    api_key,
+                    file,
+                    fast,
+                    callback,
+                    silent,
+                    endpoint,
+                    encoding,
+                    sample_rate,
+                    channels,
+                    multichannel,
+                    interim_results,
+                    punctuate,
+                    smart_format,
+                    model,
+                    redact,
+                    language,
+                )
+                .await?
+            }
         }
     }
-    
+
     Ok(())
 }
