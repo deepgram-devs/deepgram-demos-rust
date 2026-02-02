@@ -35,6 +35,7 @@ pub struct App {
     pub saved_texts: Vec<String>,
     pub voices: Vec<Voice>,
     pub audio_cache_dir: String,
+    pub deepgram_endpoint: String,
     pub status_message: String,
     pub focused_panel: Panel,
     pub logs: Vec<String>,
@@ -162,7 +163,7 @@ lazy_static! {
 
 
 impl App {
-    pub fn new() -> App {
+    pub fn new(deepgram_endpoint: String) -> App {
         let mut text_table_state = TableState::default();
         text_table_state.select(Some(0)); // Select the first item by default
 
@@ -187,6 +188,7 @@ impl App {
             ],
             voices,
             audio_cache_dir: Self::get_audio_cache_dir().expect("Failed to get audio cache directory"),
+            deepgram_endpoint,
             status_message: "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string(),
             focused_panel: Panel::TextList,
             logs: Vec::new(),

@@ -1,6 +1,6 @@
 [package]
 name = "tts-tui"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021" # Use 2021 edition
 
 [dependencies]
@@ -23,3 +23,4 @@ base64 = "0.22.1"
 uuid = { version = "1.8.0", features = ["v4", "fast-rng", "serde"] }
 lazy_static = "1.4.0"
 arboard = "3.4.0"
+clap = { version = "4.0", features = ["derive", "env"] }

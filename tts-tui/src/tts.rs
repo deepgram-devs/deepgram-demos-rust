@@ -6,8 +6,6 @@ use tokio::io::AsyncWriteExt;
 use rodio::{Decoder, OutputStream, Sink};
 use std::io::Cursor;
 
-const DEEPGRAM_API_URL: &str = "https://api.deepgram.com/v1/speak";
-
 pub fn get_deepgram_api_key() -> Result<String> {
     dotenvy::dotenv().ok();
     std::env::var("DEEPGRAM_API_KEY")
@@ -19,6 +17,7 @@ pub async fn play_text_with_deepgram(
     text: &str,
     voice_id: &str,
     cache_dir: &str,
+    endpoint: &str,
 ) -> Result<String> {
     let cache_file_path = get_cache_file_path(cache_dir, text, voice_id)?;
     let message;
@@ -28,7 +27,7 @@ pub async fn play_text_with_deepgram(
         play_audio_from_file(&cache_file_path).await?;
     } else {
         message = format!("Fetching from Deepgram and caching: {}", cache_file_path.display());
-        let audio_data = fetch_deepgram_tts(api_key, text, voice_id).await?;
+        let audio_data = fetch_deepgram_tts(api_key, text, voice_id, endpoint).await?;
         save_audio_to_cache(&cache_file_path, &audio_data).await?;
         play_audio_from_data(&audio_data).await?;
     }
@@ -46,9 +45,9 @@ fn get_cache_file_path(cache_dir: &str, text: &str, voice_id: &str) -> Result<Pa
     Ok(path)
 }
 
-async fn fetch_deepgram_tts(api_key: &str, text: &str, voice_id: &str) -> Result<Vec<u8>> {
+async fn fetch_deepgram_tts(api_key: &str, text: &str, voice_id: &str, endpoint: &str) -> Result<Vec<u8>> {
     let client = Client::new();
-    let url = format!("{}?model={}&encoding=mp3", DEEPGRAM_API_URL, voice_id);
+    let url = format!("{}?model={}&encoding=mp3", endpoint, voice_id);
 
     let res = client
         .post(&url)

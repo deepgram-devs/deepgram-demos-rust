@@ -11,9 +11,21 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use app::{App, CurrentScreen};
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(name = "tts-tui")]
+#[command(about = "A Deepgram TTS terminal user interface")]
+#[command(version)]
+struct Args {
+    /// Custom Deepgram API endpoint URL for TTS
+    #[arg(long, env = "DEEPGRAM_TTS_ENDPOINT", default_value = "https://api.deepgram.com/v1/speak")]
+    endpoint: String,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -22,7 +34,7 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app and run it
-    let mut app = App::new();
+    let mut app = App::new(args.endpoint);
     let res = run_app(&mut terminal, &mut app).await;
 
     // Restore terminal
@@ -95,7 +107,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                                     let voice_id = selected_voice.id.clone();
                                     match tts::get_deepgram_api_key() {
                                         Ok(dg_api_key) => {
-                                            match tts::play_text_with_deepgram(&dg_api_key, &selected_text, &voice_id, &app.audio_cache_dir).await {
+                                            match tts::play_text_with_deepgram(&dg_api_key, &selected_text, &voice_id, &app.audio_cache_dir, &app.deepgram_endpoint).await {
                                                 Ok(msg) => {
                                                     app.add_log(msg);
                                                     app.set_status_message(format!("Finished playing: {}", selected_text));
