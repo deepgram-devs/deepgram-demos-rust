@@ -100,6 +100,15 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                                 app.voice_menu_state.select(Some(0));
                             }
                         }
+                        KeyCode::Char('+') | KeyCode::Char('=') => {
+                            app.increase_speed();
+                        }
+                        KeyCode::Char('-') => {
+                            app.decrease_speed();
+                        }
+                        KeyCode::Char('0') => {
+                            app.reset_speed();
+                        }
                         KeyCode::Enter => {
                             if let Some(selected_text) = app.get_selected_text() {
                                 app.set_status_message(format!("Playing: {}", selected_text));
@@ -107,13 +116,20 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                                     let voice_id = selected_voice.id.clone();
                                     match tts::get_deepgram_api_key() {
                                         Ok(dg_api_key) => {
-                                            match tts::play_text_with_deepgram(&dg_api_key, &selected_text, &voice_id, &app.audio_cache_dir, &app.deepgram_endpoint).await {
+                                            match tts::play_text_with_deepgram(&dg_api_key, &selected_text, &voice_id, app.playback_speed, &app.audio_cache_dir, &app.deepgram_endpoint).await {
                                                 Ok(msg) => {
                                                     app.add_log(msg);
                                                     app.set_status_message(format!("Finished playing: {}", selected_text));
                                                 }
                                                 Err(e) => {
-                                                    app.add_log(format!("Error playing audio: {}", e));
+                                                    // Log detailed error with full chain
+                                                    app.add_log(format!("Error playing audio: {:#}", e));
+                                                    // Log error source chain if available
+                                                    let mut source = e.source();
+                                                    while let Some(err) = source {
+                                                        app.add_log(format!("  Caused by: {}", err));
+                                                        source = err.source();
+                                                    }
                                                     app.set_status_message("Error occurred during playback".to_string());
                                                 }
                                             }

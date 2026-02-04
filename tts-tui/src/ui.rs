@@ -128,7 +128,8 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         .border_type(BorderType::Plain)
         .title(" Status ");
 
-    let status_text = Paragraph::new(app.status_message.clone()).block(status_block);
+    let status_with_speed = format!("Speed: {:.2}x", app.playback_speed);
+    let status_text = Paragraph::new(status_with_speed).block(status_block);
     f.render_widget(status_text, chunks[2]);
 
     // Render Popup for Editing Text
@@ -161,6 +162,9 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             "  Up/Down   - Navigate text list or voice menu",
             "  Left      - Focus previous panel",
             "  Right/Tab - Focus next panel",
+            "  +/=       - Increase playback speed",
+            "  -         - Decrease playback speed",
+            "  0         - Reset speed to 1.0x",
             "  ?         - Show this help screen",
             "",
             "Text Entry Screen:",

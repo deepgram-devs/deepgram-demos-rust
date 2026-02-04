@@ -1,6 +1,6 @@
 # TTS TUI (Text-to-Speech Terminal User Interface)
 
-This is a terminal user interface (TUI) application built with Rust and Ratatui that allows you to interact with the Deepgram Text-to-Speech API.
+This is a terminal user interface (TUI) application built with Rust and Ratatui that allows you to interact with the Deepgram Text-to-Speech (TTS) API.
 
 ## Features
 
@@ -9,6 +9,7 @@ This is a terminal user interface (TUI) application built with Rust and Ratatui 
 - Add new text snippets to the saved list.
 - Delete selected text snippets from the list.
 - Real-time logging of application actions and API responses.
+- Change the speed of TTS playback
 
 ## How to Run
 

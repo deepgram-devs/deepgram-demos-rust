@@ -4,6 +4,8 @@ use directories::ProjectDirs;
 use anyhow::Result;
 use lazy_static::lazy_static;
 use std::collections::HashMap;
+use rust_decimal::Decimal;
+use std::str::FromStr;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Voice {
@@ -41,6 +43,7 @@ pub struct App {
     pub logs: Vec<String>,
     pub input_buffer: String,
     pub voice_filter: String,
+    pub playback_speed: Decimal,  // Range: 0.7 to 1.5
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -194,6 +197,7 @@ impl App {
             logs: Vec::new(),
             input_buffer: String::new(),
             voice_filter: String::new(),
+            playback_speed: Decimal::from_str("1.0").unwrap(),
         }
     }
 
@@ -368,5 +372,24 @@ impl App {
     pub fn clear_voice_filter(&mut self) {
         self.voice_filter.clear();
         self.voice_menu_state.select(Some(0));
+    }
+
+    pub fn increase_speed(&mut self) {
+        let increment = Decimal::from_str("0.05").unwrap();
+        let max_speed = Decimal::from_str("1.5").unwrap();
+        self.playback_speed = (self.playback_speed + increment).min(max_speed);
+        self.set_status_message(format!("Speed: {:.2}x", self.playback_speed));
+    }
+
+    pub fn decrease_speed(&mut self) {
+        let decrement = Decimal::from_str("0.05").unwrap();
+        let min_speed = Decimal::from_str("0.7").unwrap();
+        self.playback_speed = (self.playback_speed - decrement).max(min_speed);
+        self.set_status_message(format!("Speed: {:.2}x", self.playback_speed));
+    }
+
+    pub fn reset_speed(&mut self) {
+        self.playback_speed = Decimal::from_str("1.0").unwrap();
+        self.set_status_message("Speed: 1.00x (default)".to_string());
     }
 }

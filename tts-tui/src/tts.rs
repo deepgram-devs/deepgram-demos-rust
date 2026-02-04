@@ -1,10 +1,11 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, Context};
 use std::path::{Path, PathBuf};
 use sha2::{Sha256, Digest};
 use reqwest::Client;
 use tokio::io::AsyncWriteExt;
 use rodio::{Decoder, OutputStream, Sink};
 use std::io::Cursor;
+use rust_decimal::Decimal;
 
 pub fn get_deepgram_api_key() -> Result<String> {
     dotenvy::dotenv().ok();
@@ -16,10 +17,11 @@ pub async fn play_text_with_deepgram(
     api_key: &str,
     text: &str,
     voice_id: &str,
+    speed: Decimal,
     cache_dir: &str,
     endpoint: &str,
 ) -> Result<String> {
-    let cache_file_path = get_cache_file_path(cache_dir, text, voice_id)?;
+    let cache_file_path = get_cache_file_path(cache_dir, text, voice_id, speed)?;
     let message;
 
     if cache_file_path.exists() {
@@ -27,7 +29,7 @@ pub async fn play_text_with_deepgram(
         play_audio_from_file(&cache_file_path).await?;
     } else {
         message = format!("Fetching from Deepgram and caching: {}", cache_file_path.display());
-        let audio_data = fetch_deepgram_tts(api_key, text, voice_id, endpoint).await?;
+        let audio_data = fetch_deepgram_tts(api_key, text, voice_id, speed, endpoint).await?;
         save_audio_to_cache(&cache_file_path, &audio_data).await?;
         play_audio_from_data(&audio_data).await?;
     }
@@ -35,19 +37,20 @@ pub async fn play_text_with_deepgram(
     Ok(message)
 }
 
-fn get_cache_file_path(cache_dir: &str, text: &str, voice_id: &str) -> Result<PathBuf> {
+fn get_cache_file_path(cache_dir: &str, text: &str, voice_id: &str, speed: Decimal) -> Result<PathBuf> {
     let mut hasher = Sha256::new();
     hasher.update(text);
     hasher.update(voice_id);
+    hasher.update(speed.to_string().as_bytes());
     let hash = hasher.finalize();
     let filename = format!("{:x}.mp3", hash);
     let path = PathBuf::from(cache_dir).join(filename);
     Ok(path)
 }
 
-async fn fetch_deepgram_tts(api_key: &str, text: &str, voice_id: &str, endpoint: &str) -> Result<Vec<u8>> {
+async fn fetch_deepgram_tts(api_key: &str, text: &str, voice_id: &str, speed: Decimal, endpoint: &str) -> Result<Vec<u8>> {
     let client = Client::new();
-    let url = format!("{}?model={}&encoding=mp3", endpoint, voice_id);
+    let url = format!("{}?model={}&encoding=mp3&speed={}", endpoint, voice_id, speed);
 
     let res = client
         .post(&url)
@@ -55,10 +58,23 @@ async fn fetch_deepgram_tts(api_key: &str, text: &str, voice_id: &str, endpoint:
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({"text": text}))
         .send()
-        .await?
-        .error_for_status()?;
+        .await
+        .context(format!("Failed to send request to Deepgram API at {}", url))?;
 
-    let audio_data = res.bytes().await?.to_vec();
+    // Check status and capture detailed error message if request failed
+    if !res.status().is_success() {
+        let status = res.status();
+        let error_body = res.text().await.unwrap_or_else(|_| "Unable to read error response".to_string());
+        return Err(anyhow!(
+            "HTTP {} - Deepgram API error: {}",
+            status,
+            error_body
+        ));
+    }
+
+    let audio_data = res.bytes().await
+        .context("Failed to read audio data from response")?
+        .to_vec();
     Ok(audio_data)
 }
 
