@@ -6,6 +6,7 @@ use lazy_static::lazy_static;
 use std::collections::HashMap;
 use rust_decimal::Decimal;
 use std::str::FromStr;
+use crate::persistence;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Voice {
@@ -180,15 +181,7 @@ impl App {
             currently_editing: None,
             text_table_state,
             voice_menu_state,
-            saved_texts: vec![
-                "Hello, this is a test of the Deepgram Text-to-Speech API.".to_string(),
-                "The quick brown fox jumps over the lazy dog.".to_string(),
-                "Rust is a systems programming language that focuses on safety, speed, and concurrency.".to_string(),
-                "Gemini is a family of multimodal models developed by Google AI.".to_string(),
-                "This is a longer text to demonstrate scrolling and playback features.".to_string(),
-                "Another example sentence for testing purposes.".to_string(),
-                "One more for good measure.".to_string(),
-            ],
+            saved_texts: persistence::load_saved_texts(),
             voices,
             audio_cache_dir: Self::get_audio_cache_dir().expect("Failed to get audio cache directory"),
             deepgram_endpoint,
@@ -227,6 +220,11 @@ impl App {
         if !self.input_buffer.trim().is_empty() {
             self.saved_texts.push(self.input_buffer.clone());
             self.add_log(format!("Added new text: {}", self.input_buffer));
+
+            // Persist to disk
+            if let Err(e) = persistence::save_saved_texts(&self.saved_texts) {
+                self.add_log(format!("Warning: Failed to save texts to disk: {}", e));
+            }
         }
         self.exit_input_mode();
     }
@@ -255,12 +253,17 @@ impl App {
             if index < self.saved_texts.len() {
                 let removed = self.saved_texts.remove(index);
                 self.add_log(format!("Deleted text: {}", removed));
-                
+
                 // Adjust selection
                 if self.saved_texts.is_empty() {
                     self.text_table_state.select(None);
                 } else if index >= self.saved_texts.len() {
                     self.text_table_state.select(Some(self.saved_texts.len() - 1));
+                }
+
+                // Persist to disk
+                if let Err(e) = persistence::save_saved_texts(&self.saved_texts) {
+                    self.add_log(format!("Warning: Failed to save texts to disk: {}", e));
                 }
             }
         }

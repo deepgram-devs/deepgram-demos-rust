@@ -1,11 +1,12 @@
 mod app;
 mod ui;
 mod tts;
+mod persistence;
 
 use std::{io, time::Duration};
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event as CrosstermEvent, KeyCode, KeyModifiers},
+    event::{self, Event as CrosstermEvent, KeyCode, KeyModifiers, MouseEventKind, EnableMouseCapture, DisableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -29,7 +30,7 @@ async fn main() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -39,7 +40,7 @@ async fn main() -> Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     if let Err(err) = res {
@@ -177,6 +178,19 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         _ => {}
                     },
                 }
+                }
+                CrosstermEvent::Mouse(mouse) => {
+                    if app.current_screen == CurrentScreen::Main {
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => {
+                                app.scroll_text_list(-1);
+                            }
+                            MouseEventKind::ScrollDown => {
+                                app.scroll_text_list(1);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 _ => {}
             }

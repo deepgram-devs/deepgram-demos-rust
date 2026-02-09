@@ -1,7 +1,7 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Table, Row, Cell, Clear},
+    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Table, Row, Cell, Clear, Wrap},
     Frame,
 };
 
@@ -144,7 +144,8 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
 
         let input_paragraph = Paragraph::new(app.input_buffer.clone())
             .block(popup_block)
-            .style(Style::default().fg(ratatui::style::Color::White));
+            .style(Style::default().fg(ratatui::style::Color::White))
+            .wrap(Wrap { trim: false });
 
         f.render_widget(input_paragraph, area);
     }

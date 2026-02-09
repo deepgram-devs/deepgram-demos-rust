@@ -50,7 +50,13 @@ fn get_cache_file_path(cache_dir: &str, text: &str, voice_id: &str, speed: Decim
 
 async fn fetch_deepgram_tts(api_key: &str, text: &str, voice_id: &str, speed: Decimal, endpoint: &str) -> Result<Vec<u8>> {
     let client = Client::new();
-    let url = format!("{}?model={}&encoding=mp3&speed={}", endpoint, voice_id, speed);
+
+    // Only include speed parameter if it's not 1.0 (default)
+    let url = if speed == Decimal::new(10, 1) { // 1.0
+        format!("{}?model={}&encoding=mp3", endpoint, voice_id)
+    } else {
+        format!("{}?model={}&encoding=mp3&speed={}", endpoint, voice_id, speed)
+    };
 
     let res = client
         .post(&url)

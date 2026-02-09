@@ -1,20 +1,21 @@
 [package]
 name = "tts-tui"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021" # Use 2021 edition
+description = "A terminal user interface for Deepgram Text-to-Speech API with voice selection, playback speed control, and audio caching"
 
 [dependencies]
-ratatui = { version = "0.29.0", features = ["crossterm"] }
+ratatui = { version = "0.30.0", features = ["crossterm"] }
 crossterm = { version = "0.29.0", features = ["events", "serde"] }
 # reqwest needs `json` and `rustls-tls` or `native-tls`. For simplicity, I'll use `native-tls` here.
 # For async operations, we need to use the `tokio` runtime.
 reqwest = { version = "0.12.24", features = ["json", "stream", "rustls-tls"], default-features = false }
-tokio = { version = "1.38.0", features = ["full"] }
-rodio = "0.18.0"
+tokio = { version = "1.49.0", features = ["full"] }
+rodio = "0.20"
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.111"
 dotenvy = "0.15.7"
-directories = "5.0.1"
+directories = "6.0.0"
 sha2 = "0.10.8"
 anyhow = "1.0.81"
 url = "2.5.0"

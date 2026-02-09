@@ -4,12 +4,16 @@ This is a terminal user interface (TUI) application built with Rust and Ratatui 
 
 ## Features
 
-- Select and play saved text snippets using various Deepgram Aura voices.
-- Browse a list of available Deepgram TTS voices.
-- Add new text snippets to the saved list.
-- Delete selected text snippets from the list.
-- Real-time logging of application actions and API responses.
-- Change the speed of TTS playback
+- Select and play saved text snippets using various Deepgram Aura voices
+- Browse and filter available Deepgram TTS voices in real-time
+- Add new text snippets to the saved list
+- Delete selected text snippets from the list
+- Audio caching for faster repeated playback
+- Built-in help screen with all keyboard shortcuts
+- Mouse support for scrolling through lists
+- Clipboard paste support for adding text
+- Real-time logging of application actions and API responses
+- ⚠️ **Not available**: Adjust TTS playback speed dynamically (+/- keys)
 
 ## How to Run
 
@@ -49,14 +53,32 @@ cargo run
 
 ## Keyboard Shortcuts
 
-- `q`: Quit the application.
-- `Enter`: Play the selected text snippet.
-- `Up`/`Down` arrows: Navigate through lists.
-- `Left`/`Right`/`Tab`: Switch focus between panels (Saved Texts, Voices).
-- `n`: Enter input mode to add a new text snippet.
+### General
+- `?`: Show help screen with all keyboard shortcuts
+- `q`: Quit the application (when focused on Saved Texts panel)
+- `Enter`: Play the selected text snippet with the selected voice
+- `Up`/`Down` arrows: Navigate through lists
+- `Left`/`Right`/`Tab`: Switch focus between panels (Saved Texts, Voices)
+
+### Playback Speed Control
+- `+` or `=`: Increase playback speed
+- `-`: Decrease playback speed
+- `0`: Reset playback speed to default (1.0x)
+
+### Text Management
+- `n`: Enter input mode to add a new text snippet
   - While in input mode:
-    - `Enter`: Save the new text.
-    - `Esc`: Cancel input.
-    - `Backspace`: Delete the last character.
-    - Any other character: Type into the input buffer.
-- `d`: Delete the currently selected text snippet.
+    - `Enter`: Save the new text
+    - `Esc`: Cancel input
+    - `Backspace`: Delete the last character
+    - `Ctrl+V` or `Cmd+V`: Paste from clipboard
+    - Any other character: Type into the input buffer
+- `d`: Delete the currently selected text snippet
+
+### Voice Filtering
+- Type any character while focused on the Voices panel to filter voices by name
+- `Backspace`: Remove last character from voice filter
+- `Esc`: Clear voice filter (when voice filter is active)
+
+### Mouse Controls
+- Scroll wheel: Navigate through the Saved Texts list
