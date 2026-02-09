@@ -1,6 +1,7 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Table, Row, Cell, Clear, Wrap},
     Frame,
 };
@@ -45,12 +46,21 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         .iter()
         .enumerate()
         .map(|(i, text)| {
-            let style = if app.text_table_state.selected() == Some(i) && app.focused_panel == Panel::TextList {
+            let is_selected = app.text_table_state.selected() == Some(i);
+            let is_loading = app.is_loading && is_selected && app.focused_panel == Panel::TextList;
+
+            let display_text = if is_loading {
+                format!("{} {}", app.get_spinner_char(), text)
+            } else {
+                text.clone()
+            };
+
+            let style = if is_selected && app.focused_panel == Panel::TextList {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
                 Style::default()
             };
-            Row::new(vec![Cell::from(text.clone())]).style(style)
+            Row::new(vec![Cell::from(display_text)]).style(style)
         })
         .collect();
 
@@ -128,8 +138,21 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         .border_type(BorderType::Plain)
         .title(" Status ");
 
-    let status_with_speed = format!("Speed: {:.2}x", app.playback_speed);
-    let status_text = Paragraph::new(status_with_speed).block(status_block);
+    let status_line = if app.is_loading {
+        Line::from(vec![
+            Span::styled(
+                format!("{} ", app.get_spinner_char()),
+                Style::default().fg(Color::Rgb(19, 239, 147)) // Deepgram green
+            ),
+            Span::raw(format!("Generating audio... | Speed: {:.2}x", app.playback_speed)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::raw(format!("Speed: {:.2}x | {}", app.playback_speed, app.status_message)),
+        ])
+    };
+
+    let status_text = Paragraph::new(status_line).block(status_block);
     f.render_widget(status_text, chunks[2]);
 
     // Render Popup for Editing Text

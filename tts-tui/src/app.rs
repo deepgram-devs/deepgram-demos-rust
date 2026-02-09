@@ -6,6 +6,8 @@ use lazy_static::lazy_static;
 use std::collections::HashMap;
 use rust_decimal::Decimal;
 use std::str::FromStr;
+use std::sync::Arc;
+use rodio::OutputStream;
 use crate::persistence;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -45,6 +47,11 @@ pub struct App {
     pub input_buffer: String,
     pub voice_filter: String,
     pub playback_speed: Decimal,  // Range: 0.7 to 1.5
+    pub is_loading: bool,
+    pub loading_text: String,
+    pub spinner_index: usize,
+    pub audio_sink: Option<Arc<rodio::Sink>>,
+    pub audio_stream: Option<Arc<OutputStream>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -52,6 +59,8 @@ pub enum Panel {
     TextList,
     VoiceMenu,
 }
+
+const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 lazy_static! {
     static ref DEEPGRAM_VOICES: HashMap<&'static str, Vec<Voice>> = {
@@ -191,6 +200,11 @@ impl App {
             input_buffer: String::new(),
             voice_filter: String::new(),
             playback_speed: Decimal::from_str("1.0").unwrap(),
+            is_loading: false,
+            loading_text: String::new(),
+            spinner_index: 0,
+            audio_sink: None,
+            audio_stream: None,
         }
     }
 
@@ -394,5 +408,40 @@ impl App {
     pub fn reset_speed(&mut self) {
         self.playback_speed = Decimal::from_str("1.0").unwrap();
         self.set_status_message("Speed: 1.00x (default)".to_string());
+    }
+
+    pub fn start_loading(&mut self, text: String) {
+        self.is_loading = true;
+        self.loading_text = text;
+        self.spinner_index = 0;
+    }
+
+    pub fn stop_loading(&mut self) {
+        self.is_loading = false;
+        self.loading_text.clear();
+    }
+
+    pub fn update_spinner(&mut self) {
+        if self.is_loading {
+            self.spinner_index = (self.spinner_index + 1) % SPINNER_FRAMES.len();
+        }
+    }
+
+    pub fn get_spinner_char(&self) -> &str {
+        SPINNER_FRAMES[self.spinner_index]
+    }
+
+    pub fn check_audio_playback(&mut self) {
+        if self.is_loading {
+            if let Some(sink) = &self.audio_sink {
+                if sink.empty() {
+                    // Playback finished - clean up
+                    self.stop_loading();
+                    self.audio_sink = None;
+                    self.audio_stream = None;
+                    self.set_status_message("Playback complete".to_string());
+                }
+            }
+        }
     }
 }

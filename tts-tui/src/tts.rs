@@ -6,6 +6,7 @@ use tokio::io::AsyncWriteExt;
 use rodio::{Decoder, OutputStream, Sink};
 use std::io::Cursor;
 use rust_decimal::Decimal;
+use std::sync::Arc;
 
 pub fn get_deepgram_api_key() -> Result<String> {
     dotenvy::dotenv().ok();
@@ -20,21 +21,22 @@ pub async fn play_text_with_deepgram(
     speed: Decimal,
     cache_dir: &str,
     endpoint: &str,
-) -> Result<String> {
+) -> Result<(String, Arc<Sink>, Arc<OutputStream>)> {
     let cache_file_path = get_cache_file_path(cache_dir, text, voice_id, speed)?;
     let message;
+    let (sink, stream);
 
     if cache_file_path.exists() {
         message = format!("Playing from cache: {}", cache_file_path.display());
-        play_audio_from_file(&cache_file_path).await?;
+        (sink, stream) = play_audio_from_file(&cache_file_path).await?;
     } else {
         message = format!("Fetching from Deepgram and caching: {}", cache_file_path.display());
         let audio_data = fetch_deepgram_tts(api_key, text, voice_id, speed, endpoint).await?;
         save_audio_to_cache(&cache_file_path, &audio_data).await?;
-        play_audio_from_data(&audio_data).await?;
+        (sink, stream) = play_audio_from_data(&audio_data).await?;
     }
 
-    Ok(message)
+    Ok((message, sink, stream))
 }
 
 fn get_cache_file_path(cache_dir: &str, text: &str, voice_id: &str, speed: Decimal) -> Result<PathBuf> {
@@ -90,22 +92,25 @@ async fn save_audio_to_cache(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-async fn play_audio_from_file(path: &Path) -> Result<()> {
+async fn play_audio_from_file(path: &Path) -> Result<(Arc<Sink>, Arc<OutputStream>)> {
     let file = std::fs::File::open(path)?;
     play_audio_stream(file).await
 }
 
-async fn play_audio_from_data(data: &[u8]) -> Result<()> {
+async fn play_audio_from_data(data: &[u8]) -> Result<(Arc<Sink>, Arc<OutputStream>)> {
     let cursor = Cursor::new(data.to_vec());
     play_audio_stream(cursor).await
 }
 
-async fn play_audio_stream<R: std::io::Read + std::io::Seek + Send + 'static + Sync>(reader: R) -> Result<()> {
-    let (_stream, stream_handle) = OutputStream::try_default()?;
+async fn play_audio_stream<R: std::io::Read + std::io::Seek + Send + 'static + Sync>(reader: R) -> Result<(Arc<Sink>, Arc<OutputStream>)> {
+    let (stream, stream_handle) = OutputStream::try_default()?;
     let sink = Sink::try_new(&stream_handle)?;
 
     let source = Decoder::new(reader)?;
     sink.append(source);
-    sink.sleep_until_end();
-    Ok(())
+
+    // Return sink and OutputStream without blocking
+    // CRITICAL: Both must be kept alive for audio to play!
+    // The caller is responsible for storing these and checking when playback finishes
+    Ok((Arc::new(sink), Arc::new(stream)))
 }

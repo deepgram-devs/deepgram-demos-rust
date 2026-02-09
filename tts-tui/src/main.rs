@@ -52,6 +52,12 @@ async fn main() -> Result<()> {
 
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> Result<()> {
     loop {
+        // Update spinner animation
+        app.update_spinner();
+
+        // Check if audio playback is complete
+        app.check_audio_playback();
+
         terminal.draw(|f| ui::render_ui(f, app))?;
 
         if event::poll(Duration::from_millis(250))? {
@@ -112,17 +118,21 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         }
                         KeyCode::Enter => {
                             if let Some(selected_text) = app.get_selected_text() {
-                                app.set_status_message(format!("Playing: {}", selected_text));
+                                app.start_loading(selected_text.clone());
+                                app.set_status_message(format!("Generating audio: {}", selected_text));
                                 if let Some(selected_voice) = app.get_selected_voice() {
                                     let voice_id = selected_voice.id.clone();
                                     match tts::get_deepgram_api_key() {
                                         Ok(dg_api_key) => {
                                             match tts::play_text_with_deepgram(&dg_api_key, &selected_text, &voice_id, app.playback_speed, &app.audio_cache_dir, &app.deepgram_endpoint).await {
-                                                Ok(msg) => {
+                                                Ok((msg, sink, stream)) => {
                                                     app.add_log(msg);
-                                                    app.set_status_message(format!("Finished playing: {}", selected_text));
+                                                    app.audio_sink = Some(sink);
+                                                    app.audio_stream = Some(stream);
+                                                    // Loading state will be cleared by check_audio_playback() when done
                                                 }
                                                 Err(e) => {
+                                                    app.stop_loading();
                                                     // Log detailed error with full chain
                                                     app.add_log(format!("Error playing audio: {:#}", e));
                                                     // Log error source chain if available
@@ -136,11 +146,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                                             }
                                         }
                                         Err(e) => {
+                                            app.stop_loading();
                                             app.add_log(format!("Error: {}", e));
                                             app.set_status_message("API Key missing".to_string());
                                         }
                                     }
                                 } else {
+                                    app.stop_loading();
                                     app.set_status_message("No voice selected".to_string());
                                 }
                             }
