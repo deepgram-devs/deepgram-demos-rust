@@ -7,6 +7,7 @@ use rodio::{Decoder, OutputStream, Sink};
 use std::io::Cursor;
 use rust_decimal::Decimal;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub fn get_deepgram_api_key() -> Result<String> {
     dotenvy::dotenv().ok();
@@ -14,29 +15,50 @@ pub fn get_deepgram_api_key() -> Result<String> {
         .map_err(|_| anyhow!("DEEPGRAM_API_KEY not found in .env or environment variables"))
 }
 
-pub async fn play_text_with_deepgram(
+pub async fn fetch_audio_for_playback(
     api_key: &str,
     text: &str,
     voice_id: &str,
     speed: Decimal,
     cache_dir: &str,
     endpoint: &str,
-) -> Result<(String, Arc<Sink>, Arc<OutputStream>)> {
+) -> Result<(String, Vec<u8>, bool)> {
     let cache_file_path = get_cache_file_path(cache_dir, text, voice_id, speed)?;
     let message;
-    let (sink, stream);
+    let audio_data;
+    let is_cached;
 
     if cache_file_path.exists() {
         message = format!("Playing from cache: {}", cache_file_path.display());
-        (sink, stream) = play_audio_from_file(&cache_file_path).await?;
+        audio_data = tokio::fs::read(&cache_file_path).await?;
+        is_cached = true;
     } else {
         message = format!("Fetching from Deepgram and caching: {}", cache_file_path.display());
-        let audio_data = fetch_deepgram_tts(api_key, text, voice_id, speed, endpoint).await?;
+        audio_data = fetch_deepgram_tts(api_key, text, voice_id, speed, endpoint).await?;
         save_audio_to_cache(&cache_file_path, &audio_data).await?;
-        (sink, stream) = play_audio_from_data(&audio_data).await?;
+        is_cached = false;
     }
 
-    Ok((message, sink, stream))
+    Ok((message, audio_data, is_cached))
+}
+
+pub fn play_audio_data_sync(data: &[u8]) -> Result<(Arc<Sink>, Arc<OutputStream>, u64)> {
+    let (stream, stream_handle) = OutputStream::try_default()?;
+    let sink = Sink::try_new(&stream_handle)?;
+
+    let source = Decoder::new(Cursor::new(data.to_vec()))?;
+
+    // Get accurate duration from MP3 metadata
+    let duration_ms = mp3_duration::from_read(&mut Cursor::new(data))
+        .map(|d: Duration| d.as_millis() as u64)
+        .unwrap_or_else(|_| {
+            // Fallback to estimation if parsing fails
+            (data.len() as u64 * 8) / 192
+        });
+
+    sink.append(source);
+
+    Ok((Arc::new(sink), Arc::new(stream), duration_ms))
 }
 
 fn get_cache_file_path(cache_dir: &str, text: &str, voice_id: &str, speed: Decimal) -> Result<PathBuf> {
@@ -92,25 +114,3 @@ async fn save_audio_to_cache(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-async fn play_audio_from_file(path: &Path) -> Result<(Arc<Sink>, Arc<OutputStream>)> {
-    let file = std::fs::File::open(path)?;
-    play_audio_stream(file).await
-}
-
-async fn play_audio_from_data(data: &[u8]) -> Result<(Arc<Sink>, Arc<OutputStream>)> {
-    let cursor = Cursor::new(data.to_vec());
-    play_audio_stream(cursor).await
-}
-
-async fn play_audio_stream<R: std::io::Read + std::io::Seek + Send + 'static + Sync>(reader: R) -> Result<(Arc<Sink>, Arc<OutputStream>)> {
-    let (stream, stream_handle) = OutputStream::try_default()?;
-    let sink = Sink::try_new(&stream_handle)?;
-
-    let source = Decoder::new(reader)?;
-    sink.append(source);
-
-    // Return sink and OutputStream without blocking
-    // CRITICAL: Both must be kept alive for audio to play!
-    // The caller is responsible for storing these and checking when playback finishes
-    Ok((Arc::new(sink), Arc::new(stream)))
-}

@@ -1,5 +1,6 @@
 use ratatui::widgets::TableState;
 use ratatui::widgets::ListState;
+use ratatui::layout::Rect;
 use directories::ProjectDirs;
 use anyhow::Result;
 use lazy_static::lazy_static;
@@ -8,7 +9,14 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 use std::sync::Arc;
 use rodio::OutputStream;
+use tokio::sync::mpsc;
 use crate::persistence;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Gender {
+    Male,
+    Female,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Voice {
@@ -17,6 +25,7 @@ pub struct Voice {
     pub vendor: String,
     pub model: String,
     pub language: String,
+    pub gender: Gender,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -32,6 +41,13 @@ pub enum CurrentlyEditing {
     Voice,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum LogLevel {
+    Info,
+    Success,
+    Error,
+}
+
 pub struct App {
     pub current_screen: CurrentScreen,
     pub currently_editing: Option<CurrentlyEditing>,
@@ -43,7 +59,7 @@ pub struct App {
     pub deepgram_endpoint: String,
     pub status_message: String,
     pub focused_panel: Panel,
-    pub logs: Vec<String>,
+    pub logs: Vec<(LogLevel, String)>,
     pub input_buffer: String,
     pub voice_filter: String,
     pub playback_speed: Decimal,  // Range: 0.7 to 1.5
@@ -52,6 +68,13 @@ pub struct App {
     pub spinner_index: usize,
     pub audio_sink: Option<Arc<rodio::Sink>>,
     pub audio_stream: Option<Arc<OutputStream>>,
+    pub tts_receiver: Option<mpsc::UnboundedReceiver<TtsResult>>,
+    pub audio_duration_ms: u64,
+    pub playback_start_time: std::time::Instant,
+    pub audio_cache_info: std::collections::HashMap<String, bool>, // text -> is_cached
+    pub help_scroll_offset: usize,
+    pub text_panel_bounds: Rect,
+    pub voice_panel_bounds: Rect,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -62,113 +85,122 @@ pub enum Panel {
 
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+pub enum TtsResult {
+    Success {
+        message: String,
+        audio_data: Vec<u8>,
+        is_cached: bool,
+    },
+    Error(String),
+}
+
 lazy_static! {
     static ref DEEPGRAM_VOICES: HashMap<&'static str, Vec<Voice>> = {
         let mut map = HashMap::new();
         // Deepgram Voices
         map.insert("Deepgram", vec![
-            Voice { id: "aura-angus-en".to_string(), name: "Angus (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string() },
-            Voice { id: "aura-asteria-en".to_string(), name: "Asteria (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string() },
-            Voice { id: "aura-athena-en".to_string(), name: "Athena (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string() },
-            Voice { id: "aura-helios-en".to_string(), name: "Helios (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string() },
-            Voice { id: "aura-hera-en".to_string(), name: "Hera (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string() },
-            Voice { id: "aura-luna-en".to_string(), name: "Luna (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string() },
-            Voice { id: "aura-orion-en".to_string(), name: "Orion (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string() },
-            Voice { id: "aura-orpheus-en".to_string(), name: "Orpheus (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string() },
-            Voice { id: "aura-perseus-en".to_string(), name: "Perseus (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string() },
-            Voice { id: "aura-stella-en".to_string(), name: "Stella (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string() },
-            Voice { id: "aura-zeus-en".to_string(), name: "Zeus (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-amalthea-en".to_string(), name: "Amalthea (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-andromeda-en".to_string(), name: "Andromeda (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-apollo-en".to_string(), name: "Apollo (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-arcas-en".to_string(), name: "Arcas (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-aries-en".to_string(), name: "Aries (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-asteria-en".to_string(), name: "Asteria (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-athena-en".to_string(), name: "Athena (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-atlas-en".to_string(), name: "Atlas (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-aurora-en".to_string(), name: "Aurora (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-callista-en".to_string(), name: "Callista (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-cora-en".to_string(), name: "Cora (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-cordelia-en".to_string(), name: "Cordelia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-delia-en".to_string(), name: "Delia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-draco-en".to_string(), name: "Draco (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-electra-en".to_string(), name: "Electra (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-harmonia-en".to_string(), name: "Harmonia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-helena-en".to_string(), name: "Helena (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-hera-en".to_string(), name: "Hera (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-hermes-en".to_string(), name: "Hermes (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-hyperion-en".to_string(), name: "Hyperion (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-iris-en".to_string(), name: "Iris (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-janus-en".to_string(), name: "Janus (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-juno-en".to_string(), name: "Juno (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-jupiter-en".to_string(), name: "Jupiter (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-luna-en".to_string(), name: "Luna (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-mars-en".to_string(), name: "Mars (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-minerva-en".to_string(), name: "Minerva (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-neptune-en".to_string(), name: "Neptune (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-odysseus-en".to_string(), name: "Odysseus (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-ophelia-en".to_string(), name: "Ophelia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-orion-en".to_string(), name: "Orion (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-orpheus-en".to_string(), name: "Orpheus (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-pandora-en".to_string(), name: "Pandora (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-phoebe-en".to_string(), name: "Phoebe (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-pluto-en".to_string(), name: "Pluto (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-saturn-en".to_string(), name: "Saturn (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-selene-en".to_string(), name: "Selene (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-thalia-en".to_string(), name: "Thalia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-theia-en".to_string(), name: "Theia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-vesta-en".to_string(), name: "Vesta (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-zeus-en".to_string(), name: "Zeus (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string() },
-            Voice { id: "aura-2-alvaro-es".to_string(), name: "Alvaro (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-aquila-es".to_string(), name: "Aquila (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-carina-es".to_string(), name: "Carina (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-celeste-es".to_string(), name: "Celeste (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-diana-es".to_string(), name: "Diana (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-estrella-es".to_string(), name: "Estrella (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-javier-es".to_string(), name: "Javier (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-nestor-es".to_string(), name: "Nestor (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-selena-es".to_string(), name: "Selena (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-sirio-es".to_string(), name: "Sirio (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-luciano-es".to_string(), name: "Luciano (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-olivia-es".to_string(), name: "Olivia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-valerio-es".to_string(), name: "Valerio (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-agustina-es".to_string(), name: "Agustina (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-silvia-es".to_string(), name: "Silvia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-gloria-es".to_string(), name: "Gloria (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-antonia-es".to_string(), name: "Antonia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string() },
-            Voice { id: "aura-2-beatrix-nl".to_string(), name: "Beatrix (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string() },
-            Voice { id: "aura-2-daphne-nl".to_string(), name: "Daphne (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string() },
-            Voice { id: "aura-2-cornelia-nl".to_string(), name: "Cornelia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string() },
-            Voice { id: "aura-2-sander-nl".to_string(), name: "Sander (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string() },
-            Voice { id: "aura-2-hestia-nl".to_string(), name: "Hestia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string() },
-            Voice { id: "aura-2-lars-nl".to_string(), name: "Lars (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string() },
-            Voice { id: "aura-2-roman-nl".to_string(), name: "Roman (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string() },
-            Voice { id: "aura-2-rhea-nl".to_string(), name: "Rhea (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string() },
-            Voice { id: "aura-2-leda-nl".to_string(), name: "Leda (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string() },
-            Voice { id: "aura-2-agathe-fr".to_string(), name: "Agathe (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "French".to_string() },
-            Voice { id: "aura-2-hector-fr".to_string(), name: "Hector (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "French".to_string() },
-            Voice { id: "aura-2-elara-de".to_string(), name: "Elara (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "German".to_string() },
-            Voice { id: "aura-2-aurelia-de".to_string(), name: "Aurelia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "German".to_string() },
-            Voice { id: "aura-2-lara-de".to_string(), name: "Lara (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "German".to_string() },
-            Voice { id: "aura-2-julius-de".to_string(), name: "Julius (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "German".to_string() },
-            Voice { id: "aura-2-fabian-de".to_string(), name: "Fabian (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "German".to_string() },
-            Voice { id: "aura-2-kara-de".to_string(), name: "Kara (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "German".to_string() },
-            Voice { id: "aura-2-viktoria-de".to_string(), name: "Viktoria (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "German".to_string() },
-            Voice { id: "aura-2-melia-it".to_string(), name: "Melia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string() },
-            Voice { id: "aura-2-elio-it".to_string(), name: "Elio (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string() },
-            Voice { id: "aura-2-flavio-it".to_string(), name: "Flavio (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string() },
-            Voice { id: "aura-2-maia-it".to_string(), name: "Maia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string() },
-            Voice { id: "aura-2-cinzia-it".to_string(), name: "Cinzia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string() },
-            Voice { id: "aura-2-cesare-it".to_string(), name: "Cesare (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string() },
-            Voice { id: "aura-2-livia-it".to_string(), name: "Livia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string() },
-            Voice { id: "aura-2-perseo-it".to_string(), name: "Perseo (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string() },
-            Voice { id: "aura-2-dionisio-it".to_string(), name: "Dionisio (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string() },
-            Voice { id: "aura-2-demetra-it".to_string(), name: "Demetra (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string() },
-            Voice { id: "aura-2-uzume-ja".to_string(), name: "Uzume (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Japanese".to_string() },
-            Voice { id: "aura-2-ebisu-ja".to_string(), name: "Ebisu (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Japanese".to_string() },
-            Voice { id: "aura-2-fujin-ja".to_string(), name: "Fujin (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Japanese".to_string() },
-            Voice { id: "aura-2-izanami-ja".to_string(), name: "Izanami (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Japanese".to_string() },
-            Voice { id: "aura-2-ama-ja".to_string(), name: "Ama (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Japanese".to_string() },
+            Voice { id: "aura-angus-en".to_string(), name: "Angus (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string(), gender: Gender::Male },
+            Voice { id: "aura-asteria-en".to_string(), name: "Asteria (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-athena-en".to_string(), name: "Athena (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-helios-en".to_string(), name: "Helios (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string(), gender: Gender::Male },
+            Voice { id: "aura-hera-en".to_string(), name: "Hera (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-luna-en".to_string(), name: "Luna (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-orion-en".to_string(), name: "Orion (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string(), gender: Gender::Male },
+            Voice { id: "aura-orpheus-en".to_string(), name: "Orpheus (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string(), gender: Gender::Male },
+            Voice { id: "aura-perseus-en".to_string(), name: "Perseus (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string(), gender: Gender::Male },
+            Voice { id: "aura-stella-en".to_string(), name: "Stella (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-zeus-en".to_string(), name: "Zeus (aura)".to_string(), vendor: "Deepgram".to_string(), model: "aura".to_string(), language: "English".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-amalthea-en".to_string(), name: "Amalthea (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-andromeda-en".to_string(), name: "Andromeda (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-apollo-en".to_string(), name: "Apollo (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-arcas-en".to_string(), name: "Arcas (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-aries-en".to_string(), name: "Aries (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-asteria-en".to_string(), name: "Asteria (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-athena-en".to_string(), name: "Athena (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-atlas-en".to_string(), name: "Atlas (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-aurora-en".to_string(), name: "Aurora (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-callista-en".to_string(), name: "Callista (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-cora-en".to_string(), name: "Cora (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-cordelia-en".to_string(), name: "Cordelia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-delia-en".to_string(), name: "Delia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-draco-en".to_string(), name: "Draco (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-electra-en".to_string(), name: "Electra (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-harmonia-en".to_string(), name: "Harmonia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-helena-en".to_string(), name: "Helena (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-hera-en".to_string(), name: "Hera (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-hermes-en".to_string(), name: "Hermes (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-hyperion-en".to_string(), name: "Hyperion (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-iris-en".to_string(), name: "Iris (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-janus-en".to_string(), name: "Janus (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-juno-en".to_string(), name: "Juno (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-jupiter-en".to_string(), name: "Jupiter (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-luna-en".to_string(), name: "Luna (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-mars-en".to_string(), name: "Mars (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-minerva-en".to_string(), name: "Minerva (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-neptune-en".to_string(), name: "Neptune (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-odysseus-en".to_string(), name: "Odysseus (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-ophelia-en".to_string(), name: "Ophelia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-orion-en".to_string(), name: "Orion (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-orpheus-en".to_string(), name: "Orpheus (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-pandora-en".to_string(), name: "Pandora (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-phoebe-en".to_string(), name: "Phoebe (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-pluto-en".to_string(), name: "Pluto (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-saturn-en".to_string(), name: "Saturn (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-selene-en".to_string(), name: "Selene (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-thalia-en".to_string(), name: "Thalia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-theia-en".to_string(), name: "Theia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-vesta-en".to_string(), name: "Vesta (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-zeus-en".to_string(), name: "Zeus (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-alvaro-es".to_string(), name: "Alvaro (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-aquila-es".to_string(), name: "Aquila (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-carina-es".to_string(), name: "Carina (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-celeste-es".to_string(), name: "Celeste (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-diana-es".to_string(), name: "Diana (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-estrella-es".to_string(), name: "Estrella (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-javier-es".to_string(), name: "Javier (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-nestor-es".to_string(), name: "Nestor (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-selena-es".to_string(), name: "Selena (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-sirio-es".to_string(), name: "Sirio (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-luciano-es".to_string(), name: "Luciano (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-olivia-es".to_string(), name: "Olivia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-valerio-es".to_string(), name: "Valerio (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-agustina-es".to_string(), name: "Agustina (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-silvia-es".to_string(), name: "Silvia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-gloria-es".to_string(), name: "Gloria (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-antonia-es".to_string(), name: "Antonia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-beatrix-nl".to_string(), name: "Beatrix (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-daphne-nl".to_string(), name: "Daphne (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-cornelia-nl".to_string(), name: "Cornelia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-sander-nl".to_string(), name: "Sander (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-hestia-nl".to_string(), name: "Hestia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-lars-nl".to_string(), name: "Lars (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-roman-nl".to_string(), name: "Roman (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-rhea-nl".to_string(), name: "Rhea (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-leda-nl".to_string(), name: "Leda (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Dutch".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-agathe-fr".to_string(), name: "Agathe (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "French".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-hector-fr".to_string(), name: "Hector (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "French".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-elara-de".to_string(), name: "Elara (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "German".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-aurelia-de".to_string(), name: "Aurelia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "German".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-lara-de".to_string(), name: "Lara (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "German".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-julius-de".to_string(), name: "Julius (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "German".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-fabian-de".to_string(), name: "Fabian (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "German".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-kara-de".to_string(), name: "Kara (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "German".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-viktoria-de".to_string(), name: "Viktoria (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "German".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-melia-it".to_string(), name: "Melia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-elio-it".to_string(), name: "Elio (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-flavio-it".to_string(), name: "Flavio (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-maia-it".to_string(), name: "Maia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-cinzia-it".to_string(), name: "Cinzia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-cesare-it".to_string(), name: "Cesare (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-livia-it".to_string(), name: "Livia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-perseo-it".to_string(), name: "Perseo (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-dionisio-it".to_string(), name: "Dionisio (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-demetra-it".to_string(), name: "Demetra (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Italian".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-uzume-ja".to_string(), name: "Uzume (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Japanese".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-ebisu-ja".to_string(), name: "Ebisu (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Japanese".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-fujin-ja".to_string(), name: "Fujin (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Japanese".to_string(), gender: Gender::Male },
+            Voice { id: "aura-2-izanami-ja".to_string(), name: "Izanami (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Japanese".to_string(), gender: Gender::Female },
+            Voice { id: "aura-2-ama-ja".to_string(), name: "Ama (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Japanese".to_string(), gender: Gender::Female },
         ]);
         map
     };
@@ -205,6 +237,13 @@ impl App {
             spinner_index: 0,
             audio_sink: None,
             audio_stream: None,
+            tts_receiver: None,
+            audio_duration_ms: 0,
+            playback_start_time: std::time::Instant::now(),
+            audio_cache_info: std::collections::HashMap::new(),
+            help_scroll_offset: 0,
+            text_panel_bounds: Rect::default(),
+            voice_panel_bounds: Rect::default(),
         }
     }
 
@@ -228,6 +267,37 @@ impl App {
 
     pub fn exit_help_screen(&mut self) {
         self.current_screen = CurrentScreen::Main;
+        self.help_scroll_offset = 0;
+    }
+
+    pub fn scroll_help(&mut self, direction: i32, max_lines: usize) {
+        let offset = self.help_scroll_offset as i32 + direction;
+        self.help_scroll_offset = offset.max(0) as usize;
+
+        // Clamp to prevent scrolling past the end
+        let visible_lines = 15; // Approximate visible lines in help box
+        if self.help_scroll_offset > max_lines.saturating_sub(visible_lines) {
+            self.help_scroll_offset = max_lines.saturating_sub(visible_lines);
+        }
+    }
+
+    pub fn handle_mouse_click(&mut self, x: u16, y: u16) {
+        // Check if click is within text panel bounds
+        if x >= self.text_panel_bounds.x
+            && x < self.text_panel_bounds.x + self.text_panel_bounds.width
+            && y >= self.text_panel_bounds.y
+            && y < self.text_panel_bounds.y + self.text_panel_bounds.height
+        {
+            self.focused_panel = Panel::TextList;
+        }
+        // Check if click is within voice panel bounds
+        else if x >= self.voice_panel_bounds.x
+            && x < self.voice_panel_bounds.x + self.voice_panel_bounds.width
+            && y >= self.voice_panel_bounds.y
+            && y < self.voice_panel_bounds.y + self.voice_panel_bounds.height
+        {
+            self.focused_panel = Panel::VoiceMenu;
+        }
     }
 
     pub fn save_input_as_text(&mut self) {
@@ -285,7 +355,11 @@ impl App {
 
 
     pub fn add_log(&mut self, message: String) {
-        self.logs.push(message);
+        self.add_log_with_level(LogLevel::Info, message);
+    }
+
+    pub fn add_log_with_level(&mut self, level: LogLevel, message: String) {
+        self.logs.push((level, message));
         // Optional: Limit the number of logs to prevent infinite growth
         if self.logs.len() > 100 {
             self.logs.remove(0);
@@ -320,16 +394,39 @@ impl App {
             self.text_table_state.select(Some(i));
         } else if self.focused_panel == Panel::VoiceMenu {
             let filtered_voices = self.get_filtered_voices();
+            // Calculate total items including separators
+            let mut current_language: Option<String> = None;
+            let mut total_items = 0;
+            for voice in filtered_voices.iter() {
+                if current_language.as_ref() != Some(&voice.language) {
+                    current_language = Some(voice.language.clone());
+                    total_items += 1;
+                }
+                total_items += 1;
+            }
+
             let i = match self.voice_menu_state.selected() {
                 Some(i) => {
-                    let new_index = i as i32 + direction;
+                    let mut new_index = i as i32 + direction;
+                    // Clamp and skip separators
                     if new_index < 0 {
-                        filtered_voices.len().saturating_sub(1)
-                    } else if new_index as usize >= filtered_voices.len() {
-                        0
-                    } else {
-                        new_index as usize
+                        new_index = (total_items - 1) as i32;
+                    } else if new_index as usize >= total_items {
+                        new_index = 0;
                     }
+
+                    // Skip separators
+                    while new_index >= 0 && new_index < total_items as i32 && self.is_language_separator_index(new_index as usize) {
+                        new_index += direction;
+                    }
+                    // Wrap around if needed
+                    if new_index < 0 {
+                        new_index = (total_items - 1) as i32;
+                    } else if new_index as usize >= total_items {
+                        new_index = 0;
+                    }
+
+                    new_index as usize
                 }
                 None => 0,
             };
@@ -375,14 +472,60 @@ impl App {
         }
     }
 
+    fn is_language_separator_index(&self, item_index: usize) -> bool {
+        let filtered_voices = self.get_filtered_voices();
+        let mut current_language: Option<String> = None;
+        let mut item_counter = 0;
+
+        for voice in filtered_voices.iter() {
+            if current_language.as_ref() != Some(&voice.language) {
+                if item_counter == item_index {
+                    return true; // This is a separator
+                }
+                current_language = Some(voice.language.clone());
+                item_counter += 1;
+            }
+            if item_counter == item_index {
+                return false; // This is a voice
+            }
+            item_counter += 1;
+        }
+        false
+    }
+
+    fn get_voice_index_from_display_index(&self, display_index: usize) -> Option<usize> {
+        let filtered_voices = self.get_filtered_voices();
+        let mut current_language: Option<String> = None;
+        let mut item_counter = 0;
+        let mut voice_counter = 0;
+
+        for voice in filtered_voices.iter() {
+            if current_language.as_ref() != Some(&voice.language) {
+                current_language = Some(voice.language.clone());
+                item_counter += 1; // Skip separator
+            }
+
+            if item_counter == display_index {
+                return Some(voice_counter);
+            }
+
+            item_counter += 1;
+            voice_counter += 1;
+        }
+        None
+    }
+
     pub fn get_selected_voice(&self) -> Option<&Voice> {
         let filtered_voices = self.get_filtered_voices();
-        self.voice_menu_state.selected().and_then(|i| {
-            if i < filtered_voices.len() {
-                Some(filtered_voices[i])
-            } else {
-                None
-            }
+        self.voice_menu_state.selected().and_then(|display_index| {
+            self.get_voice_index_from_display_index(display_index)
+                .and_then(|voice_index| {
+                    if voice_index < filtered_voices.len() {
+                        Some(filtered_voices[voice_index])
+                    } else {
+                        None
+                    }
+                })
         })
     }
 
@@ -414,6 +557,8 @@ impl App {
         self.is_loading = true;
         self.loading_text = text;
         self.spinner_index = 0;
+        self.audio_duration_ms = 0;
+        self.playback_start_time = std::time::Instant::now();
     }
 
     pub fn stop_loading(&mut self) {
@@ -443,5 +588,48 @@ impl App {
                 }
             }
         }
+    }
+
+    pub fn stop_audio_playback(&mut self) {
+        if let Some(sink) = self.audio_sink.take() {
+            sink.stop();
+        }
+        self.audio_stream = None;
+        self.stop_loading();
+        self.set_status_message("Playback stopped".to_string());
+    }
+
+    pub fn get_playback_progress(&self) -> (u64, u64) {
+        if self.is_loading && !self.audio_sink.is_none() {
+            let elapsed = self.playback_start_time.elapsed().as_millis() as u64;
+            (elapsed, self.audio_duration_ms)
+        } else {
+            (0, 0)
+        }
+    }
+
+    pub fn check_tts_result(&mut self) -> Option<Vec<u8>> {
+        if let Some(receiver) = &mut self.tts_receiver {
+            // Non-blocking check for TTS result
+            if let Ok(result) = receiver.try_recv() {
+                self.tts_receiver = None;
+                match result {
+                    TtsResult::Success { message, audio_data, is_cached } => {
+                        let log_level = if is_cached { LogLevel::Success } else { LogLevel::Info };
+                        self.add_log_with_level(log_level, message.clone());
+                        if let Some(text) = self.get_selected_text() {
+                            self.audio_cache_info.insert(text, is_cached);
+                        }
+                        return Some(audio_data);
+                    }
+                    TtsResult::Error(error) => {
+                        self.stop_loading();
+                        self.add_log_with_level(LogLevel::Error, format!("Error: {}", error));
+                        self.set_status_message("Error occurred during TTS".to_string());
+                    }
+                }
+            }
+        }
+        None
     }
 }

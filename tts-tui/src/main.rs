@@ -55,6 +55,23 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
         // Update spinner animation
         app.update_spinner();
 
+        // Check for TTS result from background task
+        if let Some(audio_data) = app.check_tts_result() {
+            // Play audio on main thread (not Send-safe, must stay here)
+            match tts::play_audio_data_sync(&audio_data) {
+                Ok((sink, stream, duration_ms)) => {
+                    app.audio_sink = Some(sink);
+                    app.audio_stream = Some(stream);
+                    app.audio_duration_ms = duration_ms;
+                    app.playback_start_time = std::time::Instant::now();
+                }
+                Err(e) => {
+                    app.stop_loading();
+                    app.add_log(format!("Error starting playback: {}", e));
+                }
+            }
+        }
+
         // Check if audio playback is complete
         app.check_audio_playback();
 
@@ -74,10 +91,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                 }
                 match app.current_screen {
                     CurrentScreen::Main => match key.code {
-                        KeyCode::Char('q') => {
+                        KeyCode::Char('q') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                             if app.focused_panel == app::Panel::TextList {
                                 return Ok(());
                             }
+                        }
+                        KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            return Ok(());
                         }
                         KeyCode::Char('?') => {
                             app.show_help_screen();
@@ -97,7 +117,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         KeyCode::Right | KeyCode::Tab => app.focus_next_panel(),
                         KeyCode::Left => app.focus_prev_panel(),
                         KeyCode::Esc => {
-                            if app.focused_panel == app::Panel::VoiceMenu && !app.voice_filter.is_empty() {
+                            if app.is_loading {
+                                app.stop_audio_playback();
+                            } else if app.focused_panel == app::Panel::VoiceMenu && !app.voice_filter.is_empty() {
                                 app.clear_voice_filter();
                             }
                         }
@@ -118,41 +140,58 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         }
                         KeyCode::Enter => {
                             if let Some(selected_text) = app.get_selected_text() {
-                                app.start_loading(selected_text.clone());
-                                app.set_status_message(format!("Generating audio: {}", selected_text));
                                 if let Some(selected_voice) = app.get_selected_voice() {
                                     let voice_id = selected_voice.id.clone();
                                     match tts::get_deepgram_api_key() {
                                         Ok(dg_api_key) => {
-                                            match tts::play_text_with_deepgram(&dg_api_key, &selected_text, &voice_id, app.playback_speed, &app.audio_cache_dir, &app.deepgram_endpoint).await {
-                                                Ok((msg, sink, stream)) => {
-                                                    app.add_log(msg);
-                                                    app.audio_sink = Some(sink);
-                                                    app.audio_stream = Some(stream);
-                                                    // Loading state will be cleared by check_audio_playback() when done
+                                            // Stop any existing audio playback before starting new clip
+                                            if app.audio_sink.is_some() {
+                                                if let Some(sink) = app.audio_sink.take() {
+                                                    sink.stop();
                                                 }
-                                                Err(e) => {
-                                                    app.stop_loading();
-                                                    // Log detailed error with full chain
-                                                    app.add_log(format!("Error playing audio: {:#}", e));
-                                                    // Log error source chain if available
-                                                    let mut source = e.source();
-                                                    while let Some(err) = source {
-                                                        app.add_log(format!("  Caused by: {}", err));
-                                                        source = err.source();
-                                                    }
-                                                    app.set_status_message("Error occurred during playback".to_string());
-                                                }
+                                                app.audio_stream = None;
                                             }
+
+                                            // Start loading state
+                                            app.start_loading(selected_text.clone());
+                                            app.set_status_message(format!("Generating audio: {}", selected_text));
+
+                                            // Create channel for background task
+                                            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                                            app.tts_receiver = Some(rx);
+
+                                            // Clone data for background task
+                                            let api_key = dg_api_key.clone();
+                                            let text = selected_text.clone();
+                                            let speed = app.playback_speed;
+                                            let cache_dir = app.audio_cache_dir.clone();
+                                            let endpoint = app.deepgram_endpoint.clone();
+
+                                            // Spawn background task for TTS API call (network only)
+                                            tokio::spawn(async move {
+                                                let result = match tts::fetch_audio_for_playback(&api_key, &text, &voice_id, speed, &cache_dir, &endpoint).await {
+                                                    Ok((msg, audio_data, is_cached)) => {
+                                                        app::TtsResult::Success { message: msg, audio_data, is_cached }
+                                                    }
+                                                    Err(e) => {
+                                                        let mut error_msg = format!("Error fetching audio: {:#}", e);
+                                                        let mut source = e.source();
+                                                        while let Some(err) = source {
+                                                            error_msg.push_str(&format!("\n  Caused by: {}", err));
+                                                            source = err.source();
+                                                        }
+                                                        app::TtsResult::Error(error_msg)
+                                                    }
+                                                };
+                                                let _ = tx.send(result);
+                                            });
                                         }
                                         Err(e) => {
-                                            app.stop_loading();
                                             app.add_log(format!("Error: {}", e));
                                             app.set_status_message("API Key missing".to_string());
                                         }
                                     }
                                 } else {
-                                    app.stop_loading();
                                     app.set_status_message("No voice selected".to_string());
                                 }
                             }
@@ -187,6 +226,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         KeyCode::Esc => {
                             app.exit_help_screen();
                         }
+                        KeyCode::Up => {
+                            app.scroll_help(-1, 21); // 21 help lines
+                        }
+                        KeyCode::Down => {
+                            app.scroll_help(1, 21);
+                        }
                         _ => {}
                     },
                 }
@@ -199,6 +244,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                             }
                             MouseEventKind::ScrollDown => {
                                 app.scroll_text_list(1);
+                            }
+                            MouseEventKind::Down(_) => {
+                                app.handle_mouse_click(mouse.column, mouse.row);
                             }
                             _ => {}
                         }

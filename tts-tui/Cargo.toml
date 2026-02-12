@@ -1,6 +1,6 @@
 [package]
 name = "tts-tui"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021" # Use 2021 edition
 description = "A terminal user interface for Deepgram Text-to-Speech API with voice selection, playback speed control, and audio caching"
 
@@ -26,3 +26,4 @@ lazy_static = "1.4.0"
 arboard = "3.4.0"
 clap = { version = "4.0", features = ["derive", "env"] }
 rust_decimal = "1.36"
+mp3-duration = "0.1.10"
