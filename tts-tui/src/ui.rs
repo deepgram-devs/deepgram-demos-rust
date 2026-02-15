@@ -21,7 +21,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
 
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(30), Constraint::Min(22)])
+        .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
         .split(chunks[0]);
 
     // Render Text List Panel
