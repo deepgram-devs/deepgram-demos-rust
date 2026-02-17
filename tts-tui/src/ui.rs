@@ -143,25 +143,45 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         .border_type(BorderType::Rounded)
         .title(" Logs ");
 
-    let log_items: Vec<ListItem> = app.logs
+    let log_lines: Vec<Line> = app.logs
         .iter()
         .rev()
-        .map(|(level, message)| {
+        .flat_map(|(level, message)| {
             let (icon, color) = match level {
                 LogLevel::Success => ("✓", Color::Green),
                 LogLevel::Error => ("✗", Color::Red),
                 LogLevel::Info => ("ℹ", Color::Blue),
             };
-            let styled_msg = Span::styled(
-                format!("{} {}", icon, message),
-                Style::default().fg(color),
-            );
-            ListItem::new(Line::from(styled_msg))
+
+            // Create a prefix for each line
+            let prefix = format!("{} ", icon);
+
+            // Split message into lines if it's already multiline
+            let message_lines: Vec<String> = message.lines().map(|s| s.to_string()).collect();
+
+            // Return styled lines
+            message_lines.into_iter().enumerate().map(|(i, line)| {
+                if i == 0 {
+                    // First line gets the icon
+                    Line::from(Span::styled(
+                        format!("{}{}", prefix, line),
+                        Style::default().fg(color),
+                    ))
+                } else {
+                    // Subsequent lines are indented
+                    Line::from(Span::styled(
+                        format!("  {}", line),
+                        Style::default().fg(color),
+                    ))
+                }
+            }).collect::<Vec<Line>>()
         })
         .collect();
 
-    let logs_list = List::new(log_items).block(logs_block);
-    f.render_widget(logs_list, chunks[1]);
+    let logs_paragraph = Paragraph::new(log_lines)
+        .block(logs_block)
+        .wrap(Wrap { trim: false });
+    f.render_widget(logs_paragraph, chunks[1]);
 
     // Status bar at the bottom
     let status_block = Block::default()
