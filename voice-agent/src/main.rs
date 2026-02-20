@@ -12,7 +12,6 @@ use tokio::sync::mpsc;
 use std::sync::mpsc as std_mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Instant;
 use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -52,6 +51,10 @@ struct Args {
     /// Enable verbose output including full Settings JSON message
     #[arg(long)]
     verbose: bool,
+
+    /// Disable microphone muting during agent audio playback
+    #[arg(long)]
+    no_mic_mute: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -192,23 +195,22 @@ impl AudioCapture {
         let stream = self.device.build_input_stream(
             &config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
-                // Only capture audio if microphone is enabled
-                let mic_is_enabled = mic_enabled.load(Ordering::Relaxed);
-                if !mic_is_enabled {
-                    return;
-                }
-                
-                // Convert samples to f32 and then to i16 for Deepgram
-                let mut audio_data = Vec::with_capacity(data.len() * 2);
-                
-                for &sample in data.iter() {
-                    let f32_sample: f32 = cpal::Sample::from_sample(sample);
-                    let i16_sample = (f32_sample * i16::MAX as f32) as i16;
-                    audio_data.extend_from_slice(&i16_sample.to_le_bytes());
-                }
-                
+                let audio_data = if mic_enabled.load(Ordering::Relaxed) {
+                    // Convert real mic samples to linear16 for Deepgram
+                    let mut buf = Vec::with_capacity(data.len() * 2);
+                    for &sample in data.iter() {
+                        let f32_sample: f32 = cpal::Sample::from_sample(sample);
+                        let i16_sample = (f32_sample * i16::MAX as f32) as i16;
+                        buf.extend_from_slice(&i16_sample.to_le_bytes());
+                    }
+                    buf
+                } else {
+                    // Mic is muted — send silence to keep the connection alive
+                    vec![0u8; data.len() * 2]
+                };
+
                 if let Err(_e) = tx.send(audio_data) {
-                    // Audio capture stopped, this is expected when shutting down
+                    // Channel closed during shutdown, expected
                 }
             },
             |err| error!("Audio stream error: {}", err),
@@ -221,109 +223,89 @@ impl AudioCapture {
 
 struct AudioPlayer {
     _stream_handle: OutputStream,
-    sink: Sink,
+    sink: Arc<Sink>,
     mic_enabled: Arc<AtomicBool>,
-    playback_stopped_time: Arc<Mutex<Option<Instant>>>,
+    mute_on_playback: bool,
 }
 
 impl AudioPlayer {
-    fn new(mic_enabled: Arc<AtomicBool>) -> Result<Self, Box<dyn std::error::Error>> {
+    fn new(mic_enabled: Arc<AtomicBool>, mute_on_playback: bool) -> Result<Self, Box<dyn std::error::Error>> {
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()
             .map_err(|e| format!("Failed to create audio output stream: {}", e))?;
-        let sink = Sink::connect_new(&stream_handle.mixer());
-        
-        let playback_stopped_time = Arc::new(Mutex::new(None::<Instant>));
-        
-        // Start background task to monitor microphone re-enabling
-        let mic_enabled_clone = Arc::clone(&mic_enabled);
-        let playback_stopped_time_clone = Arc::clone(&playback_stopped_time);
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_millis(50)); // Check every 50ms
-                
-                // Check if we should re-enable microphone
-                let should_enable_mic = {
-                    let stopped_time_guard = playback_stopped_time_clone.lock().unwrap();
-                    if let Some(stopped_time) = *stopped_time_guard {
-                        // Check if 600ms have passed since playback stopped
-                        stopped_time.elapsed() >= Duration::from_millis(600)
+        let sink = Arc::new(Sink::connect_new(&stream_handle.mixer()));
+
+        if mute_on_playback {
+            // Background thread polls the sink to detect when audio finishes and
+            // re-enables the microphone after a short silence period.
+            let mic_enabled_clone = Arc::clone(&mic_enabled);
+            let sink_clone = Arc::clone(&sink);
+            std::thread::spawn(move || {
+                let mut playback_ended_at: Option<Instant> = None;
+
+                loop {
+                    std::thread::sleep(Duration::from_millis(50));
+
+                    let is_playing = !sink_clone.empty();
+
+                    if is_playing {
+                        // Audio is actively playing — keep mic disabled and reset timer
+                        if mic_enabled_clone.load(Ordering::Relaxed) {
+                            mic_enabled_clone.store(false, Ordering::Relaxed);
+                            info!("🎤 Microphone disabled — audio playing");
+                        }
+                        playback_ended_at = None;
                     } else {
-                        false
+                        // Sink is empty (no audio playing)
+                        match playback_ended_at {
+                            None => {
+                                // If mic is still disabled, audio just finished — start the silence timer
+                                if !mic_enabled_clone.load(Ordering::Relaxed) {
+                                    playback_ended_at = Some(Instant::now());
+                                    info!("🔊 Audio playback ended, waiting 600ms before re-enabling mic");
+                                }
+                            }
+                            Some(ended_at) => {
+                                if ended_at.elapsed() >= Duration::from_millis(600) {
+                                    mic_enabled_clone.store(true, Ordering::Relaxed);
+                                    info!("🎤 Microphone re-enabled after 600ms of silence");
+                                    playback_ended_at = None;
+                                }
+                            }
+                        }
                     }
-                };
-                
-                if should_enable_mic && !mic_enabled_clone.load(Ordering::Relaxed) {
-                    mic_enabled_clone.store(true, Ordering::Relaxed);
-                    info!("🎤 Microphone re-enabled after 600ms of playback silence");
-                    // Reset the stopped time to prevent repeated enabling
-                    *playback_stopped_time_clone.lock().unwrap() = None;
                 }
-            }
-        });
-        
+            });
+        }
+
         Ok(AudioPlayer {
             _stream_handle: stream_handle,
             sink,
             mic_enabled,
-            playback_stopped_time,
+            mute_on_playback,
         })
     }
-    
+
     fn play_audio(&self, audio_data: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
         info!("🔊 Received audio data for playback: {} bytes", audio_data.len());
-        
+
         if audio_data.is_empty() {
             return Ok(());
         }
-        
-        // Microphone should already be disabled by WebSocket handler
-        // but ensure it's disabled here as well for safety
-        self.mic_enabled.store(false, Ordering::Relaxed);
-        
-        // The audio data from Deepgram is linear16 PCM at 24kHz (as configured)
-        // Convert bytes to f32 samples (rodio expects f32)
+
+        // Disable microphone immediately so we don't capture our own output
+        if self.mute_on_playback {
+            self.mic_enabled.store(false, Ordering::Relaxed);
+        }
+
+        // Convert linear16 PCM bytes to f32 samples for rodio
         let mut samples = Vec::with_capacity(audio_data.len() / 2);
         for chunk in audio_data.chunks_exact(2) {
             let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-            // Convert i16 to f32 in range [-1.0, 1.0]
-            let f32_sample = sample as f32 / i16::MAX as f32;
-            samples.push(f32_sample);
+            samples.push(sample as f32 / i16::MAX as f32);
         }
-        
-        // Calculate audio duration
-        let sample_rate = 24000.0; // Hz
-        let duration_seconds = (samples.len() as f32) / sample_rate;
-        let audio_duration = Duration::from_secs_f32(duration_seconds);
-        
-        // Create a source from the PCM data
-        let source = PCMSource::new(samples, 24000, 1);
-        
-        // Append to sink for playback
-        self.sink.append(source);
-        
-        // Schedule playback completion time (but clear any previous timers)
-        {
-            let mut stopped_time_guard = self.playback_stopped_time.lock().unwrap();
-            *stopped_time_guard = None; // Clear any existing timer since new audio is starting
-        }
-        
-        let playback_stopped_time_clone = Arc::clone(&self.playback_stopped_time);
-        
-        std::thread::spawn(move || {
-            // Wait for this audio chunk to finish playing
-            std::thread::sleep(audio_duration);
-            
-            // Only set the stopped time if no newer audio has started
-            {
-                let mut stopped_time_guard = playback_stopped_time_clone.lock().unwrap();
-                // Only update if we haven't been superseded by newer audio
-                if stopped_time_guard.is_none() {
-                    *stopped_time_guard = Some(Instant::now());
-                    info!("🔊 Audio playback finished, starting 600ms timer");
-                }
-            }
-        });
-        
+
+        self.sink.append(PCMSource::new(samples, 24000, 1));
+
         Ok(())
     }
 }
@@ -450,6 +432,7 @@ async fn handle_voice_agent_responses(
     mut ws_receiver: futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
     audio_tx: std_mpsc::Sender<Vec<u8>>,
     mic_enabled: Arc<AtomicBool>,
+    mute_on_playback: bool,
 ) {
     while let Some(message) = ws_receiver.next().await {
         match message {
@@ -461,9 +444,10 @@ async fn handle_voice_agent_responses(
                         match response.message_type.as_str() {
                             "agent_audio" => {
                                 info!("🔊 Received audio from agent");
-                                // Disable microphone immediately when audio is received
-                                mic_enabled.store(false, Ordering::Relaxed);
-                                info!("🎤 Microphone disabled immediately upon receiving audio");
+                                if mute_on_playback {
+                                    mic_enabled.store(false, Ordering::Relaxed);
+                                    info!("🎤 Microphone disabled immediately upon receiving audio");
+                                }
                                 
                                 // Audio data should be in the response, but the exact format depends on the API
                                 // This is a placeholder - you'll need to extract the actual audio data
@@ -510,9 +494,10 @@ async fn handle_voice_agent_responses(
             }
             Ok(Message::Binary(data)) => {
                 info!("🔊 Received binary audio data: {} bytes", data.len());
-                // Disable microphone immediately when audio is received
-                mic_enabled.store(false, Ordering::Relaxed);
-                info!("🎤 Microphone disabled immediately upon receiving binary audio");
+                if mute_on_playback {
+                    mic_enabled.store(false, Ordering::Relaxed);
+                    info!("🎤 Microphone disabled immediately upon receiving binary audio");
+                }
                 
                 // Handle binary audio data directly
                 if let Err(e) = audio_tx.send(data.to_vec()) {
@@ -575,10 +560,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let (playback_tx, playback_rx) = std_mpsc::channel::<Vec<u8>>();
     
+    let mute_on_playback = !args.no_mic_mute;
+    if !mute_on_playback {
+        info!("Microphone muting during playback is disabled");
+    }
+
     // Initialize audio player in a separate thread
     let mic_enabled_for_player = Arc::clone(&mic_enabled);
     std::thread::spawn(move || {
-        let audio_player = match AudioPlayer::new(mic_enabled_for_player) {
+        let audio_player = match AudioPlayer::new(mic_enabled_for_player, mute_on_playback) {
             Ok(player) => player,
             Err(e) => {
                 error!("Failed to create audio player: {}", e);
@@ -631,7 +621,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let playback_tx_clone = playback_tx.clone();
     let mic_enabled_for_ws = Arc::clone(&mic_enabled);
     let response_handle = tokio::spawn(async move {
-        handle_voice_agent_responses(ws_receiver, playback_tx_clone, mic_enabled_for_ws).await;
+        handle_voice_agent_responses(ws_receiver, playback_tx_clone, mic_enabled_for_ws, mute_on_playback).await;
     });
     
     // Main loop: send audio data to WebSocket
