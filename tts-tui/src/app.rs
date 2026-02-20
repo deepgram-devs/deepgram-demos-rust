@@ -10,6 +10,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use rodio::OutputStream;
 use tokio::sync::mpsc;
+use crate::config::{self, AppConfig, ExperimentalFlags};
 use crate::persistence;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -33,6 +34,8 @@ pub enum CurrentScreen {
     Main,
     Editing,
     Help,
+    ApiKeyInput,
+    VoiceFilter,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -45,10 +48,19 @@ pub enum CurrentlyEditing {
 pub enum LogLevel {
     Info,
     Success,
+    Warning,
     Error,
 }
 
+#[derive(Clone, Debug)]
+pub struct LogEntry {
+    pub level: LogLevel,
+    pub message: String,
+    pub timestamp: chrono::DateTime<chrono::Local>,
+}
+
 pub struct App {
+    pub config: AppConfig,
     pub current_screen: CurrentScreen,
     pub currently_editing: Option<CurrentlyEditing>,
     pub text_table_state: TableState,
@@ -59,9 +71,14 @@ pub struct App {
     pub deepgram_endpoint: String,
     pub status_message: String,
     pub focused_panel: Panel,
-    pub logs: Vec<(LogLevel, String)>,
+    pub logs: Vec<LogEntry>,
+    pub log_scroll_offset: usize,
+    pub log_panel_bounds: Rect,
     pub input_buffer: String,
+    pub api_key_override: Option<String>,
+    pub api_key_input_buffer: String,
     pub voice_filter: String,
+    pub voice_filter_buffer: String,
     pub playback_speed: Decimal,  // Range: 0.7 to 1.5
     pub is_loading: bool,
     pub loading_text: String,
@@ -208,7 +225,7 @@ lazy_static! {
 
 
 impl App {
-    pub fn new(deepgram_endpoint: String) -> App {
+    pub fn new(deepgram_endpoint: String, config: AppConfig) -> App {
         let mut text_table_state = TableState::default();
         text_table_state.select(Some(0)); // Select the first item by default
 
@@ -217,7 +234,37 @@ impl App {
 
         let voices: Vec<Voice> = DEEPGRAM_VOICES.values().flatten().cloned().collect();
 
+        // Resolve API key: env var > config file key
+        dotenvy::dotenv().ok();
+        let resolved_api_key = std::env::var("DEEPGRAM_API_KEY").ok()
+            .or_else(|| config.api.key.clone().filter(|k| !k.is_empty()));
+
+        let mut initial_logs: Vec<LogEntry> = Vec::new();
+        let make_entry = |level: LogLevel, message: String| LogEntry {
+            level,
+            message,
+            timestamp: chrono::Local::now(),
+        };
+
+        initial_logs.push(make_entry(LogLevel::Info, format!("Config: {}", config::config_path_display())));
+
+        if resolved_api_key.is_none() {
+            initial_logs.push(make_entry(
+                LogLevel::Warning,
+                "No DEEPGRAM_API_KEY set. Press 'k' to enter your API key interactively.".to_string(),
+            ));
+        }
+
+        let flags = &config.experimental;
+        if flags.streaming_playback {
+            initial_logs.push(make_entry(LogLevel::Info, "[experimental] streaming_playback enabled".to_string()));
+        }
+        if flags.ssml_support {
+            initial_logs.push(make_entry(LogLevel::Info, "[experimental] ssml_support enabled".to_string()));
+        }
+
         App {
+            config,
             current_screen: CurrentScreen::Main,
             currently_editing: None,
             text_table_state,
@@ -228,9 +275,12 @@ impl App {
             deepgram_endpoint,
             status_message: "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string(),
             focused_panel: Panel::TextList,
-            logs: Vec::new(),
+            logs: initial_logs,
             input_buffer: String::new(),
+            api_key_override: resolved_api_key,
+            api_key_input_buffer: String::new(),
             voice_filter: String::new(),
+            voice_filter_buffer: String::new(),
             playback_speed: Decimal::from_str("1.0").unwrap(),
             is_loading: false,
             loading_text: String::new(),
@@ -242,8 +292,10 @@ impl App {
             playback_start_time: std::time::Instant::now(),
             audio_cache_info: std::collections::HashMap::new(),
             help_scroll_offset: 0,
+            log_scroll_offset: 0,
             text_panel_bounds: Rect::default(),
             voice_panel_bounds: Rect::default(),
+            log_panel_bounds: Rect::default(),
         }
     }
 
@@ -258,6 +310,42 @@ impl App {
         self.current_screen = CurrentScreen::Main;
         self.currently_editing = None;
         self.input_buffer.clear();
+        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    #[allow(dead_code)]
+    pub fn experimental(&self) -> &ExperimentalFlags {
+        &self.config.experimental
+    }
+
+    pub fn open_audio_cache_in_finder(&mut self) {
+        let dir = self.audio_cache_dir.clone();
+        match std::process::Command::new("open").arg(&dir).spawn() {
+            Ok(_) => self.add_log(format!("Opened cache folder in Finder: {}", dir)),
+            Err(e) => self.add_log_with_level(LogLevel::Error, format!("Failed to open cache folder: {}", e)),
+        }
+    }
+
+    pub fn enter_api_key_mode(&mut self) {
+        self.current_screen = CurrentScreen::ApiKeyInput;
+        self.api_key_input_buffer.clear();
+        self.status_message = "Enter your Deepgram API key. Press 'Enter' to save, 'Esc' to cancel.".to_string();
+    }
+
+    pub fn save_api_key(&mut self) {
+        let key = self.api_key_input_buffer.trim().to_string();
+        if !key.is_empty() {
+            self.api_key_override = Some(key);
+            self.add_log_with_level(LogLevel::Success, "API key set successfully.".to_string());
+        }
+        self.api_key_input_buffer.clear();
+        self.current_screen = CurrentScreen::Main;
+        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    pub fn exit_api_key_mode(&mut self) {
+        self.api_key_input_buffer.clear();
+        self.current_screen = CurrentScreen::Main;
         self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
@@ -289,6 +377,14 @@ impl App {
             && y < self.text_panel_bounds.y + self.text_panel_bounds.height
         {
             self.focused_panel = Panel::TextList;
+            // +1 for top border, +1 for header row
+            let first_row = self.text_panel_bounds.y + 2;
+            if y >= first_row {
+                let idx = self.text_table_state.offset() + (y - first_row) as usize;
+                if idx < self.saved_texts.len() {
+                    self.text_table_state.select(Some(idx));
+                }
+            }
         }
         // Check if click is within voice panel bounds
         else if x >= self.voice_panel_bounds.x
@@ -297,7 +393,32 @@ impl App {
             && y < self.voice_panel_bounds.y + self.voice_panel_bounds.height
         {
             self.focused_panel = Panel::VoiceMenu;
+            // +1 for top border only (no header row)
+            let first_row = self.voice_panel_bounds.y + 1;
+            if y >= first_row {
+                let idx = self.voice_menu_state.offset() + (y - first_row) as usize;
+                // Ignore clicks on language separator rows
+                if !self.is_language_separator_index(idx) {
+                    let total_items = self.voice_display_item_count();
+                    if idx < total_items {
+                        self.voice_menu_state.select(Some(idx));
+                    }
+                }
+            }
         }
+    }
+
+    fn voice_display_item_count(&self) -> usize {
+        let mut count = 0;
+        let mut current_language: Option<String> = None;
+        for voice in self.get_filtered_voices() {
+            if current_language.as_ref() != Some(&voice.language) {
+                current_language = Some(voice.language.clone());
+                count += 1; // separator
+            }
+            count += 1;
+        }
+        count
     }
 
     pub fn save_input_as_text(&mut self) {
@@ -359,11 +480,21 @@ impl App {
     }
 
     pub fn add_log_with_level(&mut self, level: LogLevel, message: String) {
-        self.logs.push((level, message));
-        // Optional: Limit the number of logs to prevent infinite growth
-        if self.logs.len() > 100 {
+        self.logs.push(LogEntry { level, message, timestamp: chrono::Local::now() });
+        if self.logs.len() > 500 {
             self.logs.remove(0);
         }
+        // Reset scroll to show newest entry
+        self.log_scroll_offset = 0;
+    }
+
+    /// Scroll the log panel. direction: -1 = scroll toward older, +1 = scroll toward newer.
+    /// The log is rendered newest-first, so scrolling "up" (direction -1) means
+    /// incrementing the offset to reveal older entries.
+    pub fn scroll_logs(&mut self, direction: i32) {
+        let offset = self.log_scroll_offset as i32 - direction;
+        self.log_scroll_offset = offset.max(0) as usize;
+        // Upper bound is clamped in the renderer where visible height is known
     }
 
     fn get_audio_cache_dir() -> Result<String> {
@@ -472,6 +603,23 @@ impl App {
         }
     }
 
+    /// Returns voices matching `voice_filter_buffer` — used for live count in the filter popup.
+    pub fn get_filtered_voices_for_buffer(&self) -> Vec<&Voice> {
+        if self.voice_filter_buffer.is_empty() {
+            self.voices.iter().collect()
+        } else {
+            let filter_lower = self.voice_filter_buffer.to_lowercase();
+            self.voices
+                .iter()
+                .filter(|voice| {
+                    voice.name.to_lowercase().contains(&filter_lower)
+                        || voice.language.to_lowercase().contains(&filter_lower)
+                        || voice.model.to_lowercase().contains(&filter_lower)
+                })
+                .collect()
+        }
+    }
+
     fn is_language_separator_index(&self, item_index: usize) -> bool {
         let filtered_voices = self.get_filtered_voices();
         let mut current_language: Option<String> = None;
@@ -532,6 +680,31 @@ impl App {
     pub fn clear_voice_filter(&mut self) {
         self.voice_filter.clear();
         self.voice_menu_state.select(Some(0));
+    }
+
+    pub fn enter_voice_filter_mode(&mut self) {
+        self.voice_filter_buffer = self.voice_filter.clone();
+        self.current_screen = CurrentScreen::VoiceFilter;
+        self.status_message = "Filter voices — Enter to apply, Esc to cancel, Ctrl+U to clear".to_string();
+    }
+
+    pub fn apply_voice_filter(&mut self) {
+        self.voice_filter = self.voice_filter_buffer.clone();
+        self.voice_filter_buffer.clear();
+        self.voice_menu_state.select(Some(0));
+        self.current_screen = CurrentScreen::Main;
+        self.focused_panel = Panel::VoiceMenu;
+        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    pub fn cancel_voice_filter(&mut self) {
+        self.voice_filter_buffer.clear();
+        self.current_screen = CurrentScreen::Main;
+        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    pub fn clear_voice_filter_buffer(&mut self) {
+        self.voice_filter_buffer.clear();
     }
 
     pub fn increase_speed(&mut self) {

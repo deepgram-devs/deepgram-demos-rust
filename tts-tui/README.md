@@ -1,84 +1,159 @@
 # TTS TUI (Text-to-Speech Terminal User Interface)
 
-This is a terminal user interface (TUI) application built with Rust and Ratatui that allows you to interact with the Deepgram Text-to-Speech (TTS) API.
+A terminal user interface (TUI) built with Rust and Ratatui for interacting with the Deepgram Text-to-Speech API. Supports voice selection, voice filtering, audio caching, playback speed control, timestamped logs, and a persistent TOML configuration file, all styled with the Deepgram brand color palette.
 
 ## Features
 
-- Select and play saved text snippets using various Deepgram Aura voices
-- Browse and filter available Deepgram TTS voices in real-time
-- Add new text snippets to the saved list
-- Delete selected text snippets from the list
-- Audio caching for faster repeated playback
-- Built-in help screen with all keyboard shortcuts
-- Mouse support for scrolling through lists
-- Clipboard paste support for adding text
-- Real-time logging of application actions and API responses
-- ⚠️ **Not available**: Adjust TTS playback speed dynamically (+/- keys)
+- Play saved text snippets with any Deepgram Aura or Aura-2 voice
+- Browse and filter voices by name, language, or model via a dedicated popup (`/`)
+- Add, delete, and persist text snippets to local storage
+- Audio caching — repeated playback is served from disk instantly
+- Adjustable TTS playback speed (`+`/`-`/`0` keys)
+- Interactive API key entry — set or override the key at runtime without restarting
+- Open the audio cache folder in Finder with a single keystroke (`o`)
+- TOML configuration file at `~/.config/tts-tui.toml` with inline documentation
+- Experimental feature flags via config file or environment variables
+- Timestamped, color-coded log panel with scrollable history and mouse scroll support
+- Mouse click to select specific items in lists
+- Deepgram brand color palette throughout the UI
 
-## How to Run
+## Requirements
 
-1. **Prerequisites:** Ensure you have Rust and Cargo installed.
-2. **Deepgram API Key:** Obtain a Deepgram API Key and set it as an environment variable or in a `.env` file in the `tts-tui` directory:
+- Rust and Cargo (install via [rustup.rs](https://rustup.rs))
+- A [Deepgram API key](https://console.deepgram.com/)
 
-```bash
-export DEEPGRAM_API_KEY="YOUR_DEEPGRAM_API_KEY"
-# or in tts-tui/.env file:
-# DEEPGRAM_API_KEY="YOUR_DEEPGRAM_API_KEY"
-```
-
-3. **Navigate to the directory:**
+## Getting Started
 
 ```bash
 cd tts-tui
-```
-
-4. **Run the application:**
-
-```bash
 cargo run
 ```
 
-## Specify Custom Endpoint
+On first launch the app creates `~/.config/tts-tui.toml` with all options documented inline. If no API key is detected you will see a warning in the log panel — press `k` to enter one interactively.
 
-If you'd like to specify a different Deepgram endpoint, such as Deepgram self-hosted or a non-production environment, you can use the `DEEPGRAM_TTS_ENDPOINT` environment variable or the `--endpoint` option.
+## Configuration
+
+Settings are resolved in this priority order (highest wins):
+
+```
+CLI arguments  >  environment variables  >  ~/.config/tts-tui.toml  >  built-in defaults
+```
+
+### API Key
+
+Three ways to supply your Deepgram API key, in priority order:
 
 ```bash
-# Use the --endpoint option
-cargo run -- --endpoint https://selfhosted.example.com/v1/speak
+# 1. Interactive — press 'k' inside the running app
 
-# Use an environment variable
+# 2. Environment variable
+export DEEPGRAM_API_KEY="your-api-key"
+
+# 3. Config file (~/.config/tts-tui.toml)
+# [api]
+# key = "your-api-key"
+```
+
+### Custom Endpoint
+
+For self-hosted deployments or non-production environments:
+
+```bash
+# CLI flag (highest priority)
+cargo run -- --endpoint-override https://selfhosted.example.com/v1/speak
+
+# Environment variable
 export DEEPGRAM_TTS_ENDPOINT=https://selfhosted.example.com/v1/speak
 cargo run
+
+# Config file
+# [api]
+# endpoint = "https://selfhosted.example.com/v1/speak"
+```
+
+### Experimental Feature Flags
+
+In-development features can be enabled in `~/.config/tts-tui.toml`:
+
+```toml
+[experimental]
+# Stream audio playback as bytes arrive instead of waiting for the full download.
+streaming_playback = false
+
+# Allow SSML markup tags in text input for fine-grained speech control.
+ssml_support = false
+```
+
+Each flag can also be toggled with an environment variable:
+
+```bash
+TTS_TUI_FEATURE_STREAMING_PLAYBACK=true cargo run
+TTS_TUI_FEATURE_SSML_SUPPORT=true cargo run
 ```
 
 ## Keyboard Shortcuts
 
-### General
-- `?`: Show help screen with all keyboard shortcuts
-- `q`: Quit the application (when focused on Saved Texts panel)
-- `Enter`: Play the selected text snippet with the selected voice
-- `Up`/`Down` arrows: Navigate through lists
-- `Left`/`Right`/`Tab`: Switch focus between panels (Saved Texts, Voices)
+### Main Screen
 
-### Playback Speed Control
-- `+` or `=`: Increase playback speed
-- `-`: Decrease playback speed
-- `0`: Reset playback speed to default (1.0x)
+| Key | Action |
+|-----|--------|
+| `?` | Show help screen |
+| `q` | Quit (when Saved Texts panel is focused) |
+| `Ctrl+Q` | Quit from any panel |
+| `Enter` | Play selected text with selected voice |
+| `n` | Add new text snippet |
+| `d` | Delete selected text snippet |
+| `k` | Set Deepgram API key interactively |
+| `o` | Open audio cache folder in Finder |
+| `/` | Open voice filter popup |
+| `Up` / `Down` | Navigate Saved Texts or Voices list |
+| `Left` | Focus previous panel |
+| `Right` / `Tab` | Focus next panel |
+| `+` / `=` | Increase playback speed |
+| `-` | Decrease playback speed |
+| `0` | Reset playback speed to 1.0x |
+| `Esc` | Stop audio playback / clear voice filter |
 
-### Text Management
-- `n`: Enter input mode to add a new text snippet
-  - While in input mode:
-    - `Enter`: Save the new text
-    - `Esc`: Cancel input
-    - `Backspace`: Delete the last character
-    - `Ctrl+V` or `Cmd+V`: Paste from clipboard
-    - Any other character: Type into the input buffer
-- `d`: Delete the currently selected text snippet
+### Voice Filter Popup
 
-### Voice Filtering
-- Type any character while focused on the Voices panel to filter voices by name
-- `Backspace`: Remove last character from voice filter
-- `Esc`: Clear voice filter (when voice filter is active)
+Press `/` to open. Filter matches on voice name, language, or model.
+
+| Key | Action |
+|-----|--------|
+| Type | Narrow the voice list in real time |
+| `Enter` | Apply filter and close popup |
+| `Esc` | Cancel without changing the current filter |
+| `Ctrl+U` | Clear all filter text |
+| `Backspace` | Delete last character |
+
+### Text Entry
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Save text |
+| `Esc` | Cancel |
+| `Ctrl+V` / `Cmd+V` | Paste from clipboard |
+| `Backspace` | Delete last character |
+
+### API Key Entry
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Save key (overrides env var for this session) |
+| `Esc` | Cancel |
+| `Backspace` | Delete last character |
+
+### Help Screen
+
+| Key | Action |
+|-----|--------|
+| `Up` / `Down` | Scroll help text |
+| `Esc` | Close help screen |
 
 ### Mouse Controls
-- Scroll wheel: Navigate through the Saved Texts list
+
+| Action | Effect |
+|--------|--------|
+| Click on item | Select that item and focus its panel |
+| Scroll wheel over Saved Texts or Voices | Scroll the list |
+| Scroll wheel over Logs | Scroll log history |

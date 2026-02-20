@@ -28,12 +28,25 @@ pub async fn fetch_audio_for_playback(
     let audio_data;
     let is_cached;
 
+    let short_name = cache_file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| {
+            let chars: Vec<char> = n.chars().collect();
+            if chars.len() > 12 {
+                format!("…{}", &chars[chars.len() - 12..].iter().collect::<String>())
+            } else {
+                n.to_string()
+            }
+        })
+        .unwrap_or_else(|| "?".to_string());
+
     if cache_file_path.exists() {
-        message = format!("Playing from cache: {}", cache_file_path.display());
+        message = format!("Playing from cache: {}", short_name);
         audio_data = tokio::fs::read(&cache_file_path).await?;
         is_cached = true;
     } else {
-        message = format!("Fetching from Deepgram and caching: {}", cache_file_path.display());
+        message = format!("Fetching from Deepgram, caching as: {}", short_name);
         audio_data = fetch_deepgram_tts(api_key, text, voice_id, speed, endpoint).await?;
         save_audio_to_cache(&cache_file_path, &audio_data).await?;
         is_cached = false;

@@ -6,7 +6,24 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, Panel, CurrentScreen, CurrentlyEditing, LogLevel, Gender};
+use crate::app::{App, Panel, CurrentScreen, LogLevel, LogEntry, Gender};
+
+// ── Deepgram brand palette ───────────────────────────────────────────────────
+const DG_SPRING_GREEN: Color       = Color::Rgb(19,  239, 147); // #13ef93 primary
+const DG_SPRING_GREEN_LIGHT: Color = Color::Rgb(161, 249, 212); // #a1f9d4
+#[allow(dead_code)]
+const DG_SPRING_GREEN_DARK: Color  = Color::Rgb(7,   84,  51);  // #075433
+const DG_AZURE: Color              = Color::Rgb(20,  154, 251); // #149afb secondary
+#[allow(dead_code)]
+const DG_AZURE_LIGHT: Color        = Color::Rgb(161, 215, 253); // #a1d7fd
+#[allow(dead_code)]
+const DG_MAGENTA: Color            = Color::Rgb(238, 2,   140); // #ee028c
+#[allow(dead_code)]
+const DG_VIOLET: Color             = Color::Rgb(174, 99,  249); // #ae63f9
+const DG_ERROR: Color              = Color::Rgb(240, 68,  56);  // #f04438
+const DG_WARNING: Color            = Color::Rgb(254, 200, 75);  // #fec84b
+const DG_SUCCESS: Color            = Color::Rgb(18,  183, 106); // #12b76a
+// ────────────────────────────────────────────────────────────────────────────
 
 pub fn render_ui(f: &mut Frame, app: &mut App) {
     let size = f.area();
@@ -31,7 +48,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         " Saved Texts "
     };
     let text_block_style = if app.focused_panel == Panel::TextList {
-        Style::default().fg(ratatui::style::Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default().fg(DG_AZURE).add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
@@ -88,7 +105,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         }
     };
     let voice_block_style = if app.focused_panel == Panel::VoiceMenu {
-        Style::default().fg(ratatui::style::Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default().fg(DG_AZURE).add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
@@ -138,50 +155,67 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     f.render_stateful_widget(voice_list, main_chunks[1], &mut app.voice_menu_state);
 
     // Render Logs Panel
-    let logs_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .title(" Logs ");
+    let logs_area = chunks[1];
+    app.log_panel_bounds = logs_area;
 
-    let log_lines: Vec<Line> = app.logs
+    // Build all rendered lines newest-first
+    let all_log_lines: Vec<Line> = app.logs
         .iter()
         .rev()
-        .flat_map(|(level, message)| {
-            let (icon, color) = match level {
-                LogLevel::Success => ("✓", Color::Green),
-                LogLevel::Error => ("✗", Color::Red),
-                LogLevel::Info => ("ℹ", Color::Blue),
+        .flat_map(|entry: &LogEntry| {
+            let (icon, color) = match entry.level {
+                LogLevel::Success => ("✓", DG_SUCCESS),
+                LogLevel::Error   => ("✗", DG_ERROR),
+                LogLevel::Warning => ("⚠", DG_WARNING),
+                LogLevel::Info    => ("ℹ", DG_AZURE),
             };
-
-            // Create a prefix for each line
-            let prefix = format!("{} ", icon);
-
-            // Split message into lines if it's already multiline
-            let message_lines: Vec<String> = message.lines().map(|s| s.to_string()).collect();
-
-            // Return styled lines
-            message_lines.into_iter().enumerate().map(|(i, line)| {
+            let ts = entry.timestamp.format("%H:%M:%S").to_string();
+            let message_lines: Vec<String> = entry.message.lines().map(|s| s.to_string()).collect();
+            message_lines.into_iter().enumerate().map(move |(i, line)| {
                 if i == 0 {
-                    // First line gets the icon
-                    Line::from(Span::styled(
-                        format!("{}{}", prefix, line),
-                        Style::default().fg(color),
-                    ))
+                    Line::from(vec![
+                        Span::styled(format!("{} {} ", ts, icon), Style::default().fg(Color::DarkGray)),
+                        Span::styled(line, Style::default().fg(color)),
+                    ])
                 } else {
-                    // Subsequent lines are indented
-                    Line::from(Span::styled(
-                        format!("  {}", line),
-                        Style::default().fg(color),
-                    ))
+                    Line::from(Span::styled(format!("         {}", line), Style::default().fg(color)))
                 }
             }).collect::<Vec<Line>>()
         })
         .collect();
 
-    let logs_paragraph = Paragraph::new(log_lines)
+    // Clamp scroll offset so we can't scroll past the oldest entry
+    let visible_rows = logs_area.height.saturating_sub(2) as usize; // subtract borders
+    let max_offset = all_log_lines.len().saturating_sub(visible_rows);
+    let scroll_offset = app.log_scroll_offset.min(max_offset);
+    app.log_scroll_offset = scroll_offset;
+
+    let logs_title = if scroll_offset > 0 {
+        format!(" Logs (scrolled +{}) ", scroll_offset)
+    } else {
+        " Logs ".to_string()
+    };
+
+    let logs_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(logs_title);
+
+    let logs_paragraph = Paragraph::new(all_log_lines.clone())
         .block(logs_block)
+        .scroll((scroll_offset as u16, 0))
         .wrap(Wrap { trim: false });
-    f.render_widget(logs_paragraph, chunks[1]);
+    f.render_widget(logs_paragraph, logs_area);
+
+    // Scrollbar for logs
+    if all_log_lines.len() > visible_rows {
+        let mut scrollbar_state = ratatui::widgets::ScrollbarState::default()
+            .content_length(all_log_lines.len())
+            .position(scroll_offset);
+        let scrollbar = Scrollbar::default()
+            .orientation(ScrollbarOrientation::VerticalRight);
+        f.render_stateful_widget(scrollbar, logs_area, &mut scrollbar_state);
+    }
 
     // Status bar at the bottom
     let status_block = Block::default()
@@ -201,7 +235,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             Line::from(vec![
                 Span::styled(
                     format!("{} ", progress_bar),
-                    Style::default().fg(Color::Rgb(19, 239, 147))
+                    Style::default().fg(DG_SPRING_GREEN)
                 ),
                 Span::raw(format!("Speed: {:.2}x | Playing ({:.1}s / {:.1}s) | Press ESC to stop",
                     app.playback_speed, elapsed as f64 / 1000.0, total as f64 / 1000.0)),
@@ -211,7 +245,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             Line::from(vec![
                 Span::styled(
                     format!("{} ", app.get_spinner_char()),
-                    Style::default().fg(Color::Rgb(19, 239, 147)) // Deepgram green
+                    Style::default().fg(DG_SPRING_GREEN)
                 ),
                 Span::raw(format!("Generating audio... | Speed: {:.2}x", app.playback_speed)),
             ])
@@ -226,21 +260,116 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     f.render_widget(status_text, chunks[2]);
 
     // Render Popup for Editing Text
-    if let Some(CurrentlyEditing::Text) = &app.currently_editing {
+    if app.current_screen == CurrentScreen::Editing {
         let popup_block = Block::default()
             .title(" Enter New Text ")
             .borders(Borders::ALL)
-            .style(Style::default().bg(ratatui::style::Color::DarkGray));
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(DG_SPRING_GREEN))
+            .style(Style::default().bg(Color::DarkGray));
 
         let area = centered_rect(60, 20, size);
         f.render_widget(Clear, area); // Clear the area under the popup
 
         let input_paragraph = Paragraph::new(app.input_buffer.clone())
             .block(popup_block)
-            .style(Style::default().fg(ratatui::style::Color::White))
+            .style(Style::default().fg(DG_SPRING_GREEN_LIGHT))
             .wrap(Wrap { trim: false });
 
         f.render_widget(input_paragraph, area);
+    }
+
+    // Render Voice Filter Popup
+    if app.current_screen == CurrentScreen::VoiceFilter {
+        let area = centered_rect(50, 20, size);
+        f.render_widget(Clear, area);
+
+        let hint = if app.voice_filter_buffer.is_empty() {
+            " Filter Voices — Enter to apply, Esc to cancel ".to_string()
+        } else {
+            format!(" Filter Voices — {} match(es) ", app.get_filtered_voices_for_buffer().len())
+        };
+
+        let popup_block = Block::default()
+            .title(hint)
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .style(Style::default().bg(Color::DarkGray))
+            .border_style(Style::default().fg(DG_AZURE));
+
+        // Show buffer with a blinking-cursor indicator
+        let display = format!("{}_", app.voice_filter_buffer);
+        let input_paragraph = Paragraph::new(display)
+            .block(popup_block)
+            .style(Style::default().fg(DG_AZURE_LIGHT))
+            .wrap(Wrap { trim: false });
+
+        f.render_widget(input_paragraph, area);
+
+        // Hint line below popup
+        let hint_area = Rect {
+            x: area.x,
+            y: area.y + area.height,
+            width: area.width,
+            height: 1,
+        };
+        if hint_area.y < size.height {
+            let shortcuts = Paragraph::new(Line::from(vec![
+                Span::styled(" Enter", Style::default().fg(DG_SUCCESS).add_modifier(Modifier::BOLD)),
+                Span::raw(" apply  "),
+                Span::styled("Esc", Style::default().fg(DG_WARNING).add_modifier(Modifier::BOLD)),
+                Span::raw(" cancel  "),
+                Span::styled("Ctrl+U", Style::default().fg(DG_ERROR).add_modifier(Modifier::BOLD)),
+                Span::raw(" clear "),
+            ]));
+            f.render_widget(shortcuts, hint_area);
+        }
+    }
+
+    // Render Popup for API Key Input
+    if app.current_screen == CurrentScreen::ApiKeyInput {
+        let title = Line::from(vec![
+            Span::styled(" Set Deepgram API Key ", Style::default().fg(DG_WARNING).add_modifier(Modifier::BOLD)),
+            Span::styled("(input hidden) ", Style::default().fg(Color::DarkGray)),
+        ]);
+
+        let popup_block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(DG_WARNING))
+            .style(Style::default().bg(Color::DarkGray));
+
+        let area = centered_rect_fixed(60, 5, size);
+        f.render_widget(Clear, area);
+
+        // Mask the key input for security
+        let char_count = app.api_key_input_buffer.len();
+        let masked = if char_count == 0 {
+            Span::styled("Enter API key…", Style::default().fg(Color::DarkGray))
+        } else {
+            Span::styled(
+                format!("{}_", "*".repeat(char_count)),
+                Style::default().fg(DG_WARNING),
+            )
+        };
+        let input_paragraph = Paragraph::new(Line::from(masked))
+            .block(popup_block)
+            .wrap(Wrap { trim: false });
+
+        f.render_widget(input_paragraph, area);
+
+        // Hint row below popup
+        let hint_area = Rect { x: area.x, y: area.y + area.height, width: area.width, height: 1 };
+        if hint_area.y < size.height {
+            let hints = Paragraph::new(Line::from(vec![
+                Span::styled(" Enter", Style::default().fg(DG_SUCCESS).add_modifier(Modifier::BOLD)),
+                Span::raw(" save  "),
+                Span::styled("Esc", Style::default().fg(DG_ERROR).add_modifier(Modifier::BOLD)),
+                Span::raw(" cancel "),
+            ]));
+            f.render_widget(hints, hint_area);
+        }
     }
 
     // Render Help Screen
@@ -253,6 +382,8 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             "  Ctrl+Q    - Quit application (from any panel)",
             "  n         - Add new text",
             "  d         - Delete selected text",
+            "  k         - Set Deepgram API key interactively",
+            "  o         - Open audio cache folder in Finder",
             "  Enter     - Play selected text with selected voice",
             "  Up/Down   - Navigate text list or voice menu",
             "  Left      - Focus previous panel",
@@ -261,12 +392,24 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             "  -         - Decrease playback speed",
             "  0         - Reset speed to 1.0x",
             "  Esc       - Stop audio playback or clear voice filter",
+            "  /         - Open voice filter popup",
             "  ?         - Show this help screen",
+            "",
+            "Voice Filter Popup:",
+            "  Type      - Narrow voice list (name, language, model)",
+            "  Enter     - Apply filter and close",
+            "  Esc       - Cancel (keeps previous filter)",
+            "  Ctrl+U    - Clear filter text",
             "",
             "Text Entry Screen:",
             "  Enter     - Save text",
             "  Esc       - Cancel",
             "  Ctrl+V    - Paste from clipboard",
+            "  Backspace - Delete character",
+            "",
+            "API Key Screen:",
+            "  Enter     - Save API key",
+            "  Esc       - Cancel",
             "  Backspace - Delete character",
             "",
             "Help Screen:",
@@ -277,7 +420,9 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         let help_block = Block::default()
             .title(" Help (scroll with Up/Down) ")
             .borders(Borders::ALL)
-            .style(Style::default().bg(ratatui::style::Color::DarkGray));
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(DG_SPRING_GREEN))
+            .style(Style::default().bg(Color::DarkGray));
 
         let area = centered_rect(70, 60, size);
         f.render_widget(Clear, area);
@@ -291,7 +436,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
 
         let help_paragraph = Paragraph::new(displayed_lines.join("\n"))
             .block(help_block)
-            .style(Style::default().fg(ratatui::style::Color::White));
+            .style(Style::default().fg(DG_SPRING_GREEN_LIGHT));
 
         f.render_widget(help_paragraph, area);
 
@@ -307,6 +452,28 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
         }
     }
+}
+
+/// Helper that centers a rect with a percentage width but a fixed row height.
+fn centered_rect_fixed(percent_x: u16, height: u16, r: Rect) -> Rect {
+    let top_pad = r.height.saturating_sub(height) / 2;
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(top_pad),
+            Constraint::Length(height),
+            Constraint::Min(0),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 /// helper function to create a centered rect using up certain percentage of the available rect `r`

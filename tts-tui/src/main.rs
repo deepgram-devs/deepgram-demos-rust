@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod ui;
 mod tts;
 mod persistence;
@@ -19,9 +20,9 @@ use clap::Parser;
 #[command(about = "A Deepgram TTS terminal user interface")]
 #[command(version)]
 struct Args {
-    /// Custom Deepgram API endpoint URL for TTS
-    #[arg(long, env = "DEEPGRAM_TTS_ENDPOINT", default_value = "https://api.deepgram.com/v1/speak")]
-    endpoint: String,
+    /// Custom Deepgram API endpoint URL for TTS (overrides config file and env var)
+    #[arg(long, env = "DEEPGRAM_TTS_ENDPOINT")]
+    endpoint_override: Option<String>,
 }
 
 #[tokio::main]
@@ -34,8 +35,12 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create app and run it
-    let mut app = App::new(args.endpoint);
+    // Load config, then create app
+    let app_config = config::load();
+    let endpoint = args.endpoint_override
+        .or_else(|| app_config.api.endpoint.clone())
+        .unwrap_or_else(|| "https://api.deepgram.com/v1/speak".to_string());
+    let mut app = App::new(endpoint, app_config);
     let res = run_app(&mut terminal, &mut app).await;
 
     // Restore terminal
@@ -102,6 +107,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         KeyCode::Char('?') => {
                             app.show_help_screen();
                         }
+                        KeyCode::Char('k') => {
+                            app.enter_api_key_mode();
+                        }
+                        KeyCode::Char('o') => {
+                            app.open_audio_cache_in_finder();
+                        }
                         KeyCode::Char('n') => {
                             if app.focused_panel == app::Panel::TextList {
                                 app.enter_input_mode();
@@ -142,7 +153,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                             if let Some(selected_text) = app.get_selected_text() {
                                 if let Some(selected_voice) = app.get_selected_voice() {
                                     let voice_id = selected_voice.id.clone();
-                                    match tts::get_deepgram_api_key() {
+                                    let api_key_result = if let Some(ref key) = app.api_key_override {
+                                        Ok(key.clone())
+                                    } else {
+                                        tts::get_deepgram_api_key()
+                                    };
+                                    match api_key_result {
                                         Ok(dg_api_key) => {
                                             // Stop any existing audio playback before starting new clip
                                             if app.audio_sink.is_some() {
@@ -196,11 +212,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                                 }
                             }
                         }
-                        KeyCode::Char(c) => {
-                            if app.focused_panel == app::Panel::VoiceMenu {
-                                app.voice_filter.push(c);
-                                app.voice_menu_state.select(Some(0));
-                            }
+                        KeyCode::Char('/') => {
+                            app.enter_voice_filter_mode();
                         }
                         _ => {}
                     },
@@ -227,10 +240,43 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                             app.exit_help_screen();
                         }
                         KeyCode::Up => {
-                            app.scroll_help(-1, 21); // 21 help lines
+                            app.scroll_help(-1, 42); // 42 help lines
                         }
                         KeyCode::Down => {
-                            app.scroll_help(1, 21);
+                            app.scroll_help(1, 42);
+                        }
+                        _ => {}
+                    },
+                    CurrentScreen::ApiKeyInput => match key.code {
+                        KeyCode::Enter => {
+                            app.save_api_key();
+                        }
+                        KeyCode::Esc => {
+                            app.exit_api_key_mode();
+                        }
+                        KeyCode::Backspace => {
+                            app.api_key_input_buffer.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app.api_key_input_buffer.push(c);
+                        }
+                        _ => {}
+                    },
+                    CurrentScreen::VoiceFilter => match key.code {
+                        KeyCode::Enter => {
+                            app.apply_voice_filter();
+                        }
+                        KeyCode::Esc => {
+                            app.cancel_voice_filter();
+                        }
+                        KeyCode::Backspace => {
+                            app.voice_filter_buffer.pop();
+                        }
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.clear_voice_filter_buffer();
+                        }
+                        KeyCode::Char(c) => {
+                            app.voice_filter_buffer.push(c);
                         }
                         _ => {}
                     },
@@ -238,12 +284,25 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                 }
                 CrosstermEvent::Mouse(mouse) => {
                     if app.current_screen == CurrentScreen::Main {
+                        let over_logs = {
+                            let b = app.log_panel_bounds;
+                            mouse.column >= b.x && mouse.column < b.x + b.width
+                                && mouse.row >= b.y && mouse.row < b.y + b.height
+                        };
                         match mouse.kind {
                             MouseEventKind::ScrollUp => {
-                                app.scroll_text_list(-1);
+                                if over_logs {
+                                    app.scroll_logs(1);
+                                } else {
+                                    app.scroll_text_list(-1);
+                                }
                             }
                             MouseEventKind::ScrollDown => {
-                                app.scroll_text_list(1);
+                                if over_logs {
+                                    app.scroll_logs(-1);
+                                } else {
+                                    app.scroll_text_list(1);
+                                }
                             }
                             MouseEventKind::Down(_) => {
                                 app.handle_mouse_click(mouse.column, mouse.row);
