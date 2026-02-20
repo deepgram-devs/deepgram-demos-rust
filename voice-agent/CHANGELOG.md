@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.1] - 2026-02-20
+
+### Fixed
+- Corrected server message type names to match the Deepgram Voice Agent API (`ConversationText` with `role`/`content` fields, `AgentThinking`, `AgentStartedSpeaking`, etc.) — transcripts were silently dropped due to mismatched names
+- Fixed default log level so conversational output appears without setting `RUST_LOG` (was broken due to `filter_level` being overridden by `from_default_env`)
+- Demoted all operational/diagnostic log entries to `debug` level; default output now shows only conversation transcripts and essential status
+- Added proper `error!`/`warn!` handling for `Error` and `Warning` messages from the API
+- Removed unused `base64` dependency
+
 ## [0.2.0] - 2026-02-20
 
 ### Added

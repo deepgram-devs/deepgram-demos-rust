@@ -5,8 +5,7 @@ use std::time::Duration;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig, SampleFormat};
 use futures_util::{SinkExt, StreamExt};
-use log::{error, info};
-use base64::{Engine as _, engine::general_purpose};
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use std::sync::mpsc as std_mpsc;
@@ -162,10 +161,10 @@ impl AudioCapture {
             .default_input_device()
             .ok_or("No input device available")?;
         
-        info!("Input device: {}", device.name()?);
-        
+        debug!("Input device: {}", device.name()?);
+
         let supported_config = device.default_input_config()?;
-        info!("Default input config: {:?}", supported_config);
+        debug!("Default input config: {:?}", supported_config);
         
         let sample_format = supported_config.sample_format();
         let config: StreamConfig = supported_config.into();
@@ -251,7 +250,7 @@ impl AudioPlayer {
                         // Audio is actively playing — keep mic disabled and reset timer
                         if mic_enabled_clone.load(Ordering::Relaxed) {
                             mic_enabled_clone.store(false, Ordering::Relaxed);
-                            info!("🎤 Microphone disabled — audio playing");
+                            debug!("🎤 Microphone disabled — audio playing");
                         }
                         playback_ended_at = None;
                     } else {
@@ -261,13 +260,13 @@ impl AudioPlayer {
                                 // If mic is still disabled, audio just finished — start the silence timer
                                 if !mic_enabled_clone.load(Ordering::Relaxed) {
                                     playback_ended_at = Some(Instant::now());
-                                    info!("🔊 Audio playback ended, waiting 600ms before re-enabling mic");
+                                    debug!("🔊 Audio playback ended, waiting 600ms before re-enabling mic");
                                 }
                             }
                             Some(ended_at) => {
                                 if ended_at.elapsed() >= Duration::from_millis(600) {
                                     mic_enabled_clone.store(true, Ordering::Relaxed);
-                                    info!("🎤 Microphone re-enabled after 600ms of silence");
+                                    debug!("🎤 Microphone re-enabled after 600ms of silence");
                                     playback_ended_at = None;
                                 }
                             }
@@ -286,7 +285,7 @@ impl AudioPlayer {
     }
 
     fn play_audio(&self, audio_data: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
-        info!("🔊 Received audio data for playback: {} bytes", audio_data.len());
+        debug!("🔊 Received audio data for playback: {} bytes", audio_data.len());
 
         if audio_data.is_empty() {
             return Ok(());
@@ -365,9 +364,9 @@ async fn connect_to_voice_agent(api_key: &str, endpoint: &str, _sample_rate: u32
         .header("Sec-WebSocket-Version", "13")
         .body(())?;
     
-    info!("Connecting to Deepgram Voice Agent WebSocket...");
+    debug!("Connecting to Deepgram Voice Agent WebSocket...");
     let (ws_stream, _response) = connect_async(request).await?;
-    info!("Connected to Deepgram Voice Agent successfully");
+    debug!("Connected to Deepgram Voice Agent successfully");
     
     Ok(ws_stream)
 }
@@ -439,64 +438,62 @@ async fn handle_voice_agent_responses(
             Ok(Message::Text(text)) => {
                 match serde_json::from_str::<VoiceAgentResponse>(&text) {
                     Ok(response) => {
-                        info!("📨 Message Type: {}", response.message_type);
-                        
+                        debug!("📨 Message Type: {}", response.message_type);
+
                         match response.message_type.as_str() {
-                            "agent_audio" => {
-                                info!("🔊 Received audio from agent");
-                                if mute_on_playback {
-                                    mic_enabled.store(false, Ordering::Relaxed);
-                                    info!("🎤 Microphone disabled immediately upon receiving audio");
-                                }
-                                
-                                // Audio data should be in the response, but the exact format depends on the API
-                                // This is a placeholder - you'll need to extract the actual audio data
-                                if let Some(audio_data) = response.data.get("audio") {
-                                    if let Some(audio_str) = audio_data.as_str() {
-                                        // Decode base64 audio data
-                                        if let Ok(decoded_audio) = general_purpose::STANDARD.decode(audio_str) {
-                                            if let Err(e) = audio_tx.send(decoded_audio) {
-                                                error!("Failed to send audio to player: {}", e);
-                                            }
-                                        }
-                                    }
+                            "ConversationText" => {
+                                let role = response.data.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                                let content = response.data.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                                match role {
+                                    "user" => info!("👤 You: {}", content),
+                                    "assistant" => info!("🤖 Agent: {}", content),
+                                    _ => debug!("ConversationText ({}): {}", role, content),
                                 }
                             }
-                            "agent_transcript" => {
-                                if let Some(transcript) = response.data.get("transcript") {
-                                    info!("🤖 Agent: {}", transcript.as_str().unwrap_or(""));
-                                }
+                            "AgentThinking" => {
+                                debug!("🤔 Agent is thinking...");
                             }
-                            "user_transcript" => {
-                                if let Some(transcript) = response.data.get("transcript") {
-                                    info!("👤 You: {}", transcript.as_str().unwrap_or(""));
-                                }
+                            "AgentStartedSpeaking" => {
+                                debug!("🗣️ Agent is speaking...");
                             }
-                            "agent_thinking" => {
-                                info!("🤔 Agent is thinking...");
+                            "UserStartedSpeaking" => {
+                                debug!("🎙️ User started speaking");
                             }
-                            "agent_speaking" => {
-                                info!("🗣️ Agent is speaking...");
+                            "AgentAudioDone" => {
+                                debug!("🔊 Agent audio done");
+                            }
+                            "Welcome" => {
+                                debug!("👋 Connected: request_id={}", response.data.get("request_id").and_then(|v| v.as_str()).unwrap_or(""));
                             }
                             "SettingsApplied" => {
-                                info!("✅ Settings have been applied successfully by the server");
+                                debug!("✅ Settings applied");
+                            }
+                            "Error" => {
+                                let desc = response.data.get("description").and_then(|v| v.as_str()).unwrap_or("unknown");
+                                let code = response.data.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                                error!("❌ Agent error [{}]: {}", code, desc);
+                            }
+                            "Warning" => {
+                                let desc = response.data.get("description").and_then(|v| v.as_str()).unwrap_or("unknown");
+                                let code = response.data.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                                log::warn!("⚠️ Agent warning [{}]: {}", code, desc);
                             }
                             _ => {
-                                info!("📄 Response: {}", serde_json::to_string_pretty(&response.data).unwrap_or_default());
+                                debug!("📄 {}: {}", response.message_type, serde_json::to_string_pretty(&response.data).unwrap_or_default());
                             }
                         }
                     }
                     Err(e) => {
                         error!("Failed to parse response: {}", e);
-                        info!("📨 Raw response: {}", text);
+                        debug!("📨 Raw response: {}", text);
                     }
                 }
             }
             Ok(Message::Binary(data)) => {
-                info!("🔊 Received binary audio data: {} bytes", data.len());
+                debug!("🔊 Received binary audio data: {} bytes", data.len());
                 if mute_on_playback {
                     mic_enabled.store(false, Ordering::Relaxed);
-                    info!("🎤 Microphone disabled immediately upon receiving binary audio");
+                    debug!("🎤 Microphone disabled immediately upon receiving binary audio");
                 }
                 
                 // Handle binary audio data directly
@@ -505,17 +502,17 @@ async fn handle_voice_agent_responses(
                 }
             }
             Ok(Message::Close(frame)) => {
-                info!("📨 WebSocket connection closed");
+                debug!("📨 WebSocket connection closed");
                 if let Some(frame) = frame {
-                    info!("Close frame: code={}, reason={}", frame.code, frame.reason);
+                    debug!("Close frame: code={}, reason={}", frame.code, frame.reason);
                 }
                 break;
             }
             Ok(Message::Ping(_)) => {
-                info!("📨 Received ping");
+                debug!("📨 Received ping");
             }
             Ok(Message::Pong(_)) => {
-                info!("📨 Received pong");
+                debug!("📨 Received pong");
             }
             Err(e) => {
                 error!("WebSocket error: {}", e);
@@ -531,10 +528,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command-line arguments
     let args = Args::parse();
     
-    // Initialize logging to output to terminal
-    env_logger::Builder::from_default_env()
+    // Initialize logging; defaults to "info" but RUST_LOG overrides (e.g. RUST_LOG=debug)
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Stdout)
-        .filter_level(log::LevelFilter::Info)
         .init();
     
     // Load environment variables
@@ -544,14 +540,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
     
     info!("Starting Deepgram Voice Agent...");
-    info!("Using endpoint: {}", args.endpoint);
+    debug!("Using endpoint: {}", args.endpoint);
     
     // Initialize audio capture
     let audio_capture = AudioCapture::new()?;
     let sample_rate = audio_capture.config.sample_rate.0;
     let channels = audio_capture.config.channels;
     
-    info!("Audio config - Sample rate: {}, Channels: {}", sample_rate, channels);
+    debug!("Audio config - Sample rate: {}, Channels: {}", sample_rate, channels);
     
     // Create microphone control flag - start with mic enabled
     let mic_enabled = Arc::new(AtomicBool::new(true));
@@ -586,7 +582,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start audio capture with microphone control
     let mic_enabled_for_capture = Arc::clone(&mic_enabled);
     let _stream = audio_capture.start_capture(audio_tx, mic_enabled_for_capture)?;
-    info!("Audio capture started");
+    debug!("Audio capture started");
     
     // Connect to Deepgram Voice Agent
     let ws_stream = connect_to_voice_agent(&api_key, &args.endpoint, sample_rate, channels).await?;
@@ -603,7 +599,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &args.think_header
     );
     let config_json = serde_json::to_string(&config)?;
-    info!("📤 Sending Settings configuration to WebSocket...");
+    debug!("📤 Sending Settings configuration to WebSocket...");
     
     if args.verbose {
         // Print the entire JSON Settings message with pretty formatting
@@ -612,7 +608,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     ws_sender.send(Message::Text(config_json.into())).await?;
-    info!("✅ Settings configuration sent successfully");
+    debug!("✅ Settings configuration sent successfully");
     
     // Wait a moment for configuration to be processed
     sleep(Duration::from_millis(500)).await;
@@ -642,7 +638,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             // Log every 100 packets to avoid spam
             if packet_count % 100 == 0 {
-                info!("📤 Sent {} audio packets to WebSocket", packet_count);
+                debug!("📤 Sent {} audio packets to WebSocket", packet_count);
             }
         }
     });
@@ -650,10 +646,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wait for either task to complete or for Ctrl+C
     tokio::select! {
         _ = response_handle => {
-            info!("Response handler completed");
+            debug!("Response handler completed");
         }
         _ = audio_handle => {
-            info!("Audio handler completed");
+            debug!("Audio handler completed");
         }
         _ = tokio::signal::ctrl_c() => {
             info!("Received Ctrl+C, shutting down...");
