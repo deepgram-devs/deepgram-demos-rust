@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, Panel, CurrentScreen, LogLevel, LogEntry, Gender};
+use crate::app::{App, Panel, CurrentScreen, LogLevel, LogEntry, Gender, AUDIO_FORMATS, DEFAULT_FORMAT_INDEX};
 
 // ── Deepgram brand palette ───────────────────────────────────────────────────
 const DG_SPRING_GREEN: Color       = Color::Rgb(19,  239, 147); // #13ef93 primary
@@ -14,9 +14,7 @@ const DG_SPRING_GREEN_LIGHT: Color = Color::Rgb(161, 249, 212); // #a1f9d4
 #[allow(dead_code)]
 const DG_SPRING_GREEN_DARK: Color  = Color::Rgb(7,   84,  51);  // #075433
 const DG_AZURE: Color              = Color::Rgb(20,  154, 251); // #149afb secondary
-#[allow(dead_code)]
 const DG_AZURE_LIGHT: Color        = Color::Rgb(161, 215, 253); // #a1d7fd
-#[allow(dead_code)]
 const DG_MAGENTA: Color            = Color::Rgb(238, 2,   140); // #ee028c
 #[allow(dead_code)]
 const DG_VIOLET: Color             = Color::Rgb(174, 99,  249); // #ae63f9
@@ -75,7 +73,11 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             let style = if is_selected && app.focused_panel == Panel::TextList {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
-                Style::default()
+                let dist = app.text_table_state.selected()
+                    .map(|sel| (i as isize - sel as isize).unsigned_abs())
+                    .unwrap_or(0);
+                // Spring Green Light → muted green
+                Style::default().fg(fade_color((161, 249, 212), (60, 110, 80), dist, 12))
             };
             Row::new(vec![Cell::from(display_text)]).style(style)
         })
@@ -134,7 +136,11 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             let style = if app.voice_menu_state.selected() == Some(item_index) && app.focused_panel == Panel::VoiceMenu {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
-                Style::default()
+                let dist = app.voice_menu_state.selected()
+                    .map(|sel| (item_index as isize - sel as isize).unsigned_abs())
+                    .unwrap_or(0);
+                // Azure Light → muted blue
+                Style::default().fg(fade_color((161, 215, 253), (50, 90, 130), dist, 12))
             };
             let gender_indicator = match voice.gender {
                 Gender::Male => "♂",
@@ -237,8 +243,9 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                     format!("{} ", progress_bar),
                     Style::default().fg(DG_SPRING_GREEN)
                 ),
-                Span::raw(format!("Speed: {:.2}x | Playing ({:.1}s / {:.1}s) | Press ESC to stop",
-                    app.playback_speed, elapsed as f64 / 1000.0, total as f64 / 1000.0)),
+                Span::raw(format!("Speed: {:.2}x | {} | {} Hz | Playing ({:.1}s / {:.1}s) | Press ESC to stop",
+                    app.playback_speed, app.current_audio_format().display_name, app.sample_rate,
+                    elapsed as f64 / 1000.0, total as f64 / 1000.0)),
             ])
         } else {
             // Show spinner when loading but duration not available yet
@@ -247,12 +254,15 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                     format!("{} ", app.get_spinner_char()),
                     Style::default().fg(DG_SPRING_GREEN)
                 ),
-                Span::raw(format!("Generating audio... | Speed: {:.2}x", app.playback_speed)),
+                Span::raw(format!("Generating audio... | Speed: {:.2}x | {} | {} Hz",
+                    app.playback_speed, app.current_audio_format().display_name, app.sample_rate)),
             ])
         }
     } else {
         Line::from(vec![
-            Span::raw(format!("Speed: {:.2}x | {}", app.playback_speed, app.status_message)),
+            Span::raw(format!("Speed: {:.2}x | {} | {} Hz | {}",
+                app.playback_speed, app.current_audio_format().display_name,
+                app.sample_rate, app.status_message)),
         ])
     };
 
@@ -391,6 +401,8 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             "  +/=       - Increase playback speed",
             "  -         - Decrease playback speed",
             "  0         - Reset speed to 1.0x",
+            "  f         - Select audio encoding format",
+            "  s         - Select TTS sample rate",
             "  Esc       - Stop audio playback or clear voice filter",
             "  /         - Open voice filter popup",
             "  ?         - Show this help screen",
@@ -452,6 +464,111 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
         }
     }
+
+    // ── Sample Rate Select Popup ──────────────────────────────────────────────
+    if app.current_screen == CurrentScreen::SampleRateSelect {
+        let fmt = app.current_audio_format();
+        let popup_height = fmt.valid_sample_rates.len() as u16 + 4; // items + border + hint
+        let area = centered_rect_fixed(44, popup_height, size);
+        f.render_widget(Clear, area);
+
+        let items: Vec<ListItem> = fmt.valid_sample_rates.iter().enumerate().map(|(i, &rate)| {
+            let is_selected = app.sample_rate_menu_state.selected() == Some(i);
+            let is_default = rate == fmt.default_sample_rate;
+            let label = if is_default {
+                format!("{} Hz (default)", rate)
+            } else {
+                format!("{} Hz", rate)
+            };
+            let style = if is_selected {
+                Style::default().fg(DG_VIOLET).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            } else {
+                Style::default().fg(DG_AZURE_LIGHT)
+            };
+            ListItem::new(label).style(style)
+        }).collect();
+
+        let popup_block = Block::default()
+            .title(format!(" Sample Rate — {} ", fmt.display_name))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(DG_VIOLET));
+
+        let inner = popup_block.inner(area);
+        f.render_widget(popup_block, area);
+
+        // Split inner: list + hint row
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(inner);
+
+        let list = List::new(items);
+        f.render_stateful_widget(list, chunks[0], &mut app.sample_rate_menu_state);
+
+        let hint = Line::from(vec![
+            Span::styled(" Enter", Style::default().fg(DG_SUCCESS).add_modifier(Modifier::BOLD)),
+            Span::raw(" apply  "),
+            Span::styled("Esc", Style::default().fg(DG_ERROR).add_modifier(Modifier::BOLD)),
+            Span::raw(" cancel"),
+        ]);
+        f.render_widget(Paragraph::new(hint), chunks[1]);
+    }
+
+    // ── Audio Format Select Popup ─────────────────────────────────────────────
+    if app.current_screen == CurrentScreen::AudioFormatSelect {
+        let popup_height = AUDIO_FORMATS.len() as u16 + 4; // items + border + hint
+        let area = centered_rect_fixed(54, popup_height, size);
+        f.render_widget(Clear, area);
+
+        let items: Vec<ListItem> = AUDIO_FORMATS.iter().enumerate().map(|(i, fmt)| {
+            let is_selected = app.audio_format_menu_state.selected() == Some(i);
+            let is_default = i == DEFAULT_FORMAT_INDEX;
+            // Summarise valid sample rates for the format
+            let rates = fmt.valid_sample_rates;
+            let rate_summary = if rates.len() == 1 {
+                format!("{} Hz", rates[0])
+            } else {
+                format!("{}–{} kHz", rates[0] / 1000, rates[rates.len() - 1] / 1000)
+            };
+            let label = if is_default {
+                format!("{:<16} {}  (default)", fmt.display_name, rate_summary)
+            } else {
+                format!("{:<16} {}", fmt.display_name, rate_summary)
+            };
+            let style = if is_selected {
+                Style::default().fg(DG_MAGENTA).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            } else {
+                Style::default().fg(DG_SPRING_GREEN_LIGHT)
+            };
+            ListItem::new(label).style(style)
+        }).collect();
+
+        let popup_block = Block::default()
+            .title(" Audio Format ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(DG_MAGENTA));
+
+        let inner = popup_block.inner(area);
+        f.render_widget(popup_block, area);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(inner);
+
+        let list = List::new(items);
+        f.render_stateful_widget(list, chunks[0], &mut app.audio_format_menu_state);
+
+        let hint = Line::from(vec![
+            Span::styled(" Enter", Style::default().fg(DG_SUCCESS).add_modifier(Modifier::BOLD)),
+            Span::raw(" apply  "),
+            Span::styled("Esc", Style::default().fg(DG_ERROR).add_modifier(Modifier::BOLD)),
+            Span::raw(" cancel"),
+        ]);
+        f.render_widget(Paragraph::new(hint), chunks[1]);
+    }
 }
 
 /// Helper that centers a rect with a percentage width but a fixed row height.
@@ -474,6 +591,17 @@ fn centered_rect_fixed(percent_x: u16, height: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+/// Interpolates between `near` (distance 0) and `far` (distance >= `max_dist`).
+/// Used to make list items progressively dimmer the further they are from the selection.
+fn fade_color(near: (u8, u8, u8), far: (u8, u8, u8), distance: usize, max_dist: usize) -> Color {
+    let t = (distance as f32 / max_dist as f32).min(1.0);
+    Color::Rgb(
+        (near.0 as f32 + (far.0 as f32 - near.0 as f32) * t) as u8,
+        (near.1 as f32 + (far.1 as f32 - near.1 as f32) * t) as u8,
+        (near.2 as f32 + (far.2 as f32 - near.2 as f32) * t) as u8,
+    )
 }
 
 /// helper function to create a centered rect using up certain percentage of the available rect `r`

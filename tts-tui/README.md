@@ -1,6 +1,6 @@
 # TTS TUI (Text-to-Speech Terminal User Interface)
 
-A terminal user interface (TUI) built with Rust and Ratatui for interacting with the Deepgram Text-to-Speech API. Supports voice selection, voice filtering, audio caching, playback speed control, timestamped logs, and a persistent TOML configuration file, all styled with the Deepgram brand color palette.
+A terminal user interface (TUI) built with Rust and Ratatui for interacting with the Deepgram Text-to-Speech API. Supports voice selection, voice filtering, multi-format audio output, sample rate control, audio caching, playback speed control, timestamped logs, and a persistent TOML configuration file, all styled with the Deepgram brand color palette.
 
 ## Features
 
@@ -8,8 +8,10 @@ A terminal user interface (TUI) built with Rust and Ratatui for interacting with
 - Browse and filter voices by name, language, or model via a dedicated popup (`/`)
 - Add, delete, and persist text snippets to local storage
 - Audio caching — repeated playback is served from disk instantly
+- **Audio format selection** — choose MP3, Linear16 (WAV), μ-law, A-law, FLAC, or AAC via the `f` key
+- **Sample rate selection** — choose the output sample rate for the active format via the `s` key
 - Adjustable TTS playback speed (`+`/`-`/`0` keys)
-- Interactive API key entry — set or override the key at runtime without restarting
+- Interactive API key entry — set or override the key at runtime without restarting (`k`)
 - Open the audio cache folder in Finder with a single keystroke (`o`)
 - TOML configuration file at `~/.config/tts-tui.toml` with inline documentation
 - Experimental feature flags via config file or environment variables
@@ -71,6 +73,38 @@ cargo run
 # endpoint = "https://selfhosted.example.com/v1/speak"
 ```
 
+### Audio Format and Sample Rate
+
+The output encoding and sample rate can be set via CLI, environment variable, or config file:
+
+```bash
+# CLI flags
+cargo run -- --audio-format flac --sample-rate 48000
+
+# Environment variables
+export DEEPGRAM_AUDIO_FORMAT=linear16
+export DEEPGRAM_SAMPLE_RATE=24000
+cargo run
+
+# Config file (~/.config/tts-tui.toml)
+# [audio]
+# format = "flac"
+# sample_rate = 48000
+```
+
+Supported formats and their valid sample rates:
+
+| Format | Encoding value | Valid sample rates |
+|--------|---------------|-------------------|
+| MP3 | `mp3` | 22050 Hz |
+| Linear16 (WAV) | `linear16` | 8000, 16000, 24000, 32000, 48000 Hz |
+| μ-law | `mulaw` | 8000, 16000 Hz |
+| A-law | `alaw` | 8000, 16000 Hz |
+| FLAC | `flac` | 8000, 16000, 22050, 32000, 48000 Hz |
+| AAC | `aac` | 22050 Hz |
+
+You can also change format and sample rate interactively with the `f` and `s` keys while the app is running. Switching formats automatically snaps the sample rate to a valid value if needed.
+
 ### Experimental Feature Flags
 
 In-development features can be enabled in `~/.config/tts-tui.toml`:
@@ -106,13 +140,15 @@ TTS_TUI_FEATURE_SSML_SUPPORT=true cargo run
 | `k` | Set Deepgram API key interactively |
 | `o` | Open audio cache folder in Finder |
 | `/` | Open voice filter popup |
+| `f` | Select audio encoding format |
+| `s` | Select output sample rate |
 | `Up` / `Down` | Navigate Saved Texts or Voices list |
 | `Left` | Focus previous panel |
 | `Right` / `Tab` | Focus next panel |
 | `+` / `=` | Increase playback speed |
 | `-` | Decrease playback speed |
 | `0` | Reset playback speed to 1.0x |
-| `Esc` | Stop audio playback / clear voice filter |
+| `Esc` | Stop audio playback / close popup |
 
 ### Voice Filter Popup
 
@@ -149,6 +185,16 @@ Press `/` to open. Filter matches on voice name, language, or model.
 |-----|--------|
 | `Up` / `Down` | Scroll help text |
 | `Esc` | Close help screen |
+
+### Audio Format / Sample Rate Popups
+
+Press `f` or `s` to open. Arrow keys navigate; `Enter` applies; `Esc` cancels.
+
+| Key | Action |
+|-----|--------|
+| `Up` / `Down` | Navigate options |
+| `Enter` | Apply selection and close popup |
+| `Esc` | Cancel without changing the current setting |
 
 ### Mouse Controls
 

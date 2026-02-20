@@ -10,6 +10,9 @@ pub struct AppConfig {
     pub api: ApiConfig,
 
     #[serde(default)]
+    pub audio: AudioConfig,
+
+    #[serde(default)]
     pub experimental: ExperimentalFlags,
 }
 
@@ -24,6 +27,28 @@ pub struct ApiConfig {
     /// Valid values: any valid HTTPS URL pointing to a Deepgram-compatible TTS endpoint.
     /// Default: "https://api.deepgram.com/v1/speak"
     pub endpoint: Option<String>,
+}
+
+/// Audio output settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioConfig {
+    /// TTS audio encoding format.
+    /// Valid values: mp3, linear16, mulaw, alaw, opus, flac, aac
+    /// Overridden by --audio-format CLI flag or DEEPGRAM_AUDIO_FORMAT env var.
+    /// Default: mp3
+    pub format: Option<String>,
+
+    /// TTS output sample rate in Hz.
+    /// Valid values depend on the chosen format — see documentation.
+    /// Overridden by --sample-rate CLI flag or DEEPGRAM_SAMPLE_RATE env var.
+    /// Default: format-dependent (e.g. 22050 for mp3, 24000 for linear16)
+    pub sample_rate: Option<u32>,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self { format: None, sample_rate: None }
+    }
 }
 
 /// Feature flags for in-development functionality.
@@ -47,6 +72,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             api: ApiConfig::default(),
+            audio: AudioConfig::default(),
             experimental: ExperimentalFlags::default(),
         }
     }
@@ -90,6 +116,21 @@ const DEFAULT_CONFIG: &str = r#"# tts-tui configuration
 # Can also be set via --endpoint CLI flag or DEEPGRAM_TTS_ENDPOINT env var.
 # Default: "https://api.deepgram.com/v1/speak"
 # endpoint = "https://api.deepgram.com/v1/speak"
+
+
+# [audio] — Audio output settings
+[audio]
+# TTS audio encoding format.
+# Valid values: mp3, linear16, mulaw, alaw, opus, flac, aac
+# Can also be set via --audio-format CLI flag or DEEPGRAM_AUDIO_FORMAT env var.
+# Default: mp3
+# format = "mp3"
+
+# TTS output sample rate in Hz.
+# Valid values depend on the chosen format — see documentation.
+# Can also be set via --sample-rate CLI flag or DEEPGRAM_SAMPLE_RATE env var.
+# Default: format-dependent (e.g. 22050 for mp3, 24000 for linear16)
+# sample_rate = 22050
 
 
 # [experimental] — Feature flags for in-development functionality.
@@ -144,6 +185,14 @@ pub fn load() -> AppConfig {
 }
 
 fn apply_env_overrides(config: &mut AppConfig) {
+    if let Ok(val) = std::env::var("DEEPGRAM_AUDIO_FORMAT") {
+        config.audio.format = Some(val);
+    }
+    if let Ok(val) = std::env::var("DEEPGRAM_SAMPLE_RATE") {
+        if let Ok(rate) = val.parse::<u32>() {
+            config.audio.sample_rate = Some(rate);
+        }
+    }
     if let Ok(val) = std::env::var("TTS_TUI_FEATURE_STREAMING_PLAYBACK") {
         config.experimental.streaming_playback = parse_bool_env(&val);
     }

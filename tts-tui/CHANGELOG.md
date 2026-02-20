@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.0 - 2026-02-20
+
+### Features
+
+- **Audio format selection** — Press `f` to choose the TTS encoding format from a popup menu: MP3, Linear16 (WAV), μ-law, A-law, FLAC, or AAC. The status bar always shows the active format and sample rate.
+- **Sample rate selection** — Press `s` to choose the output sample rate for the current format. Each format constrains its valid rates; switching formats automatically snaps the rate to a valid value.
+- **Audio config in TOML** — New `[audio]` section in `~/.config/tts-tui.toml` with `format` and `sample_rate` keys, overridable via `--audio-format` / `DEEPGRAM_AUDIO_FORMAT` and `--sample-rate` / `DEEPGRAM_SAMPLE_RATE`.
+- **μ-law and A-law playback** — G.711 μ-law and A-law audio (returned as raw bytes by Deepgram) are now decoded to linear PCM internally and played back correctly.
+- **Global ESC dismiss** — ESC now consistently closes any open popup (format selector, sample rate selector, voice filter, text entry, API key entry, help) and returns to the main screen.
+- **API key paste support** — `Ctrl+V` / `Cmd+V` and bracketed terminal paste now work inside the API key entry popup.
+
+### Bug Fixes
+
+- **Progress bar for all audio formats** — Playback duration is now accurately detected for every format:
+  - MP3: `mp3_duration` crate (handles CBR and VBR)
+  - Linear16 (WAV) / FLAC / AAC: rodio decoder `total_duration()` used as primary source
+  - FLAC fallback: `claxon` reads the STREAMINFO `total_samples` field directly; if the encoder set it to 0 (streaming FLAC), every audio block is iterated to count samples exactly
+  - μ-law / A-law: exact sample-count math (`bytes / sample_rate`)
+- **Sample rate omitted for fixed-rate formats** — `sample_rate` is no longer sent in the API request for MP3 and AAC, which have fixed output rates.
+
+### Dependencies
+
+- Added `claxon 0.4` for accurate FLAC duration detection
+
 ## 0.3.0 - 2026-02-20
 
 ### Features

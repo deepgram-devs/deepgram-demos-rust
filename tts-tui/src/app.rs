@@ -36,7 +36,36 @@ pub enum CurrentScreen {
     Help,
     ApiKeyInput,
     VoiceFilter,
+    SampleRateSelect,
+    AudioFormatSelect,
 }
+
+/// Describes a Deepgram TTS audio encoding format with its constraints.
+pub struct AudioFormat {
+    pub encoding: &'static str,          // Deepgram API `encoding` parameter value
+    pub display_name: &'static str,      // Human-readable name shown in the UI
+    pub extension: &'static str,         // Cache file extension
+    pub valid_sample_rates: &'static [u32],
+    pub default_sample_rate: u32,
+}
+
+static MP3_RATES: [u32; 1]      = [22050];
+static LINEAR16_RATES: [u32; 5] = [8000, 16000, 24000, 32000, 48000];
+static MULAW_RATES: [u32; 2]    = [8000, 16000];
+static ALAW_RATES: [u32; 2]     = [8000, 16000];
+static FLAC_RATES: [u32; 5]     = [8000, 16000, 22050, 32000, 48000];
+static AAC_RATES: [u32; 1]      = [22050];
+
+pub static AUDIO_FORMATS: [AudioFormat; 6] = [
+    AudioFormat { encoding: "mp3",      display_name: "MP3",           extension: "mp3",   valid_sample_rates: &MP3_RATES,      default_sample_rate: 22050 },
+    AudioFormat { encoding: "linear16", display_name: "Linear16 (WAV)",extension: "wav",   valid_sample_rates: &LINEAR16_RATES, default_sample_rate: 24000 },
+    AudioFormat { encoding: "mulaw",    display_name: "μ-law",         extension: "mulaw", valid_sample_rates: &MULAW_RATES,    default_sample_rate: 8000  },
+    AudioFormat { encoding: "alaw",     display_name: "A-law",         extension: "alaw",  valid_sample_rates: &ALAW_RATES,     default_sample_rate: 8000  },
+    AudioFormat { encoding: "flac",     display_name: "FLAC",          extension: "flac",  valid_sample_rates: &FLAC_RATES,     default_sample_rate: 8000  },
+    AudioFormat { encoding: "aac",      display_name: "AAC",           extension: "aac",   valid_sample_rates: &AAC_RATES,      default_sample_rate: 22050 },
+];
+
+pub const DEFAULT_FORMAT_INDEX: usize = 0; // MP3
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CurrentlyEditing {
@@ -79,6 +108,10 @@ pub struct App {
     pub api_key_input_buffer: String,
     pub voice_filter: String,
     pub voice_filter_buffer: String,
+    pub audio_format_index: usize,
+    pub audio_format_menu_state: ListState,
+    pub sample_rate: u32,
+    pub sample_rate_menu_state: ListState,
     pub playback_speed: Decimal,  // Range: 0.7 to 1.5
     pub is_loading: bool,
     pub loading_text: String,
@@ -225,7 +258,7 @@ lazy_static! {
 
 
 impl App {
-    pub fn new(deepgram_endpoint: String, config: AppConfig) -> App {
+    pub fn new(deepgram_endpoint: String, format_index: usize, sample_rate: u32, config: AppConfig) -> App {
         let mut text_table_state = TableState::default();
         text_table_state.select(Some(0)); // Select the first item by default
 
@@ -263,6 +296,32 @@ impl App {
             initial_logs.push(make_entry(LogLevel::Info, "[experimental] ssml_support enabled".to_string()));
         }
 
+        // Validate format index
+        let format_index = format_index.min(AUDIO_FORMATS.len() - 1);
+        let fmt = &AUDIO_FORMATS[format_index];
+
+        // Snap sample_rate to a valid value for the chosen format
+        let sample_rate = if fmt.valid_sample_rates.contains(&sample_rate) {
+            sample_rate
+        } else {
+            fmt.default_sample_rate
+        };
+
+        if format_index != DEFAULT_FORMAT_INDEX {
+            initial_logs.push(make_entry(LogLevel::Info, format!("Audio format: {} | {} Hz", fmt.display_name, sample_rate)));
+        } else if sample_rate != fmt.default_sample_rate {
+            initial_logs.push(make_entry(LogLevel::Info, format!("Sample rate: {} Hz", sample_rate)));
+        }
+
+        // Pre-select format in format menu
+        let mut audio_format_menu_state = ListState::default();
+        audio_format_menu_state.select(Some(format_index));
+
+        // Pre-select sample rate within the format's valid rates
+        let rate_index = fmt.valid_sample_rates.iter().position(|&r| r == sample_rate).unwrap_or(0);
+        let mut sample_rate_menu_state = ListState::default();
+        sample_rate_menu_state.select(Some(rate_index));
+
         App {
             config,
             current_screen: CurrentScreen::Main,
@@ -281,6 +340,10 @@ impl App {
             api_key_input_buffer: String::new(),
             voice_filter: String::new(),
             voice_filter_buffer: String::new(),
+            audio_format_index: format_index,
+            audio_format_menu_state,
+            sample_rate,
+            sample_rate_menu_state,
             playback_speed: Decimal::from_str("1.0").unwrap(),
             is_loading: false,
             loading_text: String::new(),
@@ -441,6 +504,25 @@ impl App {
                     Ok(text) => {
                         self.input_buffer.push_str(&text);
                         self.add_log("Pasted from clipboard".to_string());
+                    }
+                    Err(e) => {
+                        self.add_log(format!("Failed to paste from clipboard: {}", e));
+                    }
+                }
+            }
+            Err(e) => {
+                self.add_log(format!("Failed to access clipboard: {}", e));
+            }
+        }
+    }
+
+    pub fn paste_from_clipboard_to_api_key(&mut self) {
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => {
+                match clipboard.get_text() {
+                    Ok(text) => {
+                        self.api_key_input_buffer.push_str(&text);
+                        self.add_log("Pasted API key from clipboard".to_string());
                     }
                     Err(e) => {
                         self.add_log(format!("Failed to paste from clipboard: {}", e));
@@ -705,6 +787,105 @@ impl App {
 
     pub fn clear_voice_filter_buffer(&mut self) {
         self.voice_filter_buffer.clear();
+    }
+
+    pub fn current_audio_format(&self) -> &'static AudioFormat {
+        &AUDIO_FORMATS[self.audio_format_index]
+    }
+
+    pub fn enter_audio_format_mode(&mut self) {
+        self.audio_format_menu_state.select(Some(self.audio_format_index));
+        self.current_screen = CurrentScreen::AudioFormatSelect;
+        self.status_message = "Select audio format — Enter to apply, Esc to cancel".to_string();
+    }
+
+    pub fn apply_audio_format(&mut self) {
+        if let Some(idx) = self.audio_format_menu_state.selected() {
+            if idx < AUDIO_FORMATS.len() {
+                self.audio_format_index = idx;
+                let fmt = &AUDIO_FORMATS[idx];
+                // Snap sample rate to a valid value for the new format
+                if !fmt.valid_sample_rates.contains(&self.sample_rate) {
+                    let old_rate = self.sample_rate;
+                    self.sample_rate = fmt.default_sample_rate;
+                    self.add_log_with_level(LogLevel::Info,
+                        format!("Sample rate adjusted from {} to {} Hz for {} encoding",
+                            old_rate, self.sample_rate, fmt.display_name));
+                }
+                self.add_log_with_level(LogLevel::Info,
+                    format!("Audio format: {} | {} Hz", fmt.display_name, self.sample_rate));
+            }
+        }
+        self.current_screen = CurrentScreen::Main;
+        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    pub fn cancel_audio_format_mode(&mut self) {
+        self.current_screen = CurrentScreen::Main;
+        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    /// Close whatever popup is currently open and return to Main.
+    /// Called by the global Esc handler so every popup dismisses consistently.
+    pub fn close_current_popup(&mut self) {
+        match self.current_screen {
+            CurrentScreen::Editing         => self.exit_input_mode(),
+            CurrentScreen::Help            => self.exit_help_screen(),
+            CurrentScreen::ApiKeyInput     => self.exit_api_key_mode(),
+            CurrentScreen::VoiceFilter     => self.cancel_voice_filter(),
+            CurrentScreen::SampleRateSelect  => self.cancel_sample_rate_mode(),
+            CurrentScreen::AudioFormatSelect => self.cancel_audio_format_mode(),
+            CurrentScreen::Main            => {}
+        }
+    }
+
+    pub fn scroll_audio_format_menu(&mut self, direction: i32) {
+        let len = AUDIO_FORMATS.len();
+        let i = match self.audio_format_menu_state.selected() {
+            Some(i) => {
+                let new = i as i32 + direction;
+                if new < 0 { len - 1 } else if new as usize >= len { 0 } else { new as usize }
+            }
+            None => 0,
+        };
+        self.audio_format_menu_state.select(Some(i));
+    }
+
+    pub fn enter_sample_rate_mode(&mut self) {
+        let rates = self.current_audio_format().valid_sample_rates;
+        let rate_index = rates.iter().position(|&r| r == self.sample_rate).unwrap_or(0);
+        self.sample_rate_menu_state.select(Some(rate_index));
+        self.current_screen = CurrentScreen::SampleRateSelect;
+        self.status_message = "Select sample rate — Enter to apply, Esc to cancel".to_string();
+    }
+
+    pub fn apply_sample_rate(&mut self) {
+        if let Some(idx) = self.sample_rate_menu_state.selected() {
+            let rates = self.current_audio_format().valid_sample_rates;
+            if idx < rates.len() {
+                self.sample_rate = rates[idx];
+                self.add_log_with_level(LogLevel::Info, format!("Sample rate set to {} Hz", self.sample_rate));
+            }
+        }
+        self.current_screen = CurrentScreen::Main;
+        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    pub fn cancel_sample_rate_mode(&mut self) {
+        self.current_screen = CurrentScreen::Main;
+        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    pub fn scroll_sample_rate_menu(&mut self, direction: i32) {
+        let len = self.current_audio_format().valid_sample_rates.len();
+        let i = match self.sample_rate_menu_state.selected() {
+            Some(i) => {
+                let new = i as i32 + direction;
+                if new < 0 { len - 1 } else if new as usize >= len { 0 } else { new as usize }
+            }
+            None => 0,
+        };
+        self.sample_rate_menu_state.select(Some(i));
     }
 
     pub fn increase_speed(&mut self) {
