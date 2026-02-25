@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod theme;
 mod ui;
 mod tts;
 mod persistence;
@@ -12,7 +13,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use app::{App, CurrentScreen, AUDIO_FORMATS, DEFAULT_FORMAT_INDEX};
+use app::{App, CurrentScreen, Panel, AUDIO_FORMATS, DEFAULT_FORMAT_INDEX};
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -136,7 +137,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                 match app.current_screen {
                     CurrentScreen::Main => match key.code {
                         KeyCode::Char('q') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            if app.focused_panel == app::Panel::TextList {
+                            if app.focused_panel == Panel::TextList {
                                 return Ok(());
                             }
                         }
@@ -153,12 +154,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                             app.open_audio_cache_in_finder();
                         }
                         KeyCode::Char('n') => {
-                            if app.focused_panel == app::Panel::TextList {
+                            if app.focused_panel == Panel::TextList {
                                 app.enter_input_mode();
                             }
                         }
                         KeyCode::Char('d') => {
-                            if app.focused_panel == app::Panel::TextList {
+                            if app.focused_panel == Panel::TextList {
                                 app.delete_selected_text();
                             }
                         }
@@ -169,14 +170,19 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         KeyCode::Esc => {
                             if app.is_loading {
                                 app.stop_audio_playback();
-                            } else if app.focused_panel == app::Panel::VoiceMenu && !app.voice_filter.is_empty() {
+                            } else if app.focused_panel == Panel::VoiceMenu && !app.voice_filter.is_empty() {
                                 app.clear_voice_filter();
+                            } else if app.focused_panel == Panel::TextList && !app.text_filter.is_empty() {
+                                app.clear_text_filter();
                             }
                         }
                         KeyCode::Backspace => {
-                            if app.focused_panel == app::Panel::VoiceMenu && !app.voice_filter.is_empty() {
+                            if app.focused_panel == Panel::VoiceMenu && !app.voice_filter.is_empty() {
                                 app.voice_filter.pop();
                                 app.voice_menu_state.select(Some(0));
+                            } else if app.focused_panel == Panel::TextList && !app.text_filter.is_empty() {
+                                app.text_filter.pop();
+                                app.text_table_state.select(Some(0));
                             }
                         }
                         KeyCode::Char('+') | KeyCode::Char('=') => {
@@ -255,7 +261,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                             }
                         }
                         KeyCode::Char('/') => {
-                            app.enter_voice_filter_mode();
+                            match app.focused_panel {
+                                Panel::VoiceMenu => app.enter_voice_filter_mode(),
+                                Panel::TextList  => app.enter_text_filter_mode(),
+                            }
+                        }
+                        KeyCode::Char('t') => {
+                            app.enter_theme_select_mode();
                         }
                         KeyCode::Char('f') => {
                             app.enter_audio_format_mode();
@@ -282,10 +294,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                     },
                     CurrentScreen::Help => match key.code {
                         KeyCode::Up => {
-                            app.scroll_help(-1, 42); // 42 help lines
+                            app.scroll_help(-1, 54); // 54 help lines
                         }
                         KeyCode::Down => {
-                            app.scroll_help(1, 42);
+                            app.scroll_help(1, 54);
                         }
                         _ => {}
                     },
@@ -319,6 +331,21 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         }
                         _ => {}
                     },
+                    CurrentScreen::TextFilter => match key.code {
+                        KeyCode::Enter => {
+                            app.apply_text_filter();
+                        }
+                        KeyCode::Backspace => {
+                            app.text_filter_buffer.pop();
+                        }
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.clear_text_filter_buffer();
+                        }
+                        KeyCode::Char(c) => {
+                            app.text_filter_buffer.push(c);
+                        }
+                        _ => {}
+                    },
                     CurrentScreen::SampleRateSelect => match key.code {
                         KeyCode::Enter => {
                             app.apply_sample_rate();
@@ -340,6 +367,18 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         }
                         KeyCode::Down => {
                             app.scroll_audio_format_menu(1);
+                        }
+                        _ => {}
+                    },
+                    CurrentScreen::ThemeSelect => match key.code {
+                        KeyCode::Enter => {
+                            app.apply_theme();
+                        }
+                        KeyCode::Up => {
+                            app.scroll_theme_menu(-1);
+                        }
+                        KeyCode::Down => {
+                            app.scroll_theme_menu(1);
                         }
                         _ => {}
                     },

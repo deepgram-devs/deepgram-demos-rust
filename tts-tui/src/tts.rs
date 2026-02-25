@@ -82,9 +82,14 @@ pub fn play_audio_data_sync(data: &[u8], encoding: &str, sample_rate: u32) -> Re
         _ => {
             // All other formats are in a recognised container (MP3, WAV, FLAC, AAC).
             let source = Decoder::new(Cursor::new(data.to_vec()))?;
-            let duration_ms = source.total_duration()
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or_else(|| audio_duration_ms(data, encoding, sample_rate));
+            let duration_ms = if encoding == "linear16" {
+                wav_duration_ms(data)
+                    .unwrap_or_else(|| audio_duration_ms(data, encoding, sample_rate))
+            } else {
+                source.total_duration()
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or_else(|| audio_duration_ms(data, encoding, sample_rate))
+            };
             sink.append(source);
             duration_ms
         }
@@ -124,10 +129,13 @@ fn audio_duration_ms(data: &[u8], encoding: &str, sample_rate: u32) -> u64 {
                 .unwrap_or_else(|_| bitrate_estimate_ms(data, 128))
         }
         "linear16" => {
-            // 16-bit PCM mono in a WAV container; subtract the 44-byte header
-            let pcm_bytes = data.len().saturating_sub(44) as u64;
-            // 2 bytes per sample, 1 channel
-            pcm_bytes * 1000 / (sample_rate as u64 * 2)
+            // Parse the RIFF/WAV structure for an exact result.
+            // Fall back to the naive estimate only if parsing fails.
+            wav_duration_ms(data).unwrap_or_else(|| {
+                // Last-resort estimate: assume 16-bit mono and a 44-byte header.
+                let pcm_bytes = data.len().saturating_sub(44) as u64;
+                pcm_bytes * 1000 / (sample_rate as u64 * 2)
+            })
         }
         "mulaw" | "alaw" => {
             // Raw 8-bit encoded audio: 1 byte per sample, mono
@@ -137,6 +145,75 @@ fn audio_duration_ms(data: &[u8], encoding: &str, sample_rate: u32) -> u64 {
         "aac" => bitrate_estimate_ms(data, 128),
         _ => bitrate_estimate_ms(data, 128),
     }
+}
+
+/// Parse a WAV/RIFF file and compute the exact duration in milliseconds.
+///
+/// Walks all RIFF chunks to locate `fmt ` (for sample rate, channel count, and
+/// bit depth) and `data` (for the number of audio bytes).  This correctly
+/// handles WAV files that carry extra chunks such as the `fact` chunk that
+/// Deepgram includes in its linear16 output, which would break any approach
+/// that assumes a fixed 44-byte header offset.
+fn wav_duration_ms(data: &[u8]) -> Option<u64> {
+    // Minimum: "RIFF" (4) + size (4) + "WAVE" (4) + one chunk header (8)
+    if data.len() < 20 {
+        return None;
+    }
+    if &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
+        return None;
+    }
+
+    let mut offset = 12usize;
+    let mut num_channels: Option<u16> = None;
+    let mut sample_rate: Option<u32> = None;
+    let mut bits_per_sample: Option<u16> = None;
+    let mut data_bytes: Option<u64> = None;
+
+    while offset + 8 <= data.len() {
+        let chunk_id = &data[offset..offset + 4];
+        let chunk_size = u32::from_le_bytes(
+            data[offset + 4..offset + 8].try_into().ok()?
+        ) as usize;
+        offset += 8;
+
+        if chunk_id == b"fmt " && chunk_size >= 16 && offset + 16 <= data.len() {
+            // Byte layout inside the fmt chunk:
+            //  0-1   AudioFormat   (1 = PCM, 0xFFFE = extensible, etc.)
+            //  2-3   NumChannels
+            //  4-7   SampleRate
+            //  8-11  ByteRate
+            // 12-13  BlockAlign
+            // 14-15  BitsPerSample
+            num_channels    = Some(u16::from_le_bytes(data[offset + 2..offset + 4].try_into().ok()?));
+            sample_rate     = Some(u32::from_le_bytes(data[offset + 4..offset + 8].try_into().ok()?));
+            bits_per_sample = Some(u16::from_le_bytes(data[offset + 14..offset + 16].try_into().ok()?));
+        } else if chunk_id == b"data" {
+            // Deepgram returns WAV in streaming style: the data chunk size field
+            // is 0xFFFFFFFF because the length is unknown when the header is
+            // written.  Clamp to the bytes that are actually present in the
+            // buffer so we get the real payload size in both the streaming and
+            // the normal (pre-sized) case.
+            let remaining = data.len().saturating_sub(offset);
+            data_bytes = Some(chunk_size.min(remaining) as u64);
+        }
+
+        // WAV chunks are padded to an even byte boundary.
+        let padded = chunk_size + (chunk_size & 1);
+        offset = offset.saturating_add(padded);
+    }
+
+    let channels = num_channels? as u64;
+    let sr       = sample_rate? as u64;
+    let bps      = bits_per_sample? as u64;
+    let bytes    = data_bytes?;
+
+    if sr == 0 || channels == 0 || bps == 0 {
+        return None;
+    }
+
+    let bytes_per_sample = (bps + 7) / 8; // ceiling division: 24-bit = 3 bytes
+    let total_samples = bytes / (channels * bytes_per_sample);
+    Some(total_samples * 1000 / sr)
 }
 
 /// Get the exact FLAC duration using claxon.

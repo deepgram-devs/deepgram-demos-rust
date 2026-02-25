@@ -1,8 +1,8 @@
 [package]
 name = "tts-tui"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021" # Use 2021 edition
-description = "A terminal user interface for Deepgram Text-to-Speech API with voice selection, multi-format audio output, sample rate control, playback speed control, and audio caching"
+description = "A terminal user interface for Deepgram Text-to-Speech API with voice selection, text and voice filtering, color themes, multi-format audio output, sample rate control, playback speed control, and audio caching"
 
 [dependencies]
 ratatui = { version = "0.30.0", features = ["crossterm"] }

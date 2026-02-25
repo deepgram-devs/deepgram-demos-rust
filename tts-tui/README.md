@@ -1,13 +1,15 @@
 # TTS TUI (Text-to-Speech Terminal User Interface)
 
-A terminal user interface (TUI) built with Rust and Ratatui for interacting with the Deepgram Text-to-Speech API. Supports voice selection, voice filtering, multi-format audio output, sample rate control, audio caching, playback speed control, timestamped logs, and a persistent TOML configuration file, all styled with the Deepgram brand color palette.
+A terminal user interface (TUI) built with Rust and Ratatui for interacting with the Deepgram Text-to-Speech API. Supports voice selection, text and voice filtering, color themes, multi-format audio output, sample rate control, audio caching, playback speed control, timestamped logs, and a persistent TOML configuration file.
 
 ## Features
 
 - Play saved text snippets with any Deepgram Aura or Aura-2 voice
-- Browse and filter voices by name, language, or model via a dedicated popup (`/`)
+- Browse and filter voices by name, language, or model via a dedicated popup (`/` with Voices panel focused)
+- Filter saved texts by content via the same `/` key (with Saved Texts panel focused)
 - Add, delete, and persist text snippets to local storage
 - Audio caching — repeated playback is served from disk instantly
+- **Color themes** — choose from Deepgram (default), Nord, or Synthwave Outrun via the `t` key
 - **Audio format selection** — choose MP3, Linear16 (WAV), μ-law, A-law, FLAC, or AAC via the `f` key
 - **Sample rate selection** — choose the output sample rate for the active format via the `s` key
 - Adjustable TTS playback speed (`+`/`-`/`0` keys)
@@ -17,7 +19,6 @@ A terminal user interface (TUI) built with Rust and Ratatui for interacting with
 - Experimental feature flags via config file or environment variables
 - Timestamped, color-coded log panel with scrollable history and mouse scroll support
 - Mouse click to select specific items in lists
-- Deepgram brand color palette throughout the UI
 
 ## Requirements
 
@@ -139,7 +140,8 @@ TTS_TUI_FEATURE_SSML_SUPPORT=true cargo run
 | `d` | Delete selected text snippet |
 | `k` | Set Deepgram API key interactively |
 | `o` | Open audio cache folder in Finder |
-| `/` | Open voice filter popup |
+| `/` | Open filter popup for focused panel |
+| `t` | Select color theme |
 | `f` | Select audio encoding format |
 | `s` | Select output sample rate |
 | `Up` / `Down` | Navigate Saved Texts or Voices list |
@@ -148,19 +150,28 @@ TTS_TUI_FEATURE_SSML_SUPPORT=true cargo run
 | `+` / `=` | Increase playback speed |
 | `-` | Decrease playback speed |
 | `0` | Reset playback speed to 1.0x |
-| `Esc` | Stop audio playback / close popup |
+| `Esc` | Stop audio playback / clear active filter / close popup |
+| `Backspace` | Remove last character from active filter |
 
-### Voice Filter Popup
+### Filter Popups (`/`)
 
-Press `/` to open. Filter matches on voice name, language, or model.
+Press `/` to open a filter for the currently focused panel. The Saved Texts filter matches on text content; the Deepgram Voices filter matches on voice name, language, or model.
 
 | Key | Action |
 |-----|--------|
-| Type | Narrow the voice list in real time |
+| Type | Narrow the list in real time (match count shown in title) |
 | `Enter` | Apply filter and close popup |
 | `Esc` | Cancel without changing the current filter |
 | `Ctrl+U` | Clear all filter text |
 | `Backspace` | Delete last character |
+
+### Theme Select Popup (`t`)
+
+| Key | Action |
+|-----|--------|
+| `Up` / `Down` | Navigate themes |
+| `Enter` | Apply theme and close popup |
+| `Esc` | Cancel |
 
 ### Text Entry
 

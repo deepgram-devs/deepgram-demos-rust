@@ -7,24 +7,11 @@ use ratatui::{
 };
 
 use crate::app::{App, Panel, CurrentScreen, LogLevel, LogEntry, Gender, AUDIO_FORMATS, DEFAULT_FORMAT_INDEX};
-
-// ── Deepgram brand palette ───────────────────────────────────────────────────
-const DG_SPRING_GREEN: Color       = Color::Rgb(19,  239, 147); // #13ef93 primary
-const DG_SPRING_GREEN_LIGHT: Color = Color::Rgb(161, 249, 212); // #a1f9d4
-#[allow(dead_code)]
-const DG_SPRING_GREEN_DARK: Color  = Color::Rgb(7,   84,  51);  // #075433
-const DG_AZURE: Color              = Color::Rgb(20,  154, 251); // #149afb secondary
-const DG_AZURE_LIGHT: Color        = Color::Rgb(161, 215, 253); // #a1d7fd
-const DG_MAGENTA: Color            = Color::Rgb(238, 2,   140); // #ee028c
-#[allow(dead_code)]
-const DG_VIOLET: Color             = Color::Rgb(174, 99,  249); // #ae63f9
-const DG_ERROR: Color              = Color::Rgb(240, 68,  56);  // #f04438
-const DG_WARNING: Color            = Color::Rgb(254, 200, 75);  // #fec84b
-const DG_SUCCESS: Color            = Color::Rgb(18,  183, 106); // #12b76a
-// ────────────────────────────────────────────────────────────────────────────
+use crate::theme::THEMES;
 
 pub fn render_ui(f: &mut Frame, app: &mut App) {
     let size = f.area();
+    let theme = app.current_theme();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -40,13 +27,13 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         .split(chunks[0]);
 
     // Render Text List Panel
-    let text_block_title = if app.focused_panel == Panel::TextList {
-        " Saved Texts (Focused) "
+    let text_block_title = if app.text_filter.is_empty() {
+        " Saved Texts ".to_string()
     } else {
-        " Saved Texts "
+        format!(" Saved Texts — Filter: {} ", app.text_filter)
     };
     let text_block_style = if app.focused_panel == Panel::TextList {
-        Style::default().fg(DG_AZURE).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
@@ -57,7 +44,8 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         .border_type(BorderType::Rounded)
         .title(text_block_title);
 
-    let rows: Vec<Row> = app.saved_texts
+    let filtered_texts = app.get_filtered_texts();
+    let rows: Vec<Row> = filtered_texts
         .iter()
         .enumerate()
         .map(|(i, text)| {
@@ -76,8 +64,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 let dist = app.text_table_state.selected()
                     .map(|sel| (i as isize - sel as isize).unsigned_abs())
                     .unwrap_or(0);
-                // Spring Green Light → muted green
-                Style::default().fg(fade_color((161, 249, 212), (60, 110, 80), dist, 12))
+                Style::default().fg(fade_color(theme.text_list_near, theme.text_list_far, dist, 12))
             };
             Row::new(vec![Cell::from(display_text)]).style(style)
         })
@@ -85,7 +72,6 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
 
     let text_table = Table::new(rows, [Constraint::Percentage(100)])
         .block(text_block)
-        .header(Row::new(vec!["Text"]).style(Style::default().add_modifier(Modifier::BOLD)))
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
     // Store bounds for mouse click handling
@@ -93,21 +79,13 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     f.render_stateful_widget(text_table, main_chunks[0], &mut app.text_table_state);
 
     // Render Voice Menu Panel
-    let voice_block_title = if app.focused_panel == Panel::VoiceMenu {
-        if app.voice_filter.is_empty() {
-            " Deepgram Voices (Focused) ".to_string()
-        } else {
-            format!(" Deepgram Voices (Focused) - Filter: {} ", app.voice_filter)
-        }
+    let voice_block_title = if app.voice_filter.is_empty() {
+        " Deepgram Voices ".to_string()
     } else {
-        if app.voice_filter.is_empty() {
-            " Deepgram Voices ".to_string()
-        } else {
-            format!(" Deepgram Voices - Filter: {} ", app.voice_filter)
-        }
+        format!(" Deepgram Voices — Filter: {} ", app.voice_filter)
     };
     let voice_block_style = if app.focused_panel == Panel::VoiceMenu {
-        Style::default().fg(DG_AZURE).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
@@ -139,8 +117,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 let dist = app.voice_menu_state.selected()
                     .map(|sel| (item_index as isize - sel as isize).unsigned_abs())
                     .unwrap_or(0);
-                // Azure Light → muted blue
-                Style::default().fg(fade_color((161, 215, 253), (50, 90, 130), dist, 12))
+                Style::default().fg(fade_color(theme.voice_list_near, theme.voice_list_far, dist, 12))
             };
             let gender_indicator = match voice.gender {
                 Gender::Male => "♂",
@@ -170,10 +147,10 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         .rev()
         .flat_map(|entry: &LogEntry| {
             let (icon, color) = match entry.level {
-                LogLevel::Success => ("✓", DG_SUCCESS),
-                LogLevel::Error   => ("✗", DG_ERROR),
-                LogLevel::Warning => ("⚠", DG_WARNING),
-                LogLevel::Info    => ("ℹ", DG_AZURE),
+                LogLevel::Success => ("✓", theme.success),
+                LogLevel::Error   => ("✗", theme.error),
+                LogLevel::Warning => ("⚠", theme.warning),
+                LogLevel::Info    => ("ℹ", theme.secondary),
             };
             let ts = entry.timestamp.format("%H:%M:%S").to_string();
             let message_lines: Vec<String> = entry.message.lines().map(|s| s.to_string()).collect();
@@ -241,7 +218,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             Line::from(vec![
                 Span::styled(
                     format!("{} ", progress_bar),
-                    Style::default().fg(DG_SPRING_GREEN)
+                    Style::default().fg(theme.primary)
                 ),
                 Span::raw(format!("Speed: {:.2}x | {} | {} Hz | Playing ({:.1}s / {:.1}s) | Press ESC to stop",
                     app.playback_speed, app.current_audio_format().display_name, app.sample_rate,
@@ -252,7 +229,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             Line::from(vec![
                 Span::styled(
                     format!("{} ", app.get_spinner_char()),
-                    Style::default().fg(DG_SPRING_GREEN)
+                    Style::default().fg(theme.primary)
                 ),
                 Span::raw(format!("Generating audio... | Speed: {:.2}x | {} | {} Hz",
                     app.playback_speed, app.current_audio_format().display_name, app.sample_rate)),
@@ -275,7 +252,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             .title(" Enter New Text ")
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(DG_SPRING_GREEN))
+            .border_style(Style::default().fg(theme.primary))
             .style(Style::default().bg(Color::DarkGray));
 
         let area = centered_rect(60, 20, size);
@@ -283,7 +260,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
 
         let input_paragraph = Paragraph::new(app.input_buffer.clone())
             .block(popup_block)
-            .style(Style::default().fg(DG_SPRING_GREEN_LIGHT))
+            .style(Style::default().fg(theme.primary_light))
             .wrap(Wrap { trim: false });
 
         f.render_widget(input_paragraph, area);
@@ -305,13 +282,13 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .style(Style::default().bg(Color::DarkGray))
-            .border_style(Style::default().fg(DG_AZURE));
+            .border_style(Style::default().fg(theme.secondary));
 
         // Show buffer with a blinking-cursor indicator
         let display = format!("{}_", app.voice_filter_buffer);
         let input_paragraph = Paragraph::new(display)
             .block(popup_block)
-            .style(Style::default().fg(DG_AZURE_LIGHT))
+            .style(Style::default().fg(theme.secondary_light))
             .wrap(Wrap { trim: false });
 
         f.render_widget(input_paragraph, area);
@@ -325,11 +302,56 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         };
         if hint_area.y < size.height {
             let shortcuts = Paragraph::new(Line::from(vec![
-                Span::styled(" Enter", Style::default().fg(DG_SUCCESS).add_modifier(Modifier::BOLD)),
+                Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
                 Span::raw(" apply  "),
-                Span::styled("Esc", Style::default().fg(DG_WARNING).add_modifier(Modifier::BOLD)),
+                Span::styled("Esc", Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)),
                 Span::raw(" cancel  "),
-                Span::styled("Ctrl+U", Style::default().fg(DG_ERROR).add_modifier(Modifier::BOLD)),
+                Span::styled("Ctrl+U", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
+                Span::raw(" clear "),
+            ]));
+            f.render_widget(shortcuts, hint_area);
+        }
+    }
+
+    // Render Text Filter Popup
+    if app.current_screen == CurrentScreen::TextFilter {
+        let area = centered_rect(50, 20, size);
+        f.render_widget(Clear, area);
+
+        let hint = if app.text_filter_buffer.is_empty() {
+            " Filter Texts — Enter to apply, Esc to cancel ".to_string()
+        } else {
+            format!(" Filter Texts — {} match(es) ", app.get_filtered_texts_for_buffer().len())
+        };
+
+        let popup_block = Block::default()
+            .title(hint)
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .style(Style::default().bg(Color::DarkGray))
+            .border_style(Style::default().fg(theme.primary));
+
+        let display = format!("{}_", app.text_filter_buffer);
+        let input_paragraph = Paragraph::new(display)
+            .block(popup_block)
+            .style(Style::default().fg(theme.primary_light))
+            .wrap(Wrap { trim: false });
+
+        f.render_widget(input_paragraph, area);
+
+        let hint_area = Rect {
+            x: area.x,
+            y: area.y + area.height,
+            width: area.width,
+            height: 1,
+        };
+        if hint_area.y < size.height {
+            let shortcuts = Paragraph::new(Line::from(vec![
+                Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+                Span::raw(" apply  "),
+                Span::styled("Esc", Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)),
+                Span::raw(" cancel  "),
+                Span::styled("Ctrl+U", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
                 Span::raw(" clear "),
             ]));
             f.render_widget(shortcuts, hint_area);
@@ -339,7 +361,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     // Render Popup for API Key Input
     if app.current_screen == CurrentScreen::ApiKeyInput {
         let title = Line::from(vec![
-            Span::styled(" Set Deepgram API Key ", Style::default().fg(DG_WARNING).add_modifier(Modifier::BOLD)),
+            Span::styled(" Set Deepgram API Key ", Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)),
             Span::styled("(input hidden) ", Style::default().fg(Color::DarkGray)),
         ]);
 
@@ -347,7 +369,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             .title(title)
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(DG_WARNING))
+            .border_style(Style::default().fg(theme.warning))
             .style(Style::default().bg(Color::DarkGray));
 
         let area = centered_rect_fixed(60, 5, size);
@@ -360,7 +382,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         } else {
             Span::styled(
                 format!("{}_", "*".repeat(char_count)),
-                Style::default().fg(DG_WARNING),
+                Style::default().fg(theme.warning),
             )
         };
         let input_paragraph = Paragraph::new(Line::from(masked))
@@ -373,9 +395,9 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         let hint_area = Rect { x: area.x, y: area.y + area.height, width: area.width, height: 1 };
         if hint_area.y < size.height {
             let hints = Paragraph::new(Line::from(vec![
-                Span::styled(" Enter", Style::default().fg(DG_SUCCESS).add_modifier(Modifier::BOLD)),
+                Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
                 Span::raw(" save  "),
-                Span::styled("Esc", Style::default().fg(DG_ERROR).add_modifier(Modifier::BOLD)),
+                Span::styled("Esc", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
                 Span::raw(" cancel "),
             ]));
             f.render_widget(hints, hint_area);
@@ -403,12 +425,19 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             "  0         - Reset speed to 1.0x",
             "  f         - Select audio encoding format",
             "  s         - Select TTS sample rate",
-            "  Esc       - Stop audio playback or clear voice filter",
-            "  /         - Open voice filter popup",
+            "  Esc       - Stop audio / clear filter for focused panel",
+            "  /         - Open filter popup for focused panel",
+            "  t         - Select color theme",
             "  ?         - Show this help screen",
             "",
             "Voice Filter Popup:",
             "  Type      - Narrow voice list (name, language, model)",
+            "  Enter     - Apply filter and close",
+            "  Esc       - Cancel (keeps previous filter)",
+            "  Ctrl+U    - Clear filter text",
+            "",
+            "Text Filter Popup:",
+            "  Type      - Narrow text list by content",
             "  Enter     - Apply filter and close",
             "  Esc       - Cancel (keeps previous filter)",
             "  Ctrl+U    - Clear filter text",
@@ -424,6 +453,11 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             "  Esc       - Cancel",
             "  Backspace - Delete character",
             "",
+            "Theme Select Popup:",
+            "  Up/Down   - Navigate themes",
+            "  Enter     - Apply theme and close",
+            "  Esc       - Cancel",
+            "",
             "Help Screen:",
             "  Up/Down   - Scroll help text",
             "  Esc       - Close this help screen",
@@ -433,7 +467,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             .title(" Help (scroll with Up/Down) ")
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(DG_SPRING_GREEN))
+            .border_style(Style::default().fg(theme.primary))
             .style(Style::default().bg(Color::DarkGray));
 
         let area = centered_rect(70, 60, size);
@@ -448,7 +482,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
 
         let help_paragraph = Paragraph::new(displayed_lines.join("\n"))
             .block(help_block)
-            .style(Style::default().fg(DG_SPRING_GREEN_LIGHT));
+            .style(Style::default().fg(theme.primary_light));
 
         f.render_widget(help_paragraph, area);
 
@@ -481,9 +515,9 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 format!("{} Hz", rate)
             };
             let style = if is_selected {
-                Style::default().fg(DG_VIOLET).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                Style::default().fg(theme.quaternary).add_modifier(Modifier::BOLD | Modifier::REVERSED)
             } else {
-                Style::default().fg(DG_AZURE_LIGHT)
+                Style::default().fg(theme.secondary_light)
             };
             ListItem::new(label).style(style)
         }).collect();
@@ -492,7 +526,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             .title(format!(" Sample Rate — {} ", fmt.display_name))
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(DG_VIOLET));
+            .border_style(Style::default().fg(theme.quaternary));
 
         let inner = popup_block.inner(area);
         f.render_widget(popup_block, area);
@@ -507,9 +541,9 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         f.render_stateful_widget(list, chunks[0], &mut app.sample_rate_menu_state);
 
         let hint = Line::from(vec![
-            Span::styled(" Enter", Style::default().fg(DG_SUCCESS).add_modifier(Modifier::BOLD)),
+            Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
             Span::raw(" apply  "),
-            Span::styled("Esc", Style::default().fg(DG_ERROR).add_modifier(Modifier::BOLD)),
+            Span::styled("Esc", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
             Span::raw(" cancel"),
         ]);
         f.render_widget(Paragraph::new(hint), chunks[1]);
@@ -537,9 +571,9 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 format!("{:<16} {}", fmt.display_name, rate_summary)
             };
             let style = if is_selected {
-                Style::default().fg(DG_MAGENTA).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                Style::default().fg(theme.tertiary).add_modifier(Modifier::BOLD | Modifier::REVERSED)
             } else {
-                Style::default().fg(DG_SPRING_GREEN_LIGHT)
+                Style::default().fg(theme.primary_light)
             };
             ListItem::new(label).style(style)
         }).collect();
@@ -548,7 +582,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             .title(" Audio Format ")
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(DG_MAGENTA));
+            .border_style(Style::default().fg(theme.tertiary));
 
         let inner = popup_block.inner(area);
         f.render_widget(popup_block, area);
@@ -562,10 +596,69 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         f.render_stateful_widget(list, chunks[0], &mut app.audio_format_menu_state);
 
         let hint = Line::from(vec![
-            Span::styled(" Enter", Style::default().fg(DG_SUCCESS).add_modifier(Modifier::BOLD)),
+            Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
             Span::raw(" apply  "),
-            Span::styled("Esc", Style::default().fg(DG_ERROR).add_modifier(Modifier::BOLD)),
+            Span::styled("Esc", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
             Span::raw(" cancel"),
+        ]);
+        f.render_widget(Paragraph::new(hint), chunks[1]);
+    }
+
+    // ── Theme Select Popup ────────────────────────────────────────────────────
+    if app.current_screen == CurrentScreen::ThemeSelect {
+        let popup_height = THEMES.len() as u16 * 2 + 4; // 2 rows per theme + border + hint
+        let area = centered_rect_fixed(54, popup_height, size);
+        f.render_widget(Clear, area);
+
+        // Build one item per theme: name in its own primary color, description dimmed below
+        let items: Vec<ListItem> = THEMES.iter().enumerate().map(|(i, t)| {
+            let is_selected = app.theme_menu_state.selected() == Some(i);
+            let is_current  = i == app.theme_index;
+            let marker = if is_current { "● " } else { "  " };
+
+            let name_style = if is_selected {
+                Style::default().fg(t.primary).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            } else {
+                Style::default().fg(t.primary).add_modifier(Modifier::BOLD)
+            };
+            let desc_style = Style::default().fg(Color::DarkGray);
+
+            let name_line = Line::from(vec![
+                Span::styled(marker, name_style),
+                Span::styled(t.name, name_style),
+            ]);
+            let desc_line = Line::from(Span::styled(
+                format!("    {}", t.description),
+                desc_style,
+            ));
+            ListItem::new(vec![name_line, desc_line])
+        }).collect();
+
+        let popup_block = Block::default()
+            .title(" Select Theme ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .style(Style::default().bg(Color::DarkGray))
+            .border_style(Style::default().fg(theme.primary));
+
+        let inner = popup_block.inner(area);
+        f.render_widget(popup_block, area);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(inner);
+
+        let list = List::new(items);
+        f.render_stateful_widget(list, chunks[0], &mut app.theme_menu_state);
+
+        let hint = Line::from(vec![
+            Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+            Span::raw(" apply  "),
+            Span::styled("Esc", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
+            Span::raw(" cancel  "),
+            Span::styled("Up/Down", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+            Span::raw(" navigate"),
         ]);
         f.render_widget(Paragraph::new(hint), chunks[1]);
     }

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0 - 2026-02-25
+
+### Features
+
+- **Color themes** — Press `t` to open the theme selector popup. Three built-in themes: Deepgram (default brand palette), Nord (arctic blues and greens), and Synthwave Outrun (neon pink, electric cyan, retro-futuristic). Each theme name is rendered in its own colors as a live preview. The active theme is marked with `●`.
+- **Text filter for Saved Texts** — Press `/` while the Saved Texts panel is focused to open a text filter popup. Typing narrows the list in real time with a live match count; `Enter` applies, `Esc` cancels, `Ctrl+U` clears. The active filter is shown in the panel title. `Esc` or `Backspace` on the main screen also clears the filter. The `/` key still opens the voice filter when the Voices panel is focused.
+- **Panel title cleanup** — Removed the `(Focused)` label from the Saved Texts and Deepgram Voices panel titles; the highlighted border colour is sufficient to communicate focus.
+- **Removed Saved Texts column header** — The redundant "Text" table header row has been removed, giving one extra row of list space.
+
+### Bug Fixes
+
+- **WAV / linear16 duration detection** — Replaced the hardcoded 44-byte header subtraction with a proper RIFF chunk walker (`wav_duration_ms`). The parser locates the `fmt ` chunk to read the actual channel count, sample rate, and bit depth, then finds the `data` chunk for the exact audio byte count. Deepgram returns WAV in streaming style with a `0xFFFFFFFF` placeholder in the data chunk size field; the parser now clamps that to the real bytes present in the buffer.
+- **Progress bar overshoot** — The elapsed time reported by `get_playback_progress` is now clamped to the total duration, so the bar and time display freeze at the end rather than continuing to count while waiting for the next 250 ms poll cycle. `check_audio_playback` also triggers completion when elapsed ≥ duration, eliminating the gap between audio ending and `sink.empty()` being detected.
+
 ## 0.4.0 - 2026-02-20
 
 ### Features

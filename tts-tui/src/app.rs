@@ -11,6 +11,7 @@ use std::sync::Arc;
 use rodio::OutputStream;
 use tokio::sync::mpsc;
 use crate::config::{self, AppConfig, ExperimentalFlags};
+use crate::theme::{Theme, THEMES, DEFAULT_THEME_INDEX};
 use crate::persistence;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -36,6 +37,8 @@ pub enum CurrentScreen {
     Help,
     ApiKeyInput,
     VoiceFilter,
+    TextFilter,
+    ThemeSelect,
     SampleRateSelect,
     AudioFormatSelect,
 }
@@ -108,6 +111,10 @@ pub struct App {
     pub api_key_input_buffer: String,
     pub voice_filter: String,
     pub voice_filter_buffer: String,
+    pub text_filter: String,
+    pub text_filter_buffer: String,
+    pub theme_index: usize,
+    pub theme_menu_state: ListState,
     pub audio_format_index: usize,
     pub audio_format_menu_state: ListState,
     pub sample_rate: u32,
@@ -340,6 +347,10 @@ impl App {
             api_key_input_buffer: String::new(),
             voice_filter: String::new(),
             voice_filter_buffer: String::new(),
+            text_filter: String::new(),
+            text_filter_buffer: String::new(),
+            theme_index: DEFAULT_THEME_INDEX,
+            theme_menu_state: ListState::default(),
             audio_format_index: format_index,
             audio_format_menu_state,
             sample_rate,
@@ -440,11 +451,12 @@ impl App {
             && y < self.text_panel_bounds.y + self.text_panel_bounds.height
         {
             self.focused_panel = Panel::TextList;
-            // +1 for top border, +1 for header row
-            let first_row = self.text_panel_bounds.y + 2;
+            // +1 for top border (no header row)
+            let first_row = self.text_panel_bounds.y + 1;
             if y >= first_row {
                 let idx = self.text_table_state.offset() + (y - first_row) as usize;
-                if idx < self.saved_texts.len() {
+                let filtered_len = self.get_filtered_texts().len();
+                if idx < filtered_len {
                     self.text_table_state.select(Some(idx));
                 }
             }
@@ -536,16 +548,17 @@ impl App {
     }
 
     pub fn delete_selected_text(&mut self) {
-        if let Some(index) = self.text_table_state.selected() {
-            if index < self.saved_texts.len() {
-                let removed = self.saved_texts.remove(index);
+        if let Some(filtered_idx) = self.text_table_state.selected() {
+            if let Some(orig_idx) = self.get_filtered_text_original_index(filtered_idx) {
+                let removed = self.saved_texts.remove(orig_idx);
                 self.add_log(format!("Deleted text: {}", removed));
 
-                // Adjust selection
-                if self.saved_texts.is_empty() {
+                // Adjust selection within the filtered list
+                let new_filtered_len = self.get_filtered_texts().len();
+                if new_filtered_len == 0 {
                     self.text_table_state.select(None);
-                } else if index >= self.saved_texts.len() {
-                    self.text_table_state.select(Some(self.saved_texts.len() - 1));
+                } else if filtered_idx >= new_filtered_len {
+                    self.text_table_state.select(Some(new_filtered_len - 1));
                 }
 
                 // Persist to disk
@@ -591,12 +604,13 @@ impl App {
 
     pub fn scroll_text_list(&mut self, direction: i32) {
         if self.focused_panel == Panel::TextList {
+            let filtered_len = self.get_filtered_texts().len();
             let i = match self.text_table_state.selected() {
                 Some(i) => {
                     let new_index = i as i32 + direction;
                     if new_index < 0 {
-                        self.saved_texts.len() - 1
-                    } else if new_index as usize >= self.saved_texts.len() {
+                        filtered_len.saturating_sub(1)
+                    } else if new_index as usize >= filtered_len {
                         0
                     } else {
                         new_index as usize
@@ -648,7 +662,10 @@ impl App {
     }
 
     pub fn get_selected_text(&self) -> Option<String> {
-        self.text_table_state.selected().map(|i| self.saved_texts[i].clone())
+        self.text_table_state.selected().and_then(|filtered_idx| {
+            self.get_filtered_text_original_index(filtered_idx)
+                .map(|orig_idx| self.saved_texts[orig_idx].clone())
+        })
     }
 
     pub fn set_status_message(&mut self, message: String) {
@@ -789,6 +806,112 @@ impl App {
         self.voice_filter_buffer.clear();
     }
 
+    pub fn get_filtered_texts(&self) -> Vec<&String> {
+        if self.text_filter.is_empty() {
+            self.saved_texts.iter().collect()
+        } else {
+            let filter_lower = self.text_filter.to_lowercase();
+            self.saved_texts
+                .iter()
+                .filter(|text| text.to_lowercase().contains(&filter_lower))
+                .collect()
+        }
+    }
+
+    pub fn get_filtered_texts_for_buffer(&self) -> Vec<&String> {
+        if self.text_filter_buffer.is_empty() {
+            self.saved_texts.iter().collect()
+        } else {
+            let filter_lower = self.text_filter_buffer.to_lowercase();
+            self.saved_texts
+                .iter()
+                .filter(|text| text.to_lowercase().contains(&filter_lower))
+                .collect()
+        }
+    }
+
+    fn get_filtered_text_original_index(&self, filtered_idx: usize) -> Option<usize> {
+        if self.text_filter.is_empty() {
+            if filtered_idx < self.saved_texts.len() { Some(filtered_idx) } else { None }
+        } else {
+            let filter_lower = self.text_filter.to_lowercase();
+            self.saved_texts
+                .iter()
+                .enumerate()
+                .filter(|(_, text)| text.to_lowercase().contains(&filter_lower))
+                .nth(filtered_idx)
+                .map(|(orig_idx, _)| orig_idx)
+        }
+    }
+
+    pub fn enter_text_filter_mode(&mut self) {
+        self.text_filter_buffer = self.text_filter.clone();
+        self.current_screen = CurrentScreen::TextFilter;
+        self.status_message = "Filter texts — Enter to apply, Esc to cancel, Ctrl+U to clear".to_string();
+    }
+
+    pub fn apply_text_filter(&mut self) {
+        self.text_filter = self.text_filter_buffer.clone();
+        self.text_filter_buffer.clear();
+        self.text_table_state.select(Some(0));
+        self.current_screen = CurrentScreen::Main;
+        self.focused_panel = Panel::TextList;
+        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    pub fn cancel_text_filter(&mut self) {
+        self.text_filter_buffer.clear();
+        self.current_screen = CurrentScreen::Main;
+        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    pub fn clear_text_filter_buffer(&mut self) {
+        self.text_filter_buffer.clear();
+    }
+
+    pub fn clear_text_filter(&mut self) {
+        self.text_filter.clear();
+        self.text_table_state.select(Some(0));
+    }
+
+    pub fn current_theme(&self) -> &'static Theme {
+        &THEMES[self.theme_index]
+    }
+
+    pub fn enter_theme_select_mode(&mut self) {
+        self.theme_menu_state.select(Some(self.theme_index));
+        self.current_screen = CurrentScreen::ThemeSelect;
+        self.status_message = "Select theme — Enter to apply, Esc to cancel".to_string();
+    }
+
+    pub fn apply_theme(&mut self) {
+        if let Some(idx) = self.theme_menu_state.selected() {
+            if idx < THEMES.len() {
+                self.theme_index = idx;
+                self.add_log_with_level(LogLevel::Info, format!("Theme: {}", THEMES[idx].name));
+            }
+        }
+        self.current_screen = CurrentScreen::Main;
+        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    pub fn cancel_theme_mode(&mut self) {
+        self.current_screen = CurrentScreen::Main;
+        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    pub fn scroll_theme_menu(&mut self, direction: i32) {
+        let len = THEMES.len();
+        let i = match self.theme_menu_state.selected() {
+            Some(i) => {
+                let new = i as i32 + direction;
+                if new < 0 { len - 1 } else if new as usize >= len { 0 } else { new as usize }
+            }
+            None => 0,
+        };
+        self.theme_menu_state.select(Some(i));
+    }
+
     pub fn current_audio_format(&self) -> &'static AudioFormat {
         &AUDIO_FORMATS[self.audio_format_index]
     }
@@ -833,6 +956,8 @@ impl App {
             CurrentScreen::Help            => self.exit_help_screen(),
             CurrentScreen::ApiKeyInput     => self.exit_api_key_mode(),
             CurrentScreen::VoiceFilter     => self.cancel_voice_filter(),
+            CurrentScreen::TextFilter      => self.cancel_text_filter(),
+            CurrentScreen::ThemeSelect     => self.cancel_theme_mode(),
             CurrentScreen::SampleRateSelect  => self.cancel_sample_rate_mode(),
             CurrentScreen::AudioFormatSelect => self.cancel_audio_format_mode(),
             CurrentScreen::Main            => {}
@@ -933,8 +1058,13 @@ impl App {
     pub fn check_audio_playback(&mut self) {
         if self.is_loading {
             if let Some(sink) = &self.audio_sink {
-                if sink.empty() {
-                    // Playback finished - clean up
+                let elapsed_ms = self.playback_start_time.elapsed().as_millis() as u64;
+                let done_by_sink = sink.empty();
+                // Also treat elapsed >= duration as done: covers the gap between the
+                // duration expiring and the 250 ms poll interval catching sink.empty().
+                let done_by_time = self.audio_duration_ms > 0
+                    && elapsed_ms >= self.audio_duration_ms;
+                if done_by_sink || done_by_time {
                     self.stop_loading();
                     self.audio_sink = None;
                     self.audio_stream = None;
@@ -954,9 +1084,10 @@ impl App {
     }
 
     pub fn get_playback_progress(&self) -> (u64, u64) {
-        if self.is_loading && !self.audio_sink.is_none() {
+        if self.is_loading && self.audio_sink.is_some() {
             let elapsed = self.playback_start_time.elapsed().as_millis() as u64;
-            (elapsed, self.audio_duration_ms)
+            let clamped = elapsed.min(self.audio_duration_ms);
+            (clamped, self.audio_duration_ms)
         } else {
             (0, 0)
         }
