@@ -15,7 +15,7 @@ A terminal user interface (TUI) built with Rust and Ratatui for interacting with
 - Adjustable TTS playback speed (`+`/`-`/`0` keys)
 - Interactive API key entry — set or override the key at runtime without restarting (`k`)
 - Open the audio cache folder in Finder with a single keystroke (`o`)
-- TOML configuration file at `~/.config/tts-tui.toml` with inline documentation
+- TOML configuration file at `~/.config/deepgram-tts-client.toml` with inline documentation
 - Experimental feature flags via config file or environment variables
 - Timestamped, color-coded log panel with scrollable history and mouse scroll support
 - Mouse click to select specific items in lists
@@ -32,14 +32,14 @@ cd tts-tui
 cargo run
 ```
 
-On first launch the app creates `~/.config/tts-tui.toml` with all options documented inline. If no API key is detected you will see a warning in the log panel — press `k` to enter one interactively.
+On first launch the app creates `~/.config/deepgram-tts-client.toml` with all options documented inline. If no API key is detected you will see a warning in the log panel — press `k` to enter one interactively.
 
 ## Configuration
 
 Settings are resolved in this priority order (highest wins):
 
 ```
-CLI arguments  >  environment variables  >  ~/.config/tts-tui.toml  >  built-in defaults
+CLI arguments  >  environment variables  >  ~/.config/deepgram-tts-client.toml  >  built-in defaults
 ```
 
 ### API Key
@@ -52,7 +52,7 @@ Three ways to supply your Deepgram API key, in priority order:
 # 2. Environment variable
 export DEEPGRAM_API_KEY="your-api-key"
 
-# 3. Config file (~/.config/tts-tui.toml)
+# 3. Config file (~/.config/deepgram-tts-client.toml)
 # [api]
 # key = "your-api-key"
 ```
@@ -63,7 +63,7 @@ For self-hosted deployments or non-production environments:
 
 ```bash
 # CLI flag (highest priority)
-cargo run -- --endpoint-override https://selfhosted.example.com/v1/speak
+cargo run -- --endpoint https://selfhosted.example.com/v1/speak
 
 # Environment variable
 export DEEPGRAM_TTS_ENDPOINT=https://selfhosted.example.com/v1/speak
@@ -87,7 +87,7 @@ export DEEPGRAM_AUDIO_FORMAT=linear16
 export DEEPGRAM_SAMPLE_RATE=24000
 cargo run
 
-# Config file (~/.config/tts-tui.toml)
+# Config file (~/.config/deepgram-tts-client.toml)
 # [audio]
 # format = "flac"
 # sample_rate = 48000
@@ -108,7 +108,7 @@ You can also change format and sample rate interactively with the `f` and `s` ke
 
 ### Experimental Feature Flags
 
-In-development features can be enabled in `~/.config/tts-tui.toml`:
+In-development features can be enabled in `~/.config/deepgram-tts-client.toml`:
 
 ```toml
 [experimental]
@@ -162,6 +162,7 @@ Press `/` to open a filter for the currently focused panel. The Saved Texts filt
 | Type | Narrow the list in real time (match count shown in title) |
 | `Enter` | Apply filter and close popup |
 | `Esc` | Cancel without changing the current filter |
+| `Backspace` (empty field) | Cancel without changing the current filter |
 | `Ctrl+U` | Clear all filter text |
 | `Backspace` | Delete last character |
 
@@ -171,7 +172,7 @@ Press `/` to open a filter for the currently focused panel. The Saved Texts filt
 |-----|--------|
 | `Up` / `Down` | Navigate themes |
 | `Enter` | Apply theme and close popup |
-| `Esc` | Cancel |
+| `Esc` / `q` | Cancel |
 
 ### Text Entry
 
@@ -179,6 +180,7 @@ Press `/` to open a filter for the currently focused panel. The Saved Texts filt
 |-----|--------|
 | `Enter` | Save text |
 | `Esc` | Cancel |
+| `Backspace` (empty field) | Cancel |
 | `Ctrl+V` / `Cmd+V` | Paste from clipboard |
 | `Backspace` | Delete last character |
 
@@ -188,6 +190,7 @@ Press `/` to open a filter for the currently focused panel. The Saved Texts filt
 |-----|--------|
 | `Enter` | Save key (overrides env var for this session) |
 | `Esc` | Cancel |
+| `Backspace` (empty field) | Cancel |
 | `Backspace` | Delete last character |
 
 ### Help Screen
@@ -195,17 +198,17 @@ Press `/` to open a filter for the currently focused panel. The Saved Texts filt
 | Key | Action |
 |-----|--------|
 | `Up` / `Down` | Scroll help text |
-| `Esc` | Close help screen |
+| `Esc` / `q` | Close help screen |
 
 ### Audio Format / Sample Rate Popups
 
-Press `f` or `s` to open. Arrow keys navigate; `Enter` applies; `Esc` cancels.
+Press `f` or `s` to open. Arrow keys navigate; `Enter` applies; `Esc` or `q` cancels.
 
 | Key | Action |
 |-----|--------|
 | `Up` / `Down` | Navigate options |
 | `Enter` | Apply selection and close popup |
-| `Esc` | Cancel without changing the current setting |
+| `Esc` / `q` | Cancel without changing the current setting |
 
 ### Mouse Controls
 

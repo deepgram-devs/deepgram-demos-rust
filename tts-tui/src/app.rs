@@ -948,22 +948,6 @@ impl App {
         self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
-    /// Close whatever popup is currently open and return to Main.
-    /// Called by the global Esc handler so every popup dismisses consistently.
-    pub fn close_current_popup(&mut self) {
-        match self.current_screen {
-            CurrentScreen::Editing         => self.exit_input_mode(),
-            CurrentScreen::Help            => self.exit_help_screen(),
-            CurrentScreen::ApiKeyInput     => self.exit_api_key_mode(),
-            CurrentScreen::VoiceFilter     => self.cancel_voice_filter(),
-            CurrentScreen::TextFilter      => self.cancel_text_filter(),
-            CurrentScreen::ThemeSelect     => self.cancel_theme_mode(),
-            CurrentScreen::SampleRateSelect  => self.cancel_sample_rate_mode(),
-            CurrentScreen::AudioFormatSelect => self.cancel_audio_format_mode(),
-            CurrentScreen::Main            => {}
-        }
-    }
-
     pub fn scroll_audio_format_menu(&mut self, direction: i32) {
         let len = AUDIO_FORMATS.len();
         let i = match self.audio_format_menu_state.selected() {

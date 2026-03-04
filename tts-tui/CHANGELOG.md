@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0 - 2026-03-04
+
+### Features
+
+- **`q` to dismiss popups** — `q` is now an alternative to `Esc` for closing the Help screen, Theme selector, Audio Format selector, and Sample Rate selector popups.
+- **Backspace to cancel on empty fields** — Pressing `Backspace` in an empty input field now cancels the popup (equivalent to `Esc`) for Text Entry, API Key Entry, Voice Filter, and Text Filter popups.
+- **Kitty keyboard protocol** — When the terminal supports it, the Kitty keyboard enhancement (`DISAMBIGUATE_ESCAPE_CODES`) is activated so `ESC` is always reported as a distinct key event and is never confused with mouse escape sequences.
+- **Mouse capture toggling** — Mouse capture is automatically disabled while any popup is open and re-enabled when returning to the main screen. This eliminates a class of terminal-specific bugs where an `ESC` keypress was swallowed because it looked like the start of a mouse escape sequence.
+
+### Changes
+
+- **Config file renamed** — The TOML configuration file has been renamed from `~/.config/tts-tui.toml` to `~/.config/deepgram-tts-client.toml`. Rename your existing file to keep your settings.
+- **`--endpoint-override` flag renamed to `--endpoint`** — The CLI flag for specifying a custom TTS endpoint is now `--endpoint`. The `DEEPGRAM_TTS_ENDPOINT` environment variable is unchanged.
+- **Removed internal `close_current_popup` helper** — ESC handling is now inlined in the event loop and fires before key-kind filtering, so popup dismissal works reliably regardless of whether the terminal reports `ESC` as a Press, Release, or Repeat event.
+
 ## 0.5.0 - 2026-02-25
 
 ### Features

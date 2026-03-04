@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-/// Top-level application configuration loaded from ~/.config/tts-tui.toml.
+/// Top-level application configuration loaded from ~/.config/deepgram-tts-client.toml.
 /// Priority order (highest to lowest): CLI args > env vars > TOML config > defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -99,7 +99,7 @@ impl Default for ExperimentalFlags {
 /// The default config file content, written on first run.
 /// Written as a string so comments are preserved in the file.
 const DEFAULT_CONFIG: &str = r#"# tts-tui configuration
-# Located at ~/.config/tts-tui.toml
+# Located at ~/.config/deepgram-tts-client.toml
 #
 # Priority order for all settings (highest wins):
 #   CLI arguments > environment variables > this file > built-in defaults
@@ -149,10 +149,10 @@ ssml_support = false
 
 fn get_config_path() -> Option<PathBuf> {
     // Use the system home directory directly; ~/.config is the conventional XDG location
-    std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config").join("tts-tui.toml"))
+    std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config").join("deepgram-tts-client.toml"))
 }
 
-/// Load the application config from ~/.config/tts-tui.toml.
+/// Load the application config from ~/.config/deepgram-tts-client.toml.
 /// Creates the file with defaults and comments if it does not exist.
 /// Applies environment variable overrides after loading.
 pub fn load() -> AppConfig {
@@ -209,7 +209,7 @@ fn parse_bool_env(val: &str) -> bool {
 pub fn config_path_display() -> String {
     get_config_path()
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "~/.config/tts-tui.toml".to_string())
+        .unwrap_or_else(|| "~/.config/deepgram-tts-client.toml".to_string())
 }
 
 #[cfg(test)]

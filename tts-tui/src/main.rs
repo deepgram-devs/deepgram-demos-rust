@@ -8,9 +8,12 @@ mod persistence;
 use std::{io, time::Duration};
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event as CrosstermEvent, KeyCode, KeyModifiers, MouseEventKind, EnableMouseCapture, DisableMouseCapture},
+    event::{self, Event as CrosstermEvent, KeyCode, KeyModifiers, MouseEventKind,
+            EnableMouseCapture, DisableMouseCapture,
+            KeyboardEnhancementFlags, PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement,
+               EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use app::{App, CurrentScreen, Panel, AUDIO_FORMATS, DEFAULT_FORMAT_INDEX};
@@ -23,7 +26,7 @@ use clap::Parser;
 struct Args {
     /// Custom Deepgram API endpoint URL for TTS (overrides config file and env var)
     #[arg(long, env = "DEEPGRAM_TTS_ENDPOINT")]
-    endpoint_override: Option<String>,
+    endpoint: Option<String>,
 
     /// TTS audio encoding format (overrides config file and env var)
     /// Valid values: mp3, linear16, mulaw, alaw, opus, flac, aac
@@ -43,12 +46,23 @@ async fn main() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+
+    // Enable kitty keyboard protocol if the terminal supports it.
+    // DISAMBIGUATE_ESCAPE_CODES ensures the ESC key is reported as a
+    // distinct event and is not confused with the start of a mouse or
+    // other escape sequence.
+    let kbd_enhancement = supports_keyboard_enhancement().unwrap_or(false);
+    if kbd_enhancement {
+        let _ = execute!(stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+    }
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     // Load config, then create app
     let app_config = config::load();
-    let endpoint = args.endpoint_override
+    let endpoint = args.endpoint
         .or_else(|| app_config.api.endpoint.clone())
         .unwrap_or_else(|| "https://api.deepgram.com/v1/speak".to_string());
     // Resolve audio format: CLI > env > config > default (mp3)
@@ -67,6 +81,9 @@ async fn main() -> Result<()> {
     let res = run_app(&mut terminal, &mut app).await;
 
     // Restore terminal
+    if kbd_enhancement {
+        let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    }
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
@@ -79,6 +96,10 @@ async fn main() -> Result<()> {
 }
 
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> Result<()> {
+    // Track mouse capture state so we can toggle it when popups open/close.
+    // Mouse capture is enabled at startup (see main()), so start as true.
+    let mut mouse_captured = true;
+
     loop {
         // Update spinner animation
         app.update_spinner();
@@ -107,6 +128,21 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
 
         terminal.draw(|f| ui::render_ui(f, app))?;
 
+        // Disable mouse capture when a popup is open.  With mouse capture
+        // active the terminal sends mouse events as \x1b-prefixed escape
+        // sequences; crossterm's ESC disambiguation can misidentify a plain
+        // ESC keypress as the start of one of those sequences, swallowing it.
+        // Mouse interactions are only used on the Main screen, so there is no
+        // functional cost to toggling capture here.
+        let popup_open = app.current_screen != CurrentScreen::Main;
+        if popup_open && mouse_captured {
+            let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
+            mouse_captured = false;
+        } else if !popup_open && !mouse_captured {
+            let _ = execute!(terminal.backend_mut(), EnableMouseCapture);
+            mouse_captured = true;
+        }
+
         if event::poll(Duration::from_millis(250))? {
             match event::read()? {
                 CrosstermEvent::Paste(content) => {
@@ -121,16 +157,36 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                     }
                 }
                 CrosstermEvent::Key(key) => {
-                if key.kind == event::KeyEventKind::Release {
-                    // Skip key-release events; only act on Press (and Repeat)
+                // Handle ESC before key-kind filtering so popup dismissal
+                // works regardless of whether the terminal reports ESC as
+                // Press, Release, or Repeat (behaviour varies across terminals
+                // and crossterm versions when mouse capture is active).
+                if key.code == KeyCode::Esc {
+                    match app.current_screen {
+                        CurrentScreen::Main => {
+                            if app.is_loading {
+                                app.stop_audio_playback();
+                            } else if app.focused_panel == Panel::VoiceMenu && !app.voice_filter.is_empty() {
+                                app.clear_voice_filter();
+                            } else if app.focused_panel == Panel::TextList && !app.text_filter.is_empty() {
+                                app.clear_text_filter();
+                            }
+                        }
+                        CurrentScreen::Editing         => app.exit_input_mode(),
+                        CurrentScreen::Help            => app.exit_help_screen(),
+                        CurrentScreen::ApiKeyInput     => app.exit_api_key_mode(),
+                        CurrentScreen::VoiceFilter     => app.cancel_voice_filter(),
+                        CurrentScreen::TextFilter      => app.cancel_text_filter(),
+                        CurrentScreen::ThemeSelect     => app.cancel_theme_mode(),
+                        CurrentScreen::SampleRateSelect  => app.cancel_sample_rate_mode(),
+                        CurrentScreen::AudioFormatSelect => app.cancel_audio_format_mode(),
+                    }
                     continue;
                 }
 
-                // Global Esc: close any open popup and return to Main.
-                // Handled here (before the per-screen match) so that crossterm's
-                // escape-sequence disambiguation never swallows or misroutes the key.
-                if key.code == KeyCode::Esc && app.current_screen != CurrentScreen::Main {
-                    app.close_current_popup();
+                // Skip Release events for all other keys to avoid double-firing
+                // on terminals that send both Press and Release events.
+                if key.kind == event::KeyEventKind::Release {
                     continue;
                 }
 
@@ -167,15 +223,6 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         KeyCode::Up => app.scroll_text_list(-1),
                         KeyCode::Right | KeyCode::Tab => app.focus_next_panel(),
                         KeyCode::Left => app.focus_prev_panel(),
-                        KeyCode::Esc => {
-                            if app.is_loading {
-                                app.stop_audio_playback();
-                            } else if app.focused_panel == Panel::VoiceMenu && !app.voice_filter.is_empty() {
-                                app.clear_voice_filter();
-                            } else if app.focused_panel == Panel::TextList && !app.text_filter.is_empty() {
-                                app.clear_text_filter();
-                            }
-                        }
                         KeyCode::Backspace => {
                             if app.focused_panel == Panel::VoiceMenu && !app.voice_filter.is_empty() {
                                 app.voice_filter.pop();
@@ -281,6 +328,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         KeyCode::Enter => {
                             app.save_input_as_text();
                         }
+                        // Backspace on an empty buffer cancels (same as Esc)
+                        KeyCode::Backspace if app.input_buffer.is_empty() => {
+                            app.exit_input_mode();
+                        }
                         KeyCode::Backspace => {
                             app.input_buffer.pop();
                         }
@@ -293,6 +344,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         _ => {}
                     },
                     CurrentScreen::Help => match key.code {
+                        // 'q' or any non-navigation key closes help
+                        KeyCode::Char('q') => {
+                            app.exit_help_screen();
+                        }
                         KeyCode::Up => {
                             app.scroll_help(-1, 54); // 54 help lines
                         }
@@ -304,6 +359,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                     CurrentScreen::ApiKeyInput => match key.code {
                         KeyCode::Enter => {
                             app.save_api_key();
+                        }
+                        // Backspace on an empty buffer cancels (same as Esc)
+                        KeyCode::Backspace if app.api_key_input_buffer.is_empty() => {
+                            app.exit_api_key_mode();
                         }
                         KeyCode::Backspace => {
                             app.api_key_input_buffer.pop();
@@ -320,6 +379,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         KeyCode::Enter => {
                             app.apply_voice_filter();
                         }
+                        // Backspace on an empty buffer cancels filter mode
+                        KeyCode::Backspace if app.voice_filter_buffer.is_empty() => {
+                            app.cancel_voice_filter();
+                        }
                         KeyCode::Backspace => {
                             app.voice_filter_buffer.pop();
                         }
@@ -334,6 +397,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                     CurrentScreen::TextFilter => match key.code {
                         KeyCode::Enter => {
                             app.apply_text_filter();
+                        }
+                        // Backspace on an empty buffer cancels filter mode
+                        KeyCode::Backspace if app.text_filter_buffer.is_empty() => {
+                            app.cancel_text_filter();
                         }
                         KeyCode::Backspace => {
                             app.text_filter_buffer.pop();
@@ -350,6 +417,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         KeyCode::Enter => {
                             app.apply_sample_rate();
                         }
+                        KeyCode::Char('q') => {
+                            app.cancel_sample_rate_mode();
+                        }
                         KeyCode::Up => {
                             app.scroll_sample_rate_menu(-1);
                         }
@@ -362,6 +432,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         KeyCode::Enter => {
                             app.apply_audio_format();
                         }
+                        KeyCode::Char('q') => {
+                            app.cancel_audio_format_mode();
+                        }
                         KeyCode::Up => {
                             app.scroll_audio_format_menu(-1);
                         }
@@ -373,6 +446,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                     CurrentScreen::ThemeSelect => match key.code {
                         KeyCode::Enter => {
                             app.apply_theme();
+                        }
+                        KeyCode::Char('q') => {
+                            app.cancel_theme_mode();
                         }
                         KeyCode::Up => {
                             app.scroll_theme_menu(-1);
