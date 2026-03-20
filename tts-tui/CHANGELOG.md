@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.0 - 2026-03-19
+
+### Features
+
+- **Command Palette** — Press `Ctrl+P` to open a searchable command palette listing every action with its keyboard shortcut. Type to filter commands by name, use `Up`/`Down` to navigate, and `Enter` to run. All existing actions are accessible through the palette, including ones without dedicated shortcuts (e.g. Clear Queue).
+- **Text editing** — Press `e` while a saved text is selected to open an edit popup pre-filled with the existing text. The popup title changes to "Edit Text" vs "Enter New Text" to make the mode clear. Saves overwrite the original entry in-place.
+- **Text reordering** — Press `Ctrl+Up` or `Ctrl+Down` with the Saved Texts panel focused to move the selected entry up or down in the list. Reorder is disabled when a filter is active (the filtered view would be confusing to reorder). Changes are persisted immediately.
+- **Playback queue** — Press `Space` to enqueue the selected text+voice pair. Items play automatically in sequence when the previous track finishes. The queue length is shown in the status bar. Use the Command Palette to clear the queue.
+- **Favorite voices** — Press `*` while the Voices panel is focused to toggle a `★` favorite marker on the selected voice. Favorites are persisted to disk alongside saved texts.
+
+### Changes
+
+- **Editing popup** now shows a cursor indicator (`_`) and a shortcut hint row below the popup, consistent with other input popups.
+- **Help screen** expanded with all new shortcuts and organized into logical sections.
+- **Status bar** now shows `Queue: N` when items are queued.
+- **Persistence file** format extended with a `favorite_voice_ids` field (`#[serde(default)]`, fully backwards-compatible with existing files).
+- Extracted `kick_off_tts` helper in `main.rs` to deduplicate TTS playback initiation logic.
+
 ## 0.6.0 - 2026-03-04
 
 ### Features

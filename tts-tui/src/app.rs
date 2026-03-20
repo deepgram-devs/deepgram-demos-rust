@@ -4,7 +4,7 @@ use ratatui::layout::Rect;
 use directories::ProjectDirs;
 use anyhow::Result;
 use lazy_static::lazy_static;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -41,7 +41,68 @@ pub enum CurrentScreen {
     ThemeSelect,
     SampleRateSelect,
     AudioFormatSelect,
+    CommandPalette,
 }
+
+/// An action that can be invoked from the command palette or keyboard shortcut.
+#[derive(Clone, PartialEq, Debug)]
+pub enum CommandAction {
+    // These two are handled by main.rs (need tokio / process exit)
+    PlaySelected,
+    Quit,
+    // Everything else is handled directly in App::execute_command_palette
+    AddText,
+    EditText,
+    DeleteText,
+    EnqueueSelected,
+    ClearQueue,
+    MoveTextUp,
+    MoveTextDown,
+    ToggleFavoriteVoice,
+    FilterVoices,
+    FilterTexts,
+    SetApiKey,
+    OpenCacheFolder,
+    SelectTheme,
+    SelectAudioFormat,
+    SelectSampleRate,
+    ShowHelp,
+    IncreaseSpeed,
+    DecreaseSpeed,
+    ResetSpeed,
+    StopPlayback,
+}
+
+pub struct AppCommand {
+    pub name: &'static str,
+    pub shortcut: Option<&'static str>,
+    pub action: CommandAction,
+}
+
+pub static ALL_COMMANDS: &[AppCommand] = &[
+    AppCommand { name: "Play Selected Text",       shortcut: Some("Enter"),      action: CommandAction::PlaySelected },
+    AppCommand { name: "Enqueue Selected Text",    shortcut: Some("Space"),      action: CommandAction::EnqueueSelected },
+    AppCommand { name: "Clear Playback Queue",     shortcut: None,               action: CommandAction::ClearQueue },
+    AppCommand { name: "Stop Playback",            shortcut: Some("Esc"),        action: CommandAction::StopPlayback },
+    AppCommand { name: "Add New Text",             shortcut: Some("n"),          action: CommandAction::AddText },
+    AppCommand { name: "Edit Selected Text",       shortcut: Some("e"),          action: CommandAction::EditText },
+    AppCommand { name: "Delete Selected Text",     shortcut: Some("d"),          action: CommandAction::DeleteText },
+    AppCommand { name: "Move Text Up",             shortcut: Some("Ctrl+Up"),    action: CommandAction::MoveTextUp },
+    AppCommand { name: "Move Text Down",           shortcut: Some("Ctrl+Down"),  action: CommandAction::MoveTextDown },
+    AppCommand { name: "Toggle Favorite Voice",    shortcut: Some("*"),          action: CommandAction::ToggleFavoriteVoice },
+    AppCommand { name: "Filter Voices",            shortcut: Some("/ (voices)"), action: CommandAction::FilterVoices },
+    AppCommand { name: "Filter Texts",             shortcut: Some("/ (texts)"),  action: CommandAction::FilterTexts },
+    AppCommand { name: "Set API Key",              shortcut: Some("k"),          action: CommandAction::SetApiKey },
+    AppCommand { name: "Open Cache Folder",        shortcut: Some("o"),          action: CommandAction::OpenCacheFolder },
+    AppCommand { name: "Select Theme",             shortcut: Some("t"),          action: CommandAction::SelectTheme },
+    AppCommand { name: "Select Audio Format",      shortcut: Some("f"),          action: CommandAction::SelectAudioFormat },
+    AppCommand { name: "Select Sample Rate",       shortcut: Some("s"),          action: CommandAction::SelectSampleRate },
+    AppCommand { name: "Show Help",                shortcut: Some("?"),          action: CommandAction::ShowHelp },
+    AppCommand { name: "Increase Playback Speed",  shortcut: Some("+/="),        action: CommandAction::IncreaseSpeed },
+    AppCommand { name: "Decrease Playback Speed",  shortcut: Some("-"),          action: CommandAction::DecreaseSpeed },
+    AppCommand { name: "Reset Playback Speed",     shortcut: Some("0"),          action: CommandAction::ResetSpeed },
+    AppCommand { name: "Quit Application",         shortcut: Some("q/Ctrl+Q"),   action: CommandAction::Quit },
+];
 
 /// Describes a Deepgram TTS audio encoding format with its constraints.
 pub struct AudioFormat {
@@ -132,6 +193,16 @@ pub struct App {
     pub help_scroll_offset: usize,
     pub text_panel_bounds: Rect,
     pub voice_panel_bounds: Rect,
+    // Favorites
+    pub favorite_voices: HashSet<String>,
+    // Playback queue: (text, voice_id) pairs
+    pub playback_queue: VecDeque<(String, String)>,
+    pub needs_queue_advance: bool,
+    // Command palette
+    pub command_palette_buffer: String,
+    pub command_palette_state: ListState,
+    // Edit mode: Some(idx) means editing existing text at that index
+    pub editing_original_index: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -329,13 +400,15 @@ impl App {
         let mut sample_rate_menu_state = ListState::default();
         sample_rate_menu_state.select(Some(rate_index));
 
+        let persisted = persistence::load();
+
         App {
             config,
             current_screen: CurrentScreen::Main,
             currently_editing: None,
             text_table_state,
             voice_menu_state,
-            saved_texts: persistence::load_saved_texts(),
+            saved_texts: persisted.texts,
             voices,
             audio_cache_dir: Self::get_audio_cache_dir().expect("Failed to get audio cache directory"),
             deepgram_endpoint,
@@ -370,19 +443,39 @@ impl App {
             text_panel_bounds: Rect::default(),
             voice_panel_bounds: Rect::default(),
             log_panel_bounds: Rect::default(),
+            favorite_voices: persisted.favorite_voice_ids.into_iter().collect(),
+            playback_queue: VecDeque::new(),
+            needs_queue_advance: false,
+            command_palette_buffer: String::new(),
+            command_palette_state: ListState::default(),
+            editing_original_index: None,
         }
     }
 
     pub fn enter_input_mode(&mut self) {
         self.current_screen = CurrentScreen::Editing;
         self.currently_editing = Some(CurrentlyEditing::Text);
+        self.editing_original_index = None;
         self.input_buffer.clear();
-        self.status_message = "Editing... Press 'Enter' to save, 'Esc' to cancel.".to_string();
+        self.status_message = "New text — Press 'Enter' to save, 'Esc' to cancel.".to_string();
+    }
+
+    pub fn enter_edit_mode(&mut self) {
+        if let Some(filtered_idx) = self.text_table_state.selected() {
+            if let Some(orig_idx) = self.get_filtered_text_original_index(filtered_idx) {
+                self.editing_original_index = Some(orig_idx);
+                self.input_buffer = self.saved_texts[orig_idx].clone();
+                self.current_screen = CurrentScreen::Editing;
+                self.currently_editing = Some(CurrentlyEditing::Text);
+                self.status_message = "Editing text — Press 'Enter' to save, 'Esc' to cancel.".to_string();
+            }
+        }
     }
 
     pub fn exit_input_mode(&mut self) {
         self.current_screen = CurrentScreen::Main;
         self.currently_editing = None;
+        self.editing_original_index = None;
         self.input_buffer.clear();
         self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
@@ -497,16 +590,41 @@ impl App {
     }
 
     pub fn save_input_as_text(&mut self) {
-        if !self.input_buffer.trim().is_empty() {
-            self.saved_texts.push(self.input_buffer.clone());
-            self.add_log(format!("Added new text: {}", self.input_buffer));
-
-            // Persist to disk
-            if let Err(e) = persistence::save_saved_texts(&self.saved_texts) {
+        let text = self.input_buffer.trim().to_string();
+        if !text.is_empty() {
+            if let Some(orig_idx) = self.editing_original_index {
+                // Edit mode: update in place
+                if orig_idx < self.saved_texts.len() {
+                    self.add_log(format!("Updated text: {}", text));
+                    self.saved_texts[orig_idx] = text;
+                }
+            } else {
+                // Add mode: append
+                self.add_log(format!("Added new text: {}", text));
+                self.saved_texts.push(text);
+            }
+            let favs: Vec<String> = self.favorite_voices.iter().cloned().collect();
+            if let Err(e) = persistence::save(&self.saved_texts, &favs) {
                 self.add_log(format!("Warning: Failed to save texts to disk: {}", e));
             }
         }
         self.exit_input_mode();
+    }
+
+    /// Ctrl+W — delete the word immediately before the cursor (end of buffer).
+    /// Strips trailing whitespace first, then deletes back to the next whitespace boundary.
+    pub fn delete_previous_word(&mut self) {
+        if self.input_buffer.is_empty() {
+            return;
+        }
+        // Find end of the last word (skip trailing whitespace)
+        let trim_end = self.input_buffer.trim_end_matches(|c: char| c.is_whitespace()).len();
+        // Find the start of that word (last whitespace before it)
+        let word_start = self.input_buffer[..trim_end]
+            .rfind(|c: char| c.is_whitespace())
+            .map(|i| i + 1) // byte after the whitespace (all whitespace is ASCII)
+            .unwrap_or(0);
+        self.input_buffer.truncate(word_start);
     }
 
     pub fn paste_from_clipboard(&mut self) {
@@ -562,13 +680,166 @@ impl App {
                 }
 
                 // Persist to disk
-                if let Err(e) = persistence::save_saved_texts(&self.saved_texts) {
+                let favs: Vec<String> = self.favorite_voices.iter().cloned().collect();
+                if let Err(e) = persistence::save(&self.saved_texts, &favs) {
                     self.add_log(format!("Warning: Failed to save texts to disk: {}", e));
                 }
             }
         }
     }
 
+
+    // ── Favorites ────────────────────────────────────────────────────────────
+
+    pub fn toggle_favorite_voice(&mut self) {
+        // Clone what we need before any mutable borrows
+        let (id, name) = match self.get_selected_voice() {
+            Some(v) => (v.id.clone(), v.name.clone()),
+            None => return,
+        };
+        let was_favorite = self.favorite_voices.contains(&id);
+        if was_favorite {
+            self.favorite_voices.remove(&id);
+            self.add_log_with_level(LogLevel::Info, format!("Removed {} from favorites", name));
+        } else {
+            self.favorite_voices.insert(id);
+            self.add_log_with_level(LogLevel::Success, format!("Added {} to favorites", name));
+        }
+        let favs: Vec<String> = self.favorite_voices.iter().cloned().collect();
+        if let Err(e) = persistence::save(&self.saved_texts, &favs) {
+            self.add_log(format!("Warning: Failed to save favorites: {}", e));
+        }
+    }
+
+    pub fn is_voice_favorite(&self, voice_id: &str) -> bool {
+        self.favorite_voices.contains(voice_id)
+    }
+
+    // ── Playback Queue ────────────────────────────────────────────────────────
+
+    pub fn enqueue_current(&mut self) {
+        if let (Some(text), Some(voice)) = (self.get_selected_text(), self.get_selected_voice()) {
+            let voice_id = voice.id.clone();
+            let voice_name = voice.name.clone();
+            self.playback_queue.push_back((text.clone(), voice_id));
+            self.add_log(format!("Queued: \"{}\" with {}", text, voice_name));
+            let count = self.playback_queue.len();
+            self.set_status_message(format!("{} item(s) in queue — press Enter to play or queue more", count));
+        }
+    }
+
+    pub fn clear_queue(&mut self) {
+        let count = self.playback_queue.len();
+        self.playback_queue.clear();
+        self.needs_queue_advance = false;
+        if count > 0 {
+            self.add_log(format!("Cleared {} item(s) from queue", count));
+        }
+        self.set_status_message("Queue cleared.".to_string());
+    }
+
+    // ── Text Reordering ───────────────────────────────────────────────────────
+
+    pub fn move_text_up(&mut self) {
+        if !self.text_filter.is_empty() { return; } // reorder disabled when filtered
+        if let Some(idx) = self.text_table_state.selected() {
+            if idx > 0 {
+                self.saved_texts.swap(idx, idx - 1);
+                self.text_table_state.select(Some(idx - 1));
+                let favs: Vec<String> = self.favorite_voices.iter().cloned().collect();
+                let _ = persistence::save(&self.saved_texts, &favs);
+            }
+        }
+    }
+
+    pub fn move_text_down(&mut self) {
+        if !self.text_filter.is_empty() { return; } // reorder disabled when filtered
+        if let Some(idx) = self.text_table_state.selected() {
+            if idx + 1 < self.saved_texts.len() {
+                self.saved_texts.swap(idx, idx + 1);
+                self.text_table_state.select(Some(idx + 1));
+                let favs: Vec<String> = self.favorite_voices.iter().cloned().collect();
+                let _ = persistence::save(&self.saved_texts, &favs);
+            }
+        }
+    }
+
+    // ── Command Palette ───────────────────────────────────────────────────────
+
+    pub fn enter_command_palette(&mut self) {
+        self.command_palette_buffer.clear();
+        self.command_palette_state.select(Some(0));
+        self.current_screen = CurrentScreen::CommandPalette;
+        self.status_message = "Command Palette — type to filter, Enter to run, Esc to cancel".to_string();
+    }
+
+    pub fn exit_command_palette(&mut self) {
+        self.command_palette_buffer.clear();
+        self.current_screen = CurrentScreen::Main;
+        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    pub fn get_filtered_commands(&self) -> Vec<&'static AppCommand> {
+        if self.command_palette_buffer.is_empty() {
+            ALL_COMMANDS.iter().collect()
+        } else {
+            let q = self.command_palette_buffer.to_lowercase();
+            ALL_COMMANDS.iter().filter(|cmd| cmd.name.to_lowercase().contains(&q)).collect()
+        }
+    }
+
+    pub fn scroll_command_palette(&mut self, direction: i32) {
+        let len = self.get_filtered_commands().len();
+        if len == 0 { return; }
+        let i = match self.command_palette_state.selected() {
+            Some(i) => {
+                let new = i as i32 + direction;
+                if new < 0 { len - 1 } else if new as usize >= len { 0 } else { new as usize }
+            }
+            None => 0,
+        };
+        self.command_palette_state.select(Some(i));
+    }
+
+    /// Execute the selected command palette entry. Returns Some(action) for actions
+    /// that must be handled by main.rs (PlaySelected, Quit); handles everything else
+    /// directly and returns None.
+    pub fn execute_command_palette(&mut self) -> Option<CommandAction> {
+        let commands = self.get_filtered_commands();
+        let action = self.command_palette_state.selected()
+            .and_then(|i| commands.get(i))
+            .map(|cmd| cmd.action.clone());
+
+        self.exit_command_palette();
+
+        if let Some(ref a) = action {
+            match a {
+                CommandAction::PlaySelected | CommandAction::Quit => { /* handled by main.rs */ }
+                CommandAction::AddText           => self.enter_input_mode(),
+                CommandAction::EditText          => self.enter_edit_mode(),
+                CommandAction::DeleteText        => self.delete_selected_text(),
+                CommandAction::EnqueueSelected   => self.enqueue_current(),
+                CommandAction::ClearQueue        => self.clear_queue(),
+                CommandAction::MoveTextUp        => self.move_text_up(),
+                CommandAction::MoveTextDown      => self.move_text_down(),
+                CommandAction::ToggleFavoriteVoice => self.toggle_favorite_voice(),
+                CommandAction::FilterVoices      => self.enter_voice_filter_mode(),
+                CommandAction::FilterTexts       => self.enter_text_filter_mode(),
+                CommandAction::SetApiKey         => self.enter_api_key_mode(),
+                CommandAction::OpenCacheFolder   => self.open_audio_cache_in_finder(),
+                CommandAction::SelectTheme       => self.enter_theme_select_mode(),
+                CommandAction::SelectAudioFormat => self.enter_audio_format_mode(),
+                CommandAction::SelectSampleRate  => self.enter_sample_rate_mode(),
+                CommandAction::ShowHelp          => self.show_help_screen(),
+                CommandAction::IncreaseSpeed     => self.increase_speed(),
+                CommandAction::DecreaseSpeed     => self.decrease_speed(),
+                CommandAction::ResetSpeed        => self.reset_speed(),
+                CommandAction::StopPlayback      => self.stop_audio_playback(),
+            }
+        }
+
+        action
+    }
 
     pub fn add_log(&mut self, message: String) {
         self.add_log_with_level(LogLevel::Info, message);
@@ -1052,7 +1323,11 @@ impl App {
                     self.stop_loading();
                     self.audio_sink = None;
                     self.audio_stream = None;
-                    self.set_status_message("Playback complete".to_string());
+                    if !self.playback_queue.is_empty() {
+                        self.needs_queue_advance = true;
+                    } else {
+                        self.set_status_message("Playback complete".to_string());
+                    }
                 }
             }
         }

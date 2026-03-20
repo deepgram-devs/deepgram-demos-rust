@@ -16,7 +16,7 @@ use crossterm::{
                EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use app::{App, CurrentScreen, Panel, AUDIO_FORMATS, DEFAULT_FORMAT_INDEX};
+use app::{App, CommandAction, CurrentScreen, Panel, AUDIO_FORMATS, DEFAULT_FORMAT_INDEX};
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -95,6 +95,51 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Kick off a TTS fetch+play in a background task.
+/// Stops any in-progress playback first. When `force_regenerate` is true the
+/// cache is bypassed and a fresh request is made to the Deepgram API.
+fn kick_off_tts(app: &mut App, text: String, voice_id: String, api_key: String, force_regenerate: bool) {
+    // Stop any existing audio
+    if let Some(sink) = app.audio_sink.take() {
+        sink.stop();
+    }
+    app.audio_stream = None;
+
+    app.start_loading(text.clone());
+    app.set_status_message(format!("Generating audio: {}", text));
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    app.tts_receiver = Some(rx);
+
+    let speed = app.playback_speed;
+    let sample_rate = app.sample_rate;
+    let encoding = app.current_audio_format().encoding.to_string();
+    let extension = app.current_audio_format().extension.to_string();
+    let cache_dir = app.audio_cache_dir.clone();
+    let endpoint = app.deepgram_endpoint.clone();
+
+    tokio::spawn(async move {
+        let result = match tts::fetch_audio_for_playback(
+            &api_key, &text, &voice_id, speed, sample_rate, &encoding, &extension, &cache_dir, &endpoint,
+            force_regenerate,
+        ).await {
+            Ok((msg, audio_data, is_cached)) => {
+                app::TtsResult::Success { message: msg, audio_data, is_cached }
+            }
+            Err(e) => {
+                let mut error_msg = format!("Error fetching audio: {:#}", e);
+                let mut source = e.source();
+                while let Some(err) = source {
+                    error_msg.push_str(&format!("\n  Caused by: {}", err));
+                    source = err.source();
+                }
+                app::TtsResult::Error(error_msg)
+            }
+        };
+        let _ = tx.send(result);
+    });
+}
+
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> Result<()> {
     // Track mouse capture state so we can toggle it when popups open/close.
     // Mouse capture is enabled at startup (see main()), so start as true.
@@ -125,6 +170,31 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
 
         // Check if audio playback is complete
         app.check_audio_playback();
+
+        // Auto-advance the playback queue when previous track finishes
+        if app.needs_queue_advance {
+            app.needs_queue_advance = false;
+            if let Some((text, voice_id)) = app.playback_queue.pop_front() {
+                let api_key_result = if let Some(ref key) = app.api_key_override {
+                    Ok(key.clone())
+                } else {
+                    tts::get_deepgram_api_key()
+                };
+                match api_key_result {
+                    Ok(api_key) => {
+                        let remaining = app.playback_queue.len();
+                        if remaining > 0 {
+                            app.add_log(format!("Queue: playing next item ({} remaining after this)", remaining));
+                        }
+                        kick_off_tts(app, text, voice_id, api_key, false);
+                    }
+                    Err(e) => {
+                        app.add_log(format!("Queue advance failed — no API key: {}", e));
+                        app.playback_queue.clear();
+                    }
+                }
+            }
+        }
 
         terminal.draw(|f| ui::render_ui(f, app))?;
 
@@ -172,14 +242,15 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                                 app.clear_text_filter();
                             }
                         }
-                        CurrentScreen::Editing         => app.exit_input_mode(),
-                        CurrentScreen::Help            => app.exit_help_screen(),
-                        CurrentScreen::ApiKeyInput     => app.exit_api_key_mode(),
-                        CurrentScreen::VoiceFilter     => app.cancel_voice_filter(),
-                        CurrentScreen::TextFilter      => app.cancel_text_filter(),
-                        CurrentScreen::ThemeSelect     => app.cancel_theme_mode(),
-                        CurrentScreen::SampleRateSelect  => app.cancel_sample_rate_mode(),
-                        CurrentScreen::AudioFormatSelect => app.cancel_audio_format_mode(),
+                        CurrentScreen::Editing          => app.exit_input_mode(),
+                        CurrentScreen::Help             => app.exit_help_screen(),
+                        CurrentScreen::ApiKeyInput      => app.exit_api_key_mode(),
+                        CurrentScreen::VoiceFilter      => app.cancel_voice_filter(),
+                        CurrentScreen::TextFilter       => app.cancel_text_filter(),
+                        CurrentScreen::ThemeSelect      => app.cancel_theme_mode(),
+                        CurrentScreen::SampleRateSelect   => app.cancel_sample_rate_mode(),
+                        CurrentScreen::AudioFormatSelect  => app.cancel_audio_format_mode(),
+                        CurrentScreen::CommandPalette   => app.exit_command_palette(),
                     }
                     continue;
                 }
@@ -200,6 +271,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             return Ok(());
                         }
+                        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.enter_command_palette();
+                        }
                         KeyCode::Char('?') => {
                             app.show_help_screen();
                         }
@@ -214,13 +288,40 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                                 app.enter_input_mode();
                             }
                         }
+                        KeyCode::Char('e') => {
+                            if app.focused_panel == Panel::TextList {
+                                app.enter_edit_mode();
+                            }
+                        }
                         KeyCode::Char('d') => {
                             if app.focused_panel == Panel::TextList {
                                 app.delete_selected_text();
                             }
                         }
-                        KeyCode::Down => app.scroll_text_list(1),
-                        KeyCode::Up => app.scroll_text_list(-1),
+                        KeyCode::Char(' ') => {
+                            if app.focused_panel == Panel::TextList {
+                                app.enqueue_current();
+                            }
+                        }
+                        KeyCode::Char('*') => {
+                            if app.focused_panel == Panel::VoiceMenu {
+                                app.toggle_favorite_voice();
+                            }
+                        }
+                        KeyCode::Down => {
+                            if key.modifiers.contains(KeyModifiers::CONTROL) && app.focused_panel == Panel::TextList {
+                                app.move_text_down();
+                            } else {
+                                app.scroll_text_list(1);
+                            }
+                        }
+                        KeyCode::Up => {
+                            if key.modifiers.contains(KeyModifiers::CONTROL) && app.focused_panel == Panel::TextList {
+                                app.move_text_up();
+                            } else {
+                                app.scroll_text_list(-1);
+                            }
+                        }
                         KeyCode::Right | KeyCode::Tab => app.focus_next_panel(),
                         KeyCode::Left => app.focus_prev_panel(),
                         KeyCode::Backspace => {
@@ -242,6 +343,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                             app.reset_speed();
                         }
                         KeyCode::Enter => {
+                            let force = key.modifiers.contains(KeyModifiers::CONTROL);
                             if let Some(selected_text) = app.get_selected_text() {
                                 if let Some(selected_voice) = app.get_selected_voice() {
                                     let voice_id = selected_voice.id.clone();
@@ -252,50 +354,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                                     };
                                     match api_key_result {
                                         Ok(dg_api_key) => {
-                                            // Stop any existing audio playback before starting new clip
-                                            if app.audio_sink.is_some() {
-                                                if let Some(sink) = app.audio_sink.take() {
-                                                    sink.stop();
-                                                }
-                                                app.audio_stream = None;
-                                            }
-
-                                            // Start loading state
-                                            app.start_loading(selected_text.clone());
-                                            app.set_status_message(format!("Generating audio: {}", selected_text));
-
-                                            // Create channel for background task
-                                            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                                            app.tts_receiver = Some(rx);
-
-                                            // Clone data for background task
-                                            let api_key = dg_api_key.clone();
-                                            let text = selected_text.clone();
-                                            let speed = app.playback_speed;
-                                            let sample_rate = app.sample_rate;
-                                            let encoding = app.current_audio_format().encoding.to_string();
-                                            let extension = app.current_audio_format().extension.to_string();
-                                            let cache_dir = app.audio_cache_dir.clone();
-                                            let endpoint = app.deepgram_endpoint.clone();
-
-                                            // Spawn background task for TTS API call (network only)
-                                            tokio::spawn(async move {
-                                                let result = match tts::fetch_audio_for_playback(&api_key, &text, &voice_id, speed, sample_rate, &encoding, &extension, &cache_dir, &endpoint).await {
-                                                    Ok((msg, audio_data, is_cached)) => {
-                                                        app::TtsResult::Success { message: msg, audio_data, is_cached }
-                                                    }
-                                                    Err(e) => {
-                                                        let mut error_msg = format!("Error fetching audio: {:#}", e);
-                                                        let mut source = e.source();
-                                                        while let Some(err) = source {
-                                                            error_msg.push_str(&format!("\n  Caused by: {}", err));
-                                                            source = err.source();
-                                                        }
-                                                        app::TtsResult::Error(error_msg)
-                                                    }
-                                                };
-                                                let _ = tx.send(result);
-                                            });
+                                            kick_off_tts(app, selected_text, voice_id, dg_api_key, force);
                                         }
                                         Err(e) => {
                                             app.add_log(format!("Error: {}", e));
@@ -335,6 +394,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         KeyCode::Backspace => {
                             app.input_buffer.pop();
                         }
+                        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.delete_previous_word();
+                        }
                         KeyCode::Char('v') | KeyCode::Char('V') if key.modifiers.contains(KeyModifiers::CONTROL) || key.modifiers.contains(KeyModifiers::SUPER) => {
                             app.paste_from_clipboard();
                         }
@@ -344,15 +406,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         _ => {}
                     },
                     CurrentScreen::Help => match key.code {
-                        // 'q' or any non-navigation key closes help
                         KeyCode::Char('q') => {
                             app.exit_help_screen();
                         }
                         KeyCode::Up => {
-                            app.scroll_help(-1, 54); // 54 help lines
+                            app.scroll_help(-1, 70); // updated line count
                         }
                         KeyCode::Down => {
-                            app.scroll_help(1, 54);
+                            app.scroll_help(1, 70);
                         }
                         _ => {}
                     },
@@ -455,6 +516,60 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mu
                         }
                         KeyCode::Down => {
                             app.scroll_theme_menu(1);
+                        }
+                        _ => {}
+                    },
+                    CurrentScreen::CommandPalette => match key.code {
+                        KeyCode::Enter => {
+                            if let Some(action) = app.execute_command_palette() {
+                                match action {
+                                    CommandAction::Quit => return Ok(()),
+                                    CommandAction::PlaySelected => {
+                                        if let Some(selected_text) = app.get_selected_text() {
+                                            if let Some(selected_voice) = app.get_selected_voice() {
+                                                let voice_id = selected_voice.id.clone();
+                                                let api_key_result = if let Some(ref key) = app.api_key_override {
+                                                    Ok(key.clone())
+                                                } else {
+                                                    tts::get_deepgram_api_key()
+                                                };
+                                                match api_key_result {
+                                                    Ok(key) => kick_off_tts(app, selected_text, voice_id, key, false),
+                                                    Err(e) => {
+                                                        app.add_log(format!("Error: {}", e));
+                                                        app.set_status_message("API Key missing".to_string());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => {} // handled inside execute_command_palette
+                                }
+                            }
+                        }
+                        KeyCode::Up => app.scroll_command_palette(-1),
+                        KeyCode::Down => app.scroll_command_palette(1),
+                        KeyCode::Backspace if app.command_palette_buffer.is_empty() => {
+                            app.exit_command_palette();
+                        }
+                        KeyCode::Backspace => {
+                            app.command_palette_buffer.pop();
+                            // Keep selection in bounds after filter narrows
+                            let len = app.get_filtered_commands().len();
+                            if let Some(sel) = app.command_palette_state.selected() {
+                                if sel >= len && len > 0 {
+                                    app.command_palette_state.select(Some(len - 1));
+                                }
+                            }
+                        }
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.command_palette_buffer.clear();
+                            app.command_palette_state.select(Some(0));
+                        }
+                        KeyCode::Char(c) => {
+                            app.command_palette_buffer.push(c);
+                            // Reset selection to top when filter changes
+                            app.command_palette_state.select(Some(0));
                         }
                         _ => {}
                     },

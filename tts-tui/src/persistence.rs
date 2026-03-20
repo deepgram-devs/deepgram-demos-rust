@@ -7,6 +7,13 @@ use std::path::PathBuf;
 #[derive(Serialize, Deserialize)]
 struct SavedData {
     texts: Vec<String>,
+    #[serde(default)]
+    favorite_voice_ids: Vec<String>,
+}
+
+pub struct AppPersisted {
+    pub texts: Vec<String>,
+    pub favorite_voice_ids: Vec<String>,
 }
 
 fn get_data_file_path() -> Result<PathBuf> {
@@ -31,53 +38,48 @@ fn get_default_texts() -> Vec<String> {
     ]
 }
 
-pub fn load_saved_texts() -> Vec<String> {
+pub fn load() -> AppPersisted {
     match get_data_file_path() {
         Ok(path) => {
             if path.exists() {
                 match fs::read_to_string(&path) {
                     Ok(contents) => {
                         match serde_json::from_str::<SavedData>(&contents) {
-                            Ok(data) => {
-                                // Return loaded texts, or defaults if empty
-                                if data.texts.is_empty() {
-                                    get_default_texts()
-                                } else {
-                                    data.texts
-                                }
-                            }
+                            Ok(data) => AppPersisted {
+                                texts: if data.texts.is_empty() { get_default_texts() } else { data.texts },
+                                favorite_voice_ids: data.favorite_voice_ids,
+                            },
                             Err(e) => {
-                                eprintln!("Failed to parse saved texts (using defaults): {}", e);
-                                // Backup corrupted file
+                                eprintln!("Failed to parse saved data (using defaults): {}", e);
                                 let backup_path = path.with_extension("json.backup");
                                 let _ = fs::copy(&path, backup_path);
-                                get_default_texts()
+                                AppPersisted { texts: get_default_texts(), favorite_voice_ids: vec![] }
                             }
                         }
                     }
                     Err(e) => {
-                        eprintln!("Failed to read saved texts file (using defaults): {}", e);
-                        get_default_texts()
+                        eprintln!("Failed to read saved data file (using defaults): {}", e);
+                        AppPersisted { texts: get_default_texts(), favorite_voice_ids: vec![] }
                     }
                 }
             } else {
-                // First run - use defaults and save them
                 let defaults = get_default_texts();
-                let _ = save_saved_texts(&defaults); // Ignore error on first save
-                defaults
+                let _ = save(&defaults, &[]);
+                AppPersisted { texts: defaults, favorite_voice_ids: vec![] }
             }
         }
         Err(e) => {
             eprintln!("Failed to get data directory (using defaults): {}", e);
-            get_default_texts()
+            AppPersisted { texts: get_default_texts(), favorite_voice_ids: vec![] }
         }
     }
 }
 
-pub fn save_saved_texts(texts: &[String]) -> Result<()> {
+pub fn save(texts: &[String], favorite_voice_ids: &[String]) -> Result<()> {
     let path = get_data_file_path()?;
     let data = SavedData {
         texts: texts.to_vec(),
+        favorite_voice_ids: favorite_voice_ids.to_vec(),
     };
     let json = serde_json::to_string_pretty(&data)?;
     fs::write(path, json)?;

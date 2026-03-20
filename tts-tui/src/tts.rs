@@ -27,6 +27,7 @@ pub async fn fetch_audio_for_playback(
     extension: &str,
     cache_dir: &str,
     endpoint: &str,
+    force_regenerate: bool,
 ) -> Result<(String, Vec<u8>, bool)> {
     let cache_file_path = get_cache_file_path(cache_dir, text, voice_id, speed, sample_rate, encoding, extension)?;
     let message;
@@ -46,12 +47,16 @@ pub async fn fetch_audio_for_playback(
         })
         .unwrap_or_else(|| "?".to_string());
 
-    if cache_file_path.exists() {
+    if !force_regenerate && cache_file_path.exists() {
         message = format!("Playing from cache: {}", short_name);
         audio_data = tokio::fs::read(&cache_file_path).await?;
         is_cached = true;
     } else {
-        message = format!("Fetching from Deepgram, caching as: {}", short_name);
+        message = if force_regenerate {
+            format!("Regenerating (bypassing cache): {}", short_name)
+        } else {
+            format!("Fetching from Deepgram, caching as: {}", short_name)
+        };
         audio_data = fetch_deepgram_tts(api_key, text, voice_id, speed, sample_rate, encoding, endpoint).await?;
         save_audio_to_cache(&cache_file_path, &audio_data).await?;
         is_cached = false;

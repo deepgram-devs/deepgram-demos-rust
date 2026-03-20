@@ -123,7 +123,8 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 Gender::Male => "♂",
                 Gender::Female => "♀",
             };
-            items.push(ListItem::new(format!("  {} {}", voice.name, gender_indicator)).style(style));
+            let fav_indicator = if app.is_voice_favorite(&voice.id) { "★ " } else { "  " };
+            items.push(ListItem::new(format!("{}{} {}", fav_indicator, voice.name, gender_indicator)).style(style));
             item_index += 1;
         }
         items
@@ -206,6 +207,13 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         .border_type(BorderType::Plain)
         .title(" Status ");
 
+    let queue_len = app.playback_queue.len();
+    let queue_badge = if queue_len > 0 {
+        format!(" | Queue: {} ", queue_len)
+    } else {
+        String::new()
+    };
+
     let status_line = if app.is_loading {
         let (elapsed, total) = app.get_playback_progress();
         if total > 0 {
@@ -220,8 +228,9 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                     format!("{} ", progress_bar),
                     Style::default().fg(theme.primary)
                 ),
-                Span::raw(format!("Speed: {:.2}x | {} | {} Hz | Playing ({:.1}s / {:.1}s) | Press ESC to stop",
+                Span::raw(format!("Speed: {:.2}x | {} | {} Hz{}| Playing ({:.1}s / {:.1}s) | Esc stop",
                     app.playback_speed, app.current_audio_format().display_name, app.sample_rate,
+                    queue_badge,
                     elapsed as f64 / 1000.0, total as f64 / 1000.0)),
             ])
         } else {
@@ -231,39 +240,61 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                     format!("{} ", app.get_spinner_char()),
                     Style::default().fg(theme.primary)
                 ),
-                Span::raw(format!("Generating audio... | Speed: {:.2}x | {} | {} Hz",
-                    app.playback_speed, app.current_audio_format().display_name, app.sample_rate)),
+                Span::raw(format!("Generating audio... | Speed: {:.2}x | {} | {} Hz{}",
+                    app.playback_speed, app.current_audio_format().display_name, app.sample_rate,
+                    queue_badge)),
             ])
         }
     } else {
         Line::from(vec![
-            Span::raw(format!("Speed: {:.2}x | {} | {} Hz | {}",
+            Span::raw(format!("Speed: {:.2}x | {} | {} Hz{}| {}",
                 app.playback_speed, app.current_audio_format().display_name,
-                app.sample_rate, app.status_message)),
+                app.sample_rate, queue_badge, app.status_message)),
         ])
     };
 
     let status_text = Paragraph::new(status_line).block(status_block);
     f.render_widget(status_text, chunks[2]);
 
-    // Render Popup for Editing Text
+    // Render Popup for Editing Text (add or edit mode)
     if app.current_screen == CurrentScreen::Editing {
+        let title = if app.editing_original_index.is_some() {
+            " Edit Text "
+        } else {
+            " Enter New Text "
+        };
         let popup_block = Block::default()
-            .title(" Enter New Text ")
+            .title(title)
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(theme.primary))
             .style(Style::default().bg(Color::DarkGray));
 
         let area = centered_rect(60, 20, size);
-        f.render_widget(Clear, area); // Clear the area under the popup
+        f.render_widget(Clear, area);
 
-        let input_paragraph = Paragraph::new(app.input_buffer.clone())
+        let display = format!("{}_", app.input_buffer);
+        let input_paragraph = Paragraph::new(display)
             .block(popup_block)
             .style(Style::default().fg(theme.primary_light))
             .wrap(Wrap { trim: false });
 
         f.render_widget(input_paragraph, area);
+
+        let hint_area = Rect { x: area.x, y: area.y + area.height, width: area.width, height: 1 };
+        if hint_area.y < size.height {
+            let shortcuts = Paragraph::new(Line::from(vec![
+                Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+                Span::raw(" save  "),
+                Span::styled("Esc", Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)),
+                Span::raw(" cancel  "),
+                Span::styled("Ctrl+V", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+                Span::raw(" paste  "),
+                Span::styled("Ctrl+W", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+                Span::raw(" del word "),
+            ]));
+            f.render_widget(shortcuts, hint_area);
+        }
     }
 
     // Render Voice Filter Popup
@@ -409,43 +440,69 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         let help_text = vec![
             "Keyboard Shortcuts:",
             "",
-            "Main Screen:",
-            "  q         - Quit application (TextList focused)",
-            "  Ctrl+Q    - Quit application (from any panel)",
-            "  n         - Add new text",
-            "  d         - Delete selected text",
-            "  k         - Set Deepgram API key interactively",
-            "  o         - Open audio cache folder in Finder",
+            "Main Screen — Saved Texts panel:",
             "  Enter     - Play selected text with selected voice",
-            "  Up/Down   - Navigate text list or voice menu",
+            "  Ctrl+Enter- Play selected text, bypassing the audio cache",
+            "  Space     - Add selected text + voice to playback queue",
+            "  n         - Add new text snippet",
+            "  e         - Edit selected text in place",
+            "  d         - Delete selected text",
+            "  Ctrl+Up   - Move selected text up in list",
+            "  Ctrl+Down - Move selected text down in list",
+            "  /         - Open text filter popup",
+            "  q         - Quit application",
+            "",
+            "Main Screen — Voices panel:",
+            "  *         - Toggle favorite (★) on selected voice",
+            "  /         - Open voice filter popup",
+            "",
+            "Main Screen — Any panel:",
+            "  Ctrl+P    - Open Command Palette",
+            "  Ctrl+Q    - Quit from any panel",
+            "  Up/Down   - Navigate list",
             "  Left      - Focus previous panel",
             "  Right/Tab - Focus next panel",
             "  +/=       - Increase playback speed",
             "  -         - Decrease playback speed",
             "  0         - Reset speed to 1.0x",
+            "  t         - Select color theme",
             "  f         - Select audio encoding format",
             "  s         - Select TTS sample rate",
-            "  Esc       - Stop audio / clear filter for focused panel",
-            "  /         - Open filter popup for focused panel",
-            "  t         - Select color theme",
+            "  k         - Set Deepgram API key interactively",
+            "  o         - Open audio cache folder",
+            "  Esc       - Stop audio / clear active filter / close popup",
             "  ?         - Show this help screen",
             "",
-            "Voice Filter Popup:",
+            "Playback Queue:",
+            "  Space     - Enqueue selected text (uses current voice)",
+            "  Queue auto-plays next item when current finishes",
+            "  Queue count shown in status bar",
+            "  Use Command Palette to clear the queue",
+            "",
+            "Command Palette (Ctrl+P):",
+            "  Type      - Filter commands by name",
+            "  Up/Down   - Navigate commands",
+            "  Enter     - Run selected command",
+            "  Esc       - Cancel",
+            "  Ctrl+U    - Clear search text",
+            "",
+            "Voice Filter Popup (/):",
             "  Type      - Narrow voice list (name, language, model)",
             "  Enter     - Apply filter and close",
             "  Esc       - Cancel (keeps previous filter)",
             "  Ctrl+U    - Clear filter text",
             "",
-            "Text Filter Popup:",
+            "Text Filter Popup (/):",
             "  Type      - Narrow text list by content",
             "  Enter     - Apply filter and close",
             "  Esc       - Cancel (keeps previous filter)",
             "  Ctrl+U    - Clear filter text",
             "",
-            "Text Entry Screen:",
+            "Text Entry / Edit Popup:",
             "  Enter     - Save text",
             "  Esc       - Cancel",
             "  Ctrl+V    - Paste from clipboard",
+            "  Ctrl+W    - Delete previous word",
             "  Backspace - Delete character",
             "",
             "API Key Screen:",
@@ -453,14 +510,18 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             "  Esc       - Cancel",
             "  Backspace - Delete character",
             "",
-            "Theme Select Popup:",
-            "  Up/Down   - Navigate themes",
-            "  Enter     - Apply theme and close",
-            "  Esc       - Cancel",
+            "Theme / Format / Rate Popups:",
+            "  Up/Down   - Navigate options",
+            "  Enter     - Apply and close",
+            "  Esc / q   - Cancel",
             "",
             "Help Screen:",
             "  Up/Down   - Scroll help text",
-            "  Esc       - Close this help screen",
+            "  Esc / q   - Close this help screen",
+            "",
+            "Mouse Controls:",
+            "  Click     - Select item / focus panel",
+            "  Scroll    - Scroll list or log panel",
         ];
 
         let help_block = Block::default()
@@ -602,6 +663,94 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             Span::raw(" cancel"),
         ]);
         f.render_widget(Paragraph::new(hint), chunks[1]);
+    }
+
+    // ── Command Palette ───────────────────────────────────────────────────────
+    if app.current_screen == CurrentScreen::CommandPalette {
+        let commands = app.get_filtered_commands();
+        let list_height = (commands.len() as u16).min(12);
+        let popup_height = list_height + 5; // border(2) + search row(1) + divider(1) + hint(1)
+        let area = centered_rect_fixed(64, popup_height, size);
+        f.render_widget(Clear, area);
+
+        let popup_block = Block::default()
+            .title(" Command Palette (Ctrl+P) ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme.primary))
+            .style(Style::default().bg(Color::DarkGray));
+
+        let inner = popup_block.inner(area);
+        f.render_widget(popup_block, area);
+
+        // Layout: search input row, divider, list, hint
+        let inner_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // search input
+                Constraint::Length(1), // separator
+                Constraint::Min(1),    // command list
+                Constraint::Length(1), // hint
+            ])
+            .split(inner);
+
+        // Search input row
+        let search_display = if app.command_palette_buffer.is_empty() {
+            Span::styled("  Type to filter commands…", Style::default().fg(Color::DarkGray))
+        } else {
+            Span::styled(
+                format!("  {}_", app.command_palette_buffer),
+                Style::default().fg(theme.primary_light),
+            )
+        };
+        f.render_widget(Paragraph::new(Line::from(search_display)), inner_chunks[0]);
+
+        // Divider
+        let divider = Paragraph::new(Line::from(Span::styled(
+            "─".repeat(inner_chunks[1].width as usize),
+            Style::default().fg(Color::DarkGray),
+        )));
+        f.render_widget(divider, inner_chunks[1]);
+
+        // Command list
+        let items: Vec<ratatui::widgets::ListItem> = commands.iter().enumerate().map(|(i, cmd)| {
+            let is_selected = app.command_palette_state.selected() == Some(i);
+            let shortcut_str = cmd.shortcut.unwrap_or("");
+            // Pad name to fill available width, put shortcut on right
+            let max_name = inner_chunks[2].width.saturating_sub(shortcut_str.len() as u16 + 3) as usize;
+            let name = if cmd.name.len() > max_name {
+                format!("{}…", &cmd.name[..max_name.saturating_sub(1)])
+            } else {
+                format!("{:<width$}", cmd.name, width = max_name)
+            };
+            let line = Line::from(vec![
+                Span::styled(
+                    format!(" {}", name),
+                    if is_selected { Style::default().fg(theme.primary).add_modifier(Modifier::BOLD | Modifier::REVERSED) }
+                    else { Style::default().fg(theme.primary_light) },
+                ),
+                Span::styled(
+                    format!(" {} ", shortcut_str),
+                    if is_selected { Style::default().fg(theme.secondary).add_modifier(Modifier::REVERSED) }
+                    else { Style::default().fg(Color::DarkGray) },
+                ),
+            ]);
+            ratatui::widgets::ListItem::new(line)
+        }).collect();
+
+        let list = ratatui::widgets::List::new(items);
+        f.render_stateful_widget(list, inner_chunks[2], &mut app.command_palette_state);
+
+        // Hint row
+        let hint = Line::from(vec![
+            Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+            Span::raw(" run  "),
+            Span::styled("Up/Down", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+            Span::raw(" navigate  "),
+            Span::styled("Esc", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
+            Span::raw(" cancel "),
+        ]);
+        f.render_widget(Paragraph::new(hint), inner_chunks[3]);
     }
 
     // ── Theme Select Popup ────────────────────────────────────────────────────

@@ -1,20 +1,23 @@
 # TTS TUI (Text-to-Speech Terminal User Interface)
 
-A terminal user interface (TUI) built with Rust and Ratatui for interacting with the Deepgram Text-to-Speech API. Supports voice selection, text and voice filtering, color themes, multi-format audio output, sample rate control, audio caching, playback speed control, timestamped logs, and a persistent TOML configuration file.
+A terminal user interface (TUI) built with Rust and Ratatui for interacting with the Deepgram Text-to-Speech API. Supports voice selection, text and voice filtering, color themes, multi-format audio output, sample rate control, audio caching, playback speed control, timestamped logs, playback queue, favorite voices, a command palette, and a persistent TOML configuration file.
 
 ## Features
 
 - Play saved text snippets with any Deepgram Aura or Aura-2 voice
 - Browse and filter voices by name, language, or model via a dedicated popup (`/` with Voices panel focused)
 - Filter saved texts by content via the same `/` key (with Saved Texts panel focused)
-- Add, delete, and persist text snippets to local storage
+- Add, edit (`e`), delete, and reorder (`Ctrl+Up`/`Ctrl+Down`) text snippets with full persistence
+- **Playback queue** — press `Space` to enqueue text+voice pairs; auto-advances between tracks; queue count shown in status bar
+- **Favorite voices** — press `*` to star/unstar a voice (`★` indicator); favorites persisted to disk
+- **Command Palette** (`Ctrl+P`) — search and invoke any action by name, with keyboard shortcuts shown
 - Audio caching — repeated playback is served from disk instantly
 - **Color themes** — choose from Deepgram (default), Nord, or Synthwave Outrun via the `t` key
 - **Audio format selection** — choose MP3, Linear16 (WAV), μ-law, A-law, FLAC, or AAC via the `f` key
 - **Sample rate selection** — choose the output sample rate for the active format via the `s` key
 - Adjustable TTS playback speed (`+`/`-`/`0` keys)
 - Interactive API key entry — set or override the key at runtime without restarting (`k`)
-- Open the audio cache folder in Finder with a single keystroke (`o`)
+- Open the audio cache folder with a single keystroke (`o`)
 - TOML configuration file at `~/.config/deepgram-tts-client.toml` with inline documentation
 - Experimental feature flags via config file or environment variables
 - Timestamped, color-coded log panel with scrollable history and mouse scroll support
@@ -128,30 +131,46 @@ TTS_TUI_FEATURE_SSML_SUPPORT=true cargo run
 
 ## Keyboard Shortcuts
 
-### Main Screen
+### Main Screen — Saved Texts panel
 
 | Key | Action |
 |-----|--------|
-| `?` | Show help screen |
-| `q` | Quit (when Saved Texts panel is focused) |
-| `Ctrl+Q` | Quit from any panel |
 | `Enter` | Play selected text with selected voice |
+| `Ctrl+Enter` | Play selected text, bypassing the audio cache (force regenerate) |
+| `Space` | Enqueue selected text+voice for sequential playback |
 | `n` | Add new text snippet |
+| `e` | Edit selected text in place |
 | `d` | Delete selected text snippet |
-| `k` | Set Deepgram API key interactively |
-| `o` | Open audio cache folder in Finder |
+| `Ctrl+Up` | Move selected text up |
+| `Ctrl+Down` | Move selected text down |
+| `q` | Quit (when Saved Texts panel is focused) |
+
+### Main Screen — Voices panel
+
+| Key | Action |
+|-----|--------|
+| `*` | Toggle favorite (★) on selected voice |
+
+### Main Screen — Any panel
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+P` | Open Command Palette |
+| `?` | Show help screen |
+| `Ctrl+Q` | Quit from any panel |
 | `/` | Open filter popup for focused panel |
 | `t` | Select color theme |
 | `f` | Select audio encoding format |
 | `s` | Select output sample rate |
-| `Up` / `Down` | Navigate Saved Texts or Voices list |
+| `k` | Set Deepgram API key interactively |
+| `o` | Open audio cache folder |
+| `Up` / `Down` | Navigate list |
 | `Left` | Focus previous panel |
 | `Right` / `Tab` | Focus next panel |
 | `+` / `=` | Increase playback speed |
 | `-` | Decrease playback speed |
 | `0` | Reset playback speed to 1.0x |
-| `Esc` | Stop audio playback / clear active filter / close popup |
-| `Backspace` | Remove last character from active filter |
+| `Esc` | Stop audio / clear active filter / close popup |
 
 ### Filter Popups (`/`)
 
