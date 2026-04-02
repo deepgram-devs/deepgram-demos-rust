@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2] - 2026-04-02
+
+### Fixed
+- Corrected agent system prompt JSON field from `agent.think.instructions` to `agent.think.prompt` to match the Deepgram Voice Agent API
+
+### Added
+- `--prompt` CLI option documented in README
+
 ## [0.2.1] - 2026-02-20
 
 ### Fixed

@@ -71,6 +71,7 @@ cargo run
 | `--think-model <MODEL>` | `gpt-4o-mini` | LLM model |
 | `--think-endpoint <URL>` | _(none)_ | Custom URL for LLM provider |
 | `--think-header <KEY=VALUE>` | _(none)_ | Extra header for LLM provider (repeatable) |
+| `--prompt <TEXT>` | _(none)_ | System prompt / instructions for the agent |
 | `--verbose` | _(off)_ | Print full Settings JSON at startup |
 | `--no-mic-mute` | _(off)_ | Disable mic muting during playback |
 
@@ -91,6 +92,9 @@ cargo run -- --think-type anthropic \
 
 # Connect to a self-hosted endpoint
 cargo run -- --endpoint wss://my-internal-agent.example.com
+
+# Set a custom system prompt for the agent
+cargo run -- --prompt "You are a helpful assistant that speaks only in rhymes."
 
 # Print the full Settings JSON for debugging
 cargo run -- --verbose

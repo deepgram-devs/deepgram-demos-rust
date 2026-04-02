@@ -26,27 +26,47 @@ struct Args {
     /// Custom Deepgram endpoint URL to connect to
     #[arg(long, default_value = "wss://agent.deepgram.com")]
     endpoint: String,
-    
-    /// Speak provider model to use for text-to-speech
+
+    /// Speak provider type (deepgram or eleven_labs)
+    #[arg(long, default_value = "deepgram")]
+    speak_provider: String,
+
+    /// Speak provider model to use for text-to-speech (Deepgram model name)
     #[arg(long, default_value = "aura-2-thalia-en")]
     speak_model: String,
-    
+
+    /// Speak provider model ID (for Eleven Labs: e.g. eleven_turbo_v2_5)
+    #[arg(long, default_value = "eleven_turbo_v2_5")]
+    speak_model_id: String,
+
+    /// Speak language code (for Eleven Labs: e.g. en-US)
+    #[arg(long, default_value = "en-US")]
+    speak_language_code: String,
+
+    /// Eleven Labs voice ID (used in the endpoint URL)
+    #[arg(long)]
+    speak_voice_id: Option<String>,
+
     /// Think provider type to use for LLM processing
     #[arg(long, default_value = "open_ai")]
     think_type: String,
-    
+
     /// Think provider model to use for LLM processing
     #[arg(long, default_value = "gpt-4o-mini")]
     think_model: String,
-    
+
     /// Custom endpoint URL for think provider
     #[arg(long)]
     think_endpoint: Option<String>,
-    
+
     /// Custom headers for think provider in format "key=value" (can be specified multiple times)
     #[arg(long)]
     think_header: Vec<String>,
-    
+
+    /// Agent system prompt / instructions
+    #[arg(long)]
+    prompt: Option<String>,
+
     /// Enable verbose output including full Settings JSON message
     #[arg(long)]
     verbose: bool,
@@ -101,6 +121,8 @@ struct ListenConfig {
 struct ThinkConfig {
     provider: ThinkProviderConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     endpoint: Option<ThinkEndpointConfig>,
 }
 
@@ -113,6 +135,14 @@ struct ThinkEndpointConfig {
 #[derive(Debug, Serialize, Deserialize)]
 struct SpeakConfig {
     provider: SpeakProviderConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    endpoint: Option<SpeakEndpointConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SpeakEndpointConfig {
+    url: String,
+    headers: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -137,7 +167,15 @@ struct ThinkProviderConfig {
 struct SpeakProviderConfig {
     #[serde(rename = "type")]
     provider_type: String,
-    model: String,
+    /// Deepgram model name (used when provider_type is "deepgram")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    /// Eleven Labs model ID (used when provider_type is "eleven_labs")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_id: Option<String>,
+    /// Language code (used when provider_type is "eleven_labs")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    language_code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -371,7 +409,16 @@ async fn connect_to_voice_agent(api_key: &str, endpoint: &str, _sample_rate: u32
     Ok(ws_stream)
 }
 
-fn create_agent_config(sample_rate: u32, _channels: u16, speak_model: &str, think_type: &str, think_model: &str, think_endpoint: Option<&str>, think_headers: &[String]) -> VoiceAgentConfig {
+struct SpeakArgs<'a> {
+    provider: &'a str,
+    model: &'a str,
+    model_id: &'a str,
+    language_code: &'a str,
+    voice_id: Option<&'a str>,
+    eleven_labs_api_key: Option<String>,
+}
+
+fn create_agent_config(sample_rate: u32, _channels: u16, speak: SpeakArgs<'_>, think_type: &str, think_model: &str, think_endpoint: Option<&str>, think_headers: &[String], prompt: Option<&str>) -> VoiceAgentConfig {
     // Parse think headers from "key=value" format
     let mut headers = std::collections::HashMap::new();
     for header in think_headers {
@@ -379,13 +426,49 @@ fn create_agent_config(sample_rate: u32, _channels: u16, speak_model: &str, thin
             headers.insert(key.to_string(), value.to_string());
         }
     }
-    
+
     // Create endpoint config if think_endpoint is provided
     let endpoint_config = think_endpoint.map(|url| ThinkEndpointConfig {
         url: url.to_string(),
         headers,
     });
-    
+
+    // Build speak config based on provider type
+    let speak_config = match speak.provider {
+        "eleven_labs" => {
+            let voice_id = speak.voice_id.unwrap_or("rachel");
+            let endpoint_url = format!(
+                "wss://api.elevenlabs.io/v1/text-to-speech/{}/multi-stream-input",
+                voice_id
+            );
+            let mut speak_headers = std::collections::HashMap::new();
+            if let Some(key) = speak.eleven_labs_api_key {
+                speak_headers.insert("xi-api-key".to_string(), key);
+            }
+            SpeakConfig {
+                provider: SpeakProviderConfig {
+                    provider_type: "eleven_labs".to_string(),
+                    model: None,
+                    model_id: Some(speak.model_id.to_string()),
+                    language_code: Some(speak.language_code.to_string()),
+                },
+                endpoint: Some(SpeakEndpointConfig {
+                    url: endpoint_url,
+                    headers: speak_headers,
+                }),
+            }
+        }
+        _ => SpeakConfig {
+            provider: SpeakProviderConfig {
+                provider_type: "deepgram".to_string(),
+                model: Some(speak.model.to_string()),
+                model_id: None,
+                language_code: None,
+            },
+            endpoint: None,
+        },
+    };
+
     VoiceAgentConfig {
         message_type: "Settings".to_string(),
         tags: vec!["demo".to_string(), "voice_agent".to_string()],
@@ -415,14 +498,10 @@ fn create_agent_config(sample_rate: u32, _channels: u16, speak_model: &str, thin
                     model: if think_model.is_empty() { None } else { Some(think_model.to_string()) },
                     temperature: None,
                 },
+                prompt: prompt.map(|s| s.to_string()),
                 endpoint: endpoint_config,
             },
-            speak: SpeakConfig {
-                provider: SpeakProviderConfig {
-                    provider_type: "deepgram".to_string(),
-                    model: speak_model.to_string(),
-                },
-            },
+            speak: speak_config,
         },
     }
 }
@@ -538,7 +617,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let api_key = env::var("DEEPGRAM_API_KEY")
         .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
-    
+
+    // Load Eleven Labs API key if using eleven_labs speak provider
+    let eleven_labs_api_key = if args.speak_provider == "eleven_labs" {
+        let key = env::var("ELEVEN_LABS_API_KEY")
+            .map_err(|_| "ELEVEN_LABS_API_KEY environment variable not set (required for eleven_labs speak provider)")?;
+        Some(key)
+    } else {
+        None
+    };
+
     info!("Starting Deepgram Voice Agent...");
     debug!("Using endpoint: {}", args.endpoint);
     
@@ -590,13 +678,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Send Settings configuration
     let config = create_agent_config(
-        sample_rate, 
-        channels, 
-        &args.speak_model, 
-        &args.think_type, 
+        sample_rate,
+        channels,
+        SpeakArgs {
+            provider: &args.speak_provider,
+            model: &args.speak_model,
+            model_id: &args.speak_model_id,
+            language_code: &args.speak_language_code,
+            voice_id: args.speak_voice_id.as_deref(),
+            eleven_labs_api_key,
+        },
+        &args.think_type,
         &args.think_model,
         args.think_endpoint.as_deref(),
-        &args.think_header
+        &args.think_header,
+        args.prompt.as_deref(),
     );
     let config_json = serde_json::to_string(&config)?;
     debug!("📤 Sending Settings configuration to WebSocket...");
