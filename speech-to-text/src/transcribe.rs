@@ -1,6 +1,7 @@
 use clap::Args;
 use serde::Deserialize;
 use std::path::PathBuf;
+use urlencoding;
 
 #[derive(Args)]
 pub struct TranscribeArgs {
@@ -67,6 +68,14 @@ pub struct TranscribeArgs {
     /// Override the Deepgram API base URL
     #[arg(long)]
     pub endpoint: Option<String>,
+
+    /// Comma-separated keyterms to boost recognition for (nova-3+ only, e.g. --keyterm "Deepgram,nova-3,speech AI")
+    #[arg(long, conflicts_with = "keywords")]
+    pub keyterm: Option<String>,
+
+    /// Comma-separated keywords to boost recognition for (nova-2 and older, optional intensifier per word, e.g. --keywords "Deepgram:2,API,speech:-1")
+    #[arg(long, conflicts_with = "keyterm")]
+    pub keywords: Option<String>,
 }
 
 // Response structures for pre-recorded API
@@ -288,6 +297,21 @@ pub async fn run_transcribe_mode(
     // Add encoding parameter
     if let Some(enc) = args.encoding {
         params.push(format!("encoding={}", enc));
+    }
+
+    // Add keyterm parameters if specified (each term becomes a separate keyterm= param)
+    if let Some(keyterms) = args.keyterm {
+        for term in keyterms.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            params.push(format!("keyterm={}", urlencoding::encode(term)));
+        }
+    }
+
+    // Add keywords parameters if specified (each entry becomes a separate keywords= param,
+    // optionally with an intensifier: "word:2.0" or just "word")
+    if let Some(kw) = args.keywords {
+        for entry in kw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            params.push(format!("keywords={}", urlencoding::encode(entry)));
+        }
     }
 
     // Join all parameters

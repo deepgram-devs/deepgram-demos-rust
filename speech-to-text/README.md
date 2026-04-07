@@ -1,20 +1,28 @@
 # Deepgram Streaming Rust
 
-A real-time speech-to-text application using Rust that connects to the Deepgram API via WebSocket and captures audio from your default microphone.
+A real-time speech-to-text CLI using Rust that connects to the Deepgram API via WebSocket or HTTP and captures audio from your microphone or an audio file.
 
 ## Features
 
 ### Stream Mode (WebSocket API)
 - Real-time audio capture from the default microphone using CPAL
-- Stream audio files (MP3, WAV, FLAC) at real-time or fast rate
+- Stream audio files at real-time or fast rate, with a progress bar showing elapsed/total time
+- Rich file metadata display: codec, format, bitrate, sample rate, channels, bit depth, and duration
+- Extended audio format support: MP3, WAV, FLAC, AAC, M4A/MP4, OGG, Vorbis, MKV, ALAC
 - Multichannel audio processing
+- Speaker diarization: identifies individual speakers and groups their words in output
+- Voice activity detection (VAD) events
+- Sentiment analysis, intent recognition, topic detection, and entity detection
+- Keyword/keyterm boosting for improved recognition of domain-specific terms
+- Configurable endpointing and utterance-end detection
 - WebSocket connection to Deepgram API for live transcription
 - Callback support for webhook integration
-- Displays transcription results with confidence scores in real-time
+- Displays transcription results in real-time; parse errors written to `dg-stt-debug.log`
+- Deepgram request ID printed on connect (and on connection errors)
 
 ### Transcribe Mode (HTTP API)
 - Pre-recorded audio transcription for files
-- Support for all audio formats (MP3, WAV, FLAC, and more)
+- Support for all audio formats (MP3, WAV, FLAC, AAC, M4A/MP4, OGG, Vorbis, MKV, ALAC, and more)
 - Multichannel audio processing
 - Advanced AI features:
   - Speaker diarization (who spoke when)
@@ -23,6 +31,7 @@ A real-time speech-to-text application using Rust that connects to the Deepgram 
   - Intent detection (understand intent)
   - Sentiment analysis (analyze emotional tone)
   - Entity detection (extract key entities)
+- Keyword/keyterm boosting for improved recognition of domain-specific terms
 - Redaction of sensitive data based on Deepgram [supported entity types](https://developers.deepgram.com/docs/supported-entity-types)
 - Multiple output formats (text, JSON, verbose JSON)
 
@@ -38,7 +47,7 @@ A real-time speech-to-text application using Rust that connects to the Deepgram 
 
 2. **Deepgram API Key**: You need a Deepgram API key. Sign up at [deepgram.com](https://deepgram.com) to get one.
 
-3. **Audio Input Device**: Ensure you have a working microphone connected to your system.
+3. **Audio Input Device**: Ensure you have a working microphone connected to your system (for microphone mode).
 
 ## Setup
 
@@ -46,11 +55,11 @@ A real-time speech-to-text application using Rust that connects to the Deepgram 
 
 2. Create a `.env` file in the project root and add your Deepgram API key:
 
-```toml
+```
 DEEPGRAM_API_KEY=your_api_key_here
 ```
 
-1. Install dependencies:
+3. Build the project:
 
 ```bash
 cargo build
@@ -81,11 +90,24 @@ Press `Ctrl+C` to stop the application.
 
 ### File Mode
 
-Transcribe audio from a file (supports MP3, WAV, and FLAC formats):
+Transcribe audio from a file:
 
 ```bash
 cargo run -- stream file --file path/to/audio.mp3
 ```
+
+Supported formats: MP3, WAV, FLAC, AAC, M4A/MP4, OGG, Vorbis, MKV, ALAC
+
+Before streaming begins, file metadata is displayed:
+
+```
+File:    podcast.mp3
+Format:  MP3, 128 kbps
+Audio:   44100 Hz, stereo
+Length:  12:34
+```
+
+A progress bar tracks elapsed and total time during streaming.
 
 #### Real-time Streaming (Default)
 
@@ -97,7 +119,7 @@ cargo run -- stream file --file recording.wav
 
 #### Fast Streaming
 
-Use the `--fast` flag to stream the file as quickly as possible (may not be much faster than live)):
+Use the `--fast` flag to stream the file as quickly as possible:
 
 ```bash
 cargo run -- stream file --file podcast.mp3 --fast
@@ -111,11 +133,90 @@ Transcribe a pre-recorded audio file using the Deepgram HTTP API:
 cargo run -- transcribe --file path/to/audio.mp3
 ```
 
-This mode supports additional AI features:
+### Stream Mode Options
+
+| Flag | Description |
+|------|-------------|
+| `--diarize` | Identify individual speakers; output groups words by speaker |
+| `--detect-entities` | Detect named entities (people, places, organizations, etc.) |
+| `--interim-results` | Enable interim (partial) transcription results |
+| `--vad-events` | Enable voice activity detection events |
+| `--punctuate` | Add punctuation to transcripts |
+| `--smart-format` | Apply smart formatting (numbers, dates, etc.) |
+| `--sentiment` | Enable sentiment analysis |
+| `--intents` | Enable intent recognition |
+| `--topics` | Enable topic detection |
+| `--model <MODEL>` | Deepgram model (e.g., `nova-3`, `nova-2`, `enhanced`) |
+| `--language <LANG>` | Language code (e.g., `en`, `es`, `fr`, `de`) |
+| `--redact <TYPES>` | Redact sensitive data (e.g., `pii`, `pci`) |
+| `--multichannel` | Enable multichannel audio processing |
+| `--keyterm <TERMS>` | Comma-separated keyterms for nova-3+ (e.g., `"Deepgram,nova-3"`) |
+| `--keywords <TERMS>` | Comma-separated keywords for nova-2 and older, with optional intensifier (e.g., `"Deepgram:2,API"`) |
+| `--endpointing <MS>` | Endpointing sensitivity in ms (file mode; e.g., `300`) |
+| `--utterance-end <MS>` | Utterance end timeout in ms (file mode; requires `--interim-results` and `--vad-events`) |
+| `--fast` | Stream file as fast as possible instead of real-time (file mode only) |
+| `--callback <URL>` | Send results to a webhook URL |
+| `--silent` | Suppress console output (useful with `--callback`) |
+
+### Examples
+
+#### Stream Mode Examples
 
 ```bash
-# Basic transcription
-cargo run -- transcribe --file recording.wav
+# Transcribe from microphone
+cargo run -- stream microphone
+
+# Transcribe from microphone with punctuation and smart formatting
+cargo run -- stream microphone --punctuate --smart-format
+
+# Transcribe from microphone with speaker diarization
+cargo run -- stream microphone --diarize
+
+# Transcribe from microphone with interim results and VAD
+cargo run -- stream microphone --interim-results --vad-events
+
+# Transcribe from microphone with sentiment, intents, and topics
+cargo run -- stream microphone --sentiment --intents --topics
+
+# Transcribe from microphone with keyterm boosting (nova-3+)
+cargo run -- stream microphone --model nova-3 --keyterm "Deepgram,speech AI,nova-3"
+
+# Transcribe from microphone with keyword boosting (nova-2 and older)
+cargo run -- stream microphone --model nova-2 --keywords "Deepgram:2,API,speech:-1"
+
+# Transcribe from microphone with entity detection and redaction
+cargo run -- stream microphone --detect-entities --redact pii
+
+# Transcribe from microphone with multichannel processing
+cargo run -- stream microphone --multichannel
+
+# Transcribe a WAV file at real-time rate
+cargo run -- stream file --file recording.wav
+
+# Transcribe an MP3 file as fast as possible
+cargo run -- stream file --file podcast.mp3 --fast
+
+# Transcribe an M4A/AAC file with diarization
+cargo run -- stream file --file interview.m4a --diarize
+
+# Transcribe with utterance-end detection
+cargo run -- stream file --file audio.wav --interim-results --vad-events --utterance-end 1000
+
+# Transcribe with custom endpointing
+cargo run -- stream file --file audio.wav --endpointing 300
+
+# Microphone with callback
+cargo run -- stream microphone --callback https://example.com/webhook
+
+# File with callback and silent mode
+cargo run -- stream file --file audio.mp3 --callback https://example.com/webhook --silent
+```
+
+#### Transcribe Mode Examples
+
+```bash
+# Simple transcription
+cargo run -- transcribe --file audio.mp3
 
 # With punctuation and smart formatting
 cargo run -- transcribe --file audio.mp3 --punctuate true --smart-format true
@@ -132,11 +233,33 @@ cargo run -- transcribe --file podcast.mp3 --summarize v2 --topics true --intent
 # With entity detection
 cargo run -- transcribe --file interview.wav --detect-entities true
 
+# With keyterm boosting (nova-3+)
+cargo run -- transcribe --file audio.mp3 --model nova-3 --keyterm "Deepgram,speech AI"
+
+# With keyword boosting (nova-2 and older)
+cargo run -- transcribe --file audio.mp3 --model nova-2 --keywords "Deepgram:2,API"
+
 # With specific model and language
 cargo run -- transcribe --file audio.mp3 --model nova-3 --language en-US
 
+# With redaction
+cargo run -- transcribe --file sensitive.wav --redact pii,pci
+
 # Output formats: text (default), json, or verbose-json
 cargo run -- transcribe --file audio.mp3 --output json
+
+# Full-featured transcription
+cargo run -- transcribe --file meeting.wav \
+  --model nova-3 \
+  --punctuate true \
+  --smart-format true \
+  --diarize true \
+  --multichannel \
+  --summarize v2 \
+  --topics true \
+  --intents true \
+  --sentiment true \
+  --detect-entities true
 ```
 
 ### Callback Support (Stream Mode Only)
@@ -155,70 +278,9 @@ cargo run -- stream file --file audio.mp3 --callback https://example.com/webhook
 ```
 
 When a callback URL is provided:
-
 - Deepgram will send transcription results to your specified URL via HTTP POST
 - The callback method is automatically set to POST
 - Console output continues by default unless `--silent` flag is used
-- The `--silent` flag suppresses transcript output to the console
-
-### Examples
-
-#### Stream Mode Examples
-
-```bash
-# Transcribe from microphone
-cargo run -- stream microphone
-
-# Transcribe from microphone with redaction
-cargo run -- stream microphone --redact pii,blood_type
-
-# Transcribe from microphone with multichannel processing
-cargo run -- stream microphone --multichannel
-
-# Transcribe a WAV file at real-time rate
-cargo run -- stream file --file recording.wav
-
-# Transcribe an MP3 file as fast as possible
-cargo run -- stream file --file podcast.mp3 --fast
-
-# Transcribe a FLAC file with multichannel processing
-cargo run -- stream file --file music.flac --multichannel
-
-# Microphone with callback
-cargo run -- stream microphone --callback https://example.com/webhook
-
-# File with callback and silent mode
-cargo run -- stream file --file audio.mp3 --callback https://example.com/webhook --silent
-
-# Fast file streaming with callback
-cargo run -- stream file --file podcast.mp3 --fast --callback https://example.com/webhook
-```
-
-#### Transcribe Mode Examples
-
-```bash
-# Simple transcription
-cargo run -- transcribe --file audio.mp3
-
-# Full-featured transcription with AI capabilities
-cargo run -- transcribe --file meeting.wav \
-  --model nova-3 \
-  --punctuate true \
-  --smart-format true \
-  --diarize true \
-  --multichannel \
-  --summarize v2 \
-  --topics true \
-  --intents true \
-  --sentiment true \
-  --detect-entities true
-
-# Transcription with redaction
-cargo run -- transcribe --file sensitive.wav --redact pii,pci
-
-# Get JSON output for further processing
-cargo run -- transcribe --file audio.mp3 --output json > output.json
-```
 
 ### Help
 
@@ -235,11 +297,13 @@ cargo run -- transcribe --help
 ## How It Works
 
 ### Stream Mode (Real-time)
-1. **Audio Capture**: Uses the CPAL library to capture audio from the default input device or reads from a file
-2. **Audio Processing**: Converts audio samples to 16-bit linear PCM format required by Deepgram
-3. **WebSocket Connection**: Establishes a secure WebSocket connection to Deepgram's streaming API
-4. **Real-time Streaming**: Continuously sends audio data to Deepgram and receives transcription results
-5. **Display Results**: Shows transcribed text with confidence scores in the terminal
+1. **Audio Capture**: Uses the CPAL library to capture audio from the default input device or reads from a file using Symphonia
+2. **File Metadata**: Displays codec, format, bitrate, sample rate, channels, and duration before streaming begins
+3. **Progress Bar**: Shows elapsed and total time during file streaming
+4. **Audio Processing**: Converts audio samples to 16-bit linear PCM format required by Deepgram
+5. **WebSocket Connection**: Establishes a secure WebSocket connection to Deepgram's streaming API; prints the Deepgram request ID
+6. **Real-time Streaming**: Continuously sends audio data to Deepgram and receives transcription results
+7. **Graceful Shutdown**: Sends a `CloseStream` message when file streaming completes; waits for the final transcript before exiting
 
 ### Transcribe Mode (Pre-recorded)
 1. **File Reading**: Reads the entire audio file into memory
@@ -262,11 +326,13 @@ The application automatically detects your microphone's sample rate and channel 
 - `tokio-tungstenite`: WebSocket client with TLS support (for stream mode)
 - `reqwest`: HTTP client (for transcribe mode)
 - `cpal`: Cross-platform audio library (for microphone capture)
-- `symphonia`: Audio decoding library (for file streaming)
+- `symphonia`: Audio decoding library (for file streaming; supports MP3, WAV, FLAC, AAC, M4A, OGG, Vorbis, MKV, ALAC)
+- `indicatif`: Progress bars for file streaming
 - `serde`: JSON serialization/deserialization
 - `dotenv`: Environment variable loading
 - `futures-util`: Stream utilities
 - `clap`: Command-line argument parsing
+- `urlencoding`: URL encoding for query parameters
 
 ## Troubleshooting
 
@@ -279,10 +345,19 @@ Make sure you have a microphone connected and it's set as the default input devi
 - Verify your Deepgram API key is correct
 - Check your internet connection
 - Ensure the API key has sufficient credits
+- The Deepgram request ID is printed on connect — include it when contacting support
+
+### Parse Errors
+
+If you see `Failed to parse response` errors, the raw response is appended to `dg-stt-debug.log` in the current directory for inspection.
 
 ### Audio Permission Issues
 
 On some systems, you may need to grant microphone permissions to the terminal or the application.
+
+### Utterance End Not Working
+
+`--utterance-end` requires both `--interim-results` and `--vad-events` to be specified. The CLI will report an error if these are missing.
 
 ## License
 

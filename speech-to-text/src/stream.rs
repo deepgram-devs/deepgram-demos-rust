@@ -33,17 +33,41 @@ pub enum StreamSource {
         #[arg(long)]
         multichannel: bool,
 
+        /// Enable speaker diarization (identify individual speakers)
+        #[arg(long)]
+        diarize: bool,
+
+        /// Detect named entities (people, places, organizations, etc.)
+        #[arg(long)]
+        detect_entities: bool,
+
         /// Enable interim results
         #[arg(long)]
-        interim_results: Option<bool>,
+        interim_results: bool,
+
+        /// Enable voice activity detection events
+        #[arg(long)]
+        vad_events: bool,
 
         /// Enable punctuation
         #[arg(long)]
-        punctuate: Option<bool>,
+        punctuate: bool,
 
         /// Enable smart formatting
         #[arg(long)]
-        smart_format: Option<bool>,
+        smart_format: bool,
+
+        /// Enable sentiment analysis
+        #[arg(long)]
+        sentiment: bool,
+
+        /// Enable intent recognition
+        #[arg(long)]
+        intents: bool,
+
+        /// Enable topic detection
+        #[arg(long)]
+        topics: bool,
 
         /// Deepgram model to use (e.g., nova-2, enhanced, base)
         #[arg(long)]
@@ -56,6 +80,14 @@ pub enum StreamSource {
         /// Language code for transcription (e.g., en, es, fr, de)
         #[arg(long)]
         language: Option<String>,
+
+        /// Comma-separated keyterms to boost recognition for (nova-3+ only, e.g. --keyterm "Deepgram,nova-3,speech AI")
+        #[arg(long, conflicts_with = "keywords")]
+        keyterm: Option<String>,
+
+        /// Comma-separated keywords to boost recognition for (nova-2 and older, optional intensifier per word, e.g. --keywords "Deepgram:2,API,speech:-1")
+        #[arg(long, conflicts_with = "keyterm")]
+        keywords: Option<String>,
     },
     /// Stream audio from a file for transcription
     File {
@@ -95,17 +127,41 @@ pub enum StreamSource {
         #[arg(long)]
         multichannel: bool,
 
+        /// Enable speaker diarization (identify individual speakers)
+        #[arg(long)]
+        diarize: bool,
+
+        /// Detect named entities (people, places, organizations, etc.)
+        #[arg(long)]
+        detect_entities: bool,
+
         /// Enable interim results
         #[arg(long)]
-        interim_results: Option<bool>,
+        interim_results: bool,
+
+        /// Enable voice activity detection events
+        #[arg(long)]
+        vad_events: bool,
 
         /// Enable punctuation
         #[arg(long)]
-        punctuate: Option<bool>,
+        punctuate: bool,
 
         /// Enable smart formatting
         #[arg(long)]
-        smart_format: Option<bool>,
+        smart_format: bool,
+
+        /// Enable sentiment analysis
+        #[arg(long)]
+        sentiment: bool,
+
+        /// Enable intent recognition
+        #[arg(long)]
+        intents: bool,
+
+        /// Enable topic detection
+        #[arg(long)]
+        topics: bool,
 
         /// Deepgram model to use (e.g., nova-2, enhanced, base)
         #[arg(long)]
@@ -118,5 +174,25 @@ pub enum StreamSource {
         /// Language code for transcription (e.g., en, es, fr, de)
         #[arg(long)]
         language: Option<String>,
+
+        /// Endpointing sensitivity in milliseconds (e.g., 10, 300, 500). Controls how long
+        /// Deepgram waits after speech stops before finalizing a transcript segment.
+        /// Lower values produce faster but potentially incomplete results.
+        #[arg(long)]
+        endpointing: Option<u32>,
+
+        /// Utterance end timeout in milliseconds (e.g., 1000). Deepgram sends an UtteranceEnd
+        /// message after this many ms of silence, signaling the end of an utterance.
+        /// Requires --interim-results and --vad-events to also be specified.
+        #[arg(long)]
+        utterance_end: Option<u32>,
+
+        /// Comma-separated keyterms to boost recognition for (nova-3+ only, e.g. --keyterm "Deepgram,nova-3,speech AI")
+        #[arg(long, conflicts_with = "keywords")]
+        keyterm: Option<String>,
+
+        /// Comma-separated keywords to boost recognition for (nova-2 and older, optional intensifier per word, e.g. --keywords "Deepgram:2,API,speech:-1")
+        #[arg(long, conflicts_with = "keyterm")]
+        keywords: Option<String>,
     },
 }

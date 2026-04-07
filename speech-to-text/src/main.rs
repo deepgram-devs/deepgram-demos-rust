@@ -12,17 +12,41 @@ use std::env;
 use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::{CodecType, DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::time::Duration;
+use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::stream::StreamSource;
 use crate::transcribe::TranscribeArgs;
+
+fn codec_name(codec: CodecType) -> &'static str {
+    use symphonia::core::codecs::*;
+    match codec {
+        CODEC_TYPE_MP3                                          => "MP3",
+        CODEC_TYPE_MP2                                          => "MP2",
+        CODEC_TYPE_MP1                                          => "MP1",
+        CODEC_TYPE_AAC                                          => "AAC",
+        CODEC_TYPE_FLAC                                         => "FLAC",
+        CODEC_TYPE_VORBIS                                       => "Vorbis",
+        CODEC_TYPE_OPUS                                         => "Opus",
+        CODEC_TYPE_ALAC                                         => "ALAC",
+        CODEC_TYPE_PCM_ALAW                                     => "PCM A-law",
+        CODEC_TYPE_PCM_MULAW                                    => "PCM μ-law",
+        CODEC_TYPE_PCM_S16LE | CODEC_TYPE_PCM_S16BE |
+        CODEC_TYPE_PCM_S24LE | CODEC_TYPE_PCM_S24BE |
+        CODEC_TYPE_PCM_S32LE | CODEC_TYPE_PCM_S32BE |
+        CODEC_TYPE_PCM_F32LE | CODEC_TYPE_PCM_F32BE |
+        CODEC_TYPE_PCM_F64LE | CODEC_TYPE_PCM_F64BE            => "PCM",
+        _                                                       => "Unknown",
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "dg-stt")]
@@ -62,6 +86,14 @@ struct Channel {
 struct Alternative {
     transcript: String,
     confidence: Option<f64>,
+    #[serde(default)]
+    words: Vec<Word>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Word {
+    word: String,
+    speaker: Option<u32>,
 }
 
 struct AudioCapture {
@@ -174,70 +206,145 @@ impl AudioFileReader {
         
         let sample_rate = codec_params.sample_rate.ok_or("Sample rate not found")?;
         let channels = codec_params.channels.ok_or("Channels not found")?.count() as u16;
-        
-        println!("File audio config - Sample rate: {}, Channels: {}", sample_rate, channels);
-        
+        let total_frames = codec_params.n_frames;
+
+        // --- File metadata ---
+        let codec_str = codec_name(codec_params.codec);
+
+        let channel_str = match channels {
+            1 => "mono".to_string(),
+            2 => "stereo".to_string(),
+            n => format!("{n}ch"),
+        };
+
+        let bit_depth_str = codec_params.bits_per_sample
+            .map(|b| format!(", {b}-bit"))
+            .unwrap_or_default();
+
+        let duration_str = total_frames
+            .map(|f| { let s = f / sample_rate as u64; format!("{}:{:02}", s / 60, s % 60) })
+            .unwrap_or_else(|| "unknown".to_string());
+
+        // Bitrate: for compressed formats derive from file size + duration;
+        // for uncompressed (PCM) calculate directly from the stream parameters.
+        let bitrate_str = {
+            let from_file = total_frames.and_then(|f| {
+                let dur = f as f64 / sample_rate as f64;
+                if dur > 0.0 {
+                    std::fs::metadata(&self.path).ok().map(|m| {
+                        format!("{} kbps", (m.len() as f64 * 8.0 / dur / 1000.0).round() as u32)
+                    })
+                } else {
+                    None
+                }
+            });
+            let from_params = codec_params.bits_per_sample.map(|b| {
+                format!("{} kbps", sample_rate * channels as u32 * b / 1000)
+            });
+            from_file.or(from_params).unwrap_or_else(|| "unknown".to_string())
+        };
+
+        println!("File:    {}", self.path.display());
+        println!("Format:  {codec_str}, {bitrate_str}");
+        println!("Audio:   {sample_rate} Hz, {channel_str}{bit_depth_str}");
+        println!("Length:  {duration_str}");
+
         // Send the audio configuration immediately so Deepgram client can start
         let _ = config_tx.send((sample_rate, channels));
-        
-        // In fast mode, wait for WebSocket to be ready before streaming
+
+        // Wait for WebSocket to be ready before streaming (ensures request ID
+        // is printed before the progress bar appears).
         if let Some(rx) = ready_rx {
             let _ = rx.await;
-            println!("WebSocket ready, starting fast audio stream...");
+            if fast_mode {
+                println!("WebSocket ready, starting fast audio stream...");
+            }
         }
-        
+
+        // Set up progress bar
+        let pb = if let Some(total) = total_frames {
+            let total_secs = total / sample_rate as u64;
+            let pb = ProgressBar::new(total_secs);
+            pb.set_style(
+                ProgressStyle::with_template(
+                    "{bar:40.cyan/blue} {msg}",
+                )
+                .unwrap()
+                .progress_chars("█▓░"),
+            );
+            pb.set_message(format!("0:00 / {}:{:02}", total_secs / 60, total_secs % 60));
+            Some((pb, total_secs))
+        } else {
+            None
+        };
+
         let dec_opts: DecoderOptions = Default::default();
         let mut decoder = symphonia::default::get_codecs()
             .make(&codec_params, &dec_opts)?;
-        
+
         let mut sample_buf = None;
-        
+        let mut frames_sent: u64 = 0;
+
         loop {
             let packet = match format.next_packet() {
                 Ok(packet) => packet,
                 Err(SymphoniaError::ResetRequired) => {
-                    // The decoder needs to be reset
                     decoder.reset();
                     continue;
                 }
                 Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    // End of file
                     break;
                 }
                 Err(err) => return Err(Box::new(err)),
             };
-            
+
             if packet.track_id() != track_id {
                 continue;
             }
-            
+
             match decoder.decode(&packet) {
                 Ok(decoded) => {
+                    let frame_count = decoded.frames() as u64;
+
                     if sample_buf.is_none() {
                         let spec = *decoded.spec();
                         let duration = decoded.capacity() as u64;
                         sample_buf = Some(SampleBuffer::<i16>::new(duration, spec));
                     }
-                    
+
                     if let Some(buf) = &mut sample_buf {
                         buf.copy_interleaved_ref(decoded);
-                        
+
                         let samples = buf.samples();
                         let mut audio_data = Vec::with_capacity(samples.len() * 2);
-                        
+
                         for &sample in samples {
                             audio_data.extend_from_slice(&sample.to_le_bytes());
                         }
-                        
+
                         if tx.send(audio_data).is_err() {
                             break;
                         }
-                        
+
+                        frames_sent += frame_count;
+
+                        // Update progress bar
+                        if let Some((ref pb, total_secs)) = pb {
+                            let current_secs = frames_sent / sample_rate as u64;
+                            pb.set_position(current_secs);
+                            pb.set_message(format!(
+                                "{}:{:02} / {}:{:02}",
+                                current_secs / 60,
+                                current_secs % 60,
+                                total_secs / 60,
+                                total_secs % 60,
+                            ));
+                        }
+
                         // If not in fast mode, simulate real-time streaming
                         if !fast_mode {
-                            let actual_samples = samples.len() / channels as usize;
                             let sleep_duration = Duration::from_secs_f64(
-                                actual_samples as f64 / sample_rate as f64
+                                frame_count as f64 / sample_rate as f64
                             );
                             tokio::time::sleep(sleep_duration).await;
                         }
@@ -248,7 +355,11 @@ impl AudioFileReader {
                 Err(err) => return Err(Box::new(err)),
             }
         }
-        
+
+        if let Some((pb, _)) = pb {
+            pb.finish_and_clear();
+        }
+
         Ok(())
     }
 }
@@ -266,14 +377,29 @@ async fn run_deepgram_client(
     sample_rate_override: Option<u32>,
     channels_override: Option<u16>,
     multichannel: bool,
-    interim_results: Option<bool>,
-    punctuate: Option<bool>,
-    smart_format: Option<bool>,
+    diarize: bool,
+    detect_entities: bool,
+    interim_results: bool,
+    vad_events: bool,
+    punctuate: bool,
+    smart_format: bool,
+    sentiment: bool,
+    intents: bool,
+    topics: bool,
     model: Option<String>,
     redact: Option<String>,
     language: Option<String>,
+    endpointing: Option<u32>,
+    utterance_end: Option<u32>,
+    keyterm: Option<String>,
+    keywords: Option<String>,
     mut shutdown_rx: mpsc::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Validate utterance_end dependencies
+    if utterance_end.is_some() && (!interim_results || !vad_events) {
+        return Err("--utterance-end requires --interim-results true and --vad-events".into());
+    }
+
     // Use custom endpoint or default to Deepgram API
     let base_url = endpoint.unwrap_or_else(|| "wss://api.deepgram.com".to_string());
     
@@ -298,19 +424,44 @@ async fn run_deepgram_client(
         params.push("multichannel=true".to_string());
     }
 
+    // Add diarize parameter
+    if diarize {
+        params.push("diarize=true".to_string());
+    }
+
+    // Add detect_entities parameter
+    if detect_entities {
+        params.push("detect_entities=true".to_string());
+    }
+
     // Add interim_results parameter if specified
-    if let Some(interim) = interim_results {
-        params.push(format!("interim_results={}", interim));
+    if interim_results {
+        params.push("interim_results=true".to_string());
+    }
+
+    // Add vad_events parameter
+    if vad_events {
+        params.push("vad_events=true".to_string());
     }
     
-    // Add punctuate parameter if specified
-    if let Some(punct) = punctuate {
-        params.push(format!("punctuate={}", punct));
+    if punctuate {
+        params.push("punctuate=true".to_string());
     }
-    
-    // Add smart_format parameter if specified
-    if let Some(smart) = smart_format {
-        params.push(format!("smart_format={}", smart));
+
+    if smart_format {
+        params.push("smart_format=true".to_string());
+    }
+
+    if sentiment {
+        params.push("sentiment=true".to_string());
+    }
+
+    if intents {
+        params.push("intents=true".to_string());
+    }
+
+    if topics {
+        params.push("topics=true".to_string());
     }
     
     // Add model parameter if specified
@@ -331,7 +482,32 @@ async fn run_deepgram_client(
     if let Some(lang) = language {
         params.push(format!("language={}", lang));
     }
-    
+
+    // Add endpointing parameter if specified
+    if let Some(ep) = endpointing {
+        params.push(format!("endpointing={}", ep));
+    }
+
+    // Add utterance_end_ms parameter if specified
+    if let Some(ue) = utterance_end {
+        params.push(format!("utterance_end_ms={}", ue));
+    }
+
+    // Add keyterm parameters if specified (each term becomes a separate keyterm= param)
+    if let Some(keyterms) = keyterm {
+        for term in keyterms.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            params.push(format!("keyterm={}", urlencoding::encode(term)));
+        }
+    }
+
+    // Add keywords parameters if specified (each entry becomes a separate keywords= param,
+    // optionally with an intensifier: "word:2.0" or just "word")
+    if let Some(kw) = keywords {
+        for entry in kw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            params.push(format!("keywords={}", urlencoding::encode(entry)));
+        }
+    }
+
     // Join all parameters
     url.push_str(&params.join("&"));
     
@@ -358,8 +534,22 @@ async fn run_deepgram_client(
         .header("Authorization", format!("Token {}", api_key))
         .body(())?;
     
-    let (ws_stream, _) = connect_async(request).await?;
+    let (ws_stream, response) = connect_async(request).await.map_err(|e| {
+        if let tokio_tungstenite::tungstenite::Error::Http(ref resp) = e {
+            if let Some(request_id) = resp.headers().get("dg-request-id") {
+                eprintln!("Request ID: {}", request_id.to_str().unwrap_or("(invalid)"));
+            }
+            let body = resp.body().as_deref()
+                .and_then(|b| std::str::from_utf8(b).ok())
+                .unwrap_or("(no body)");
+            eprintln!("Error {}: {}", resp.status(), body);
+        }
+        e
+    })?;
     println!("Connected to Deepgram!");
+    if let Some(request_id) = response.headers().get("dg-request-id") {
+        println!("Request ID: {}", request_id.to_str().unwrap_or("(invalid)"));
+    }
     
     // Signal that we're ready to receive audio
     if let Some(tx) = ready_tx {
@@ -415,17 +605,45 @@ async fn run_deepgram_client(
                                         if let Some(channel) = response.channel {
                                             for alternative in channel.alternatives {
                                                 if !alternative.transcript.trim().is_empty() && !silent {
-                                                    print!("\rTranscript: {}", alternative.transcript);
-                                                    if let Some(confidence) = alternative.confidence {
-                                                        print!(" (Confidence: {:.1}%)", confidence * 100.0);
+                                                    if diarize && !alternative.words.is_empty() {
+                                                        // Group consecutive words by speaker
+                                                        let mut segments: Vec<(u32, Vec<&str>)> = Vec::new();
+                                                        for word in &alternative.words {
+                                                            let speaker = word.speaker.unwrap_or(0);
+                                                            if let Some(last) = segments.last_mut() {
+                                                                if last.0 == speaker {
+                                                                    last.1.push(&word.word);
+                                                                    continue;
+                                                                }
+                                                            }
+                                                            segments.push((speaker, vec![&word.word]));
+                                                        }
+                                                        for (speaker, words) in &segments {
+                                                            println!("\r\x1b[2KSpeaker {}: {}", speaker, words.join(" "));
+                                                        }
+                                                    } else {
+                                                        print!("\r\x1b[2KTranscript: {}", alternative.transcript);
+                                                        if let Some(confidence) = alternative.confidence {
+                                                            print!(" (Confidence: {:.1}%)", confidence * 100.0);
+                                                        }
+                                                        println!();
                                                     }
-                                                    println!();
                                                 }
                                             }
                                         }
                                     }
                                 }
-                                Err(e) => eprintln!("Failed to parse response: {}", e),
+                                Err(e) => {
+                                    eprintln!("Failed to parse response: {}", e);
+                                    if let Ok(mut f) = OpenOptions::new()
+                                        .create(true)
+                                        .append(true)
+                                        .open("dg-stt-debug.log")
+                                    {
+                                        let _ = writeln!(f, "--- parse error: {} ---", e);
+                                        let _ = writeln!(f, "{}", text);
+                                    }
+                                }
                             }
                         }
                         Some(Ok(Message::Close(_))) => {
@@ -474,23 +692,38 @@ async fn run_deepgram_client(
                 }
                 break;
             }
-            else => break,
+            _ = result_rx.recv() => {
+                // WebSocket connection was closed — exit immediately
+                std::process::exit(0);
+            }
+            else => {
+                // Audio source exhausted (file done) — tell Deepgram we're finished
+                let close_stream_msg = serde_json::json!({"type": "CloseStream"});
+                if let Ok(msg_str) = serde_json::to_string(&close_stream_msg) {
+                    let _ = msg_tx.send(Message::Text(msg_str.into()));
+                }
+                break;
+            }
         }
     }
-    
+
     println!("Sent {} audio chunks, waiting for transcription results...", audio_count);
-    
-    // Wait for the response handler to signal it's done (no more messages)
-    let _ = result_rx.recv().await;
-    
+
     // Stop sending messages
     drop(msg_tx);
-    
-    // Wait for all tasks to finish
+
+    // Wait for the response handler first — it completes as soon as the WS closes.
+    // Awaiting keepalive/sender first would hang: they can only exit after ws_sender
+    // errors, which doesn't happen until the TCP teardown completes (several seconds).
+    let _ = response_handler.await;
+
+    // WS is now closed; abort the other tasks rather than waiting for the chain to
+    // propagate through sender_task → keepalive_task.
+    keepalive_task.abort();
+    sender_task.abort();
     let _ = keepalive_task.await;
     let _ = sender_task.await;
-    let _ = response_handler.await;
-    
+
     Ok(())
 }
 
@@ -524,12 +757,20 @@ async fn run_microphone_mode(
     sample_rate_override: Option<u32>,
     channels_override: Option<u16>,
     multichannel: bool,
-    interim_results: Option<bool>,
-    punctuate: Option<bool>,
-    smart_format: Option<bool>,
+    diarize: bool,
+    detect_entities: bool,
+    interim_results: bool,
+    vad_events: bool,
+    punctuate: bool,
+    smart_format: bool,
+    sentiment: bool,
+    intents: bool,
+    topics: bool,
     model: Option<String>,
     redact: Option<String>,
     language: Option<String>,
+    keyterm: Option<String>,
+    keywords: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Deepgram real-time transcription from microphone...");
     
@@ -559,20 +800,30 @@ async fn run_microphone_mode(
         sample_rate_override,
         channels_override,
         multichannel,
+        diarize,
+        detect_entities,
         interim_results,
+        vad_events,
         punctuate,
         smart_format,
+        sentiment,
+        intents,
+        topics,
         model,
         redact,
         language,
+        None,
+        None,
+        keyterm,
+        keywords,
         shutdown_rx,
     ));
-    
+
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             println!("\nReceived Ctrl+C, initiating graceful shutdown...");
             let _ = shutdown_tx.send(()).await;
-            
+
             // Wait for the Deepgram task to finish after sending shutdown signal
             match deepgram_task.await {
                 Ok(Ok(())) => println!("Deepgram client finished successfully"),
@@ -603,12 +854,22 @@ async fn run_file_mode(
     sample_rate_override: Option<u32>,
     channels_override: Option<u16>,
     multichannel: bool,
-    interim_results: Option<bool>,
-    punctuate: Option<bool>,
-    smart_format: Option<bool>,
+    diarize: bool,
+    detect_entities: bool,
+    interim_results: bool,
+    vad_events: bool,
+    punctuate: bool,
+    smart_format: bool,
+    sentiment: bool,
+    intents: bool,
+    topics: bool,
     model: Option<String>,
     redact: Option<String>,
     language: Option<String>,
+    endpointing: Option<u32>,
+    utterance_end: Option<u32>,
+    keyterm: Option<String>,
+    keywords: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Deepgram transcription from file...");
     println!("File: {}", file_path.display());
@@ -620,12 +881,11 @@ async fn run_file_mode(
     
     let file_reader = AudioFileReader::new(file_path);
     
-    // Create a ready signal channel for fast mode
-    let (ready_tx, ready_rx) = if fast {
-        let (tx, rx) = oneshot::channel();
+    // Always create a ready channel — stream_file waits on it before showing
+    // the progress bar, ensuring the request ID is printed first.
+    let (ready_tx, ready_rx) = {
+        let (tx, rx) = oneshot::channel::<()>();
         (Some(tx), Some(rx))
-    } else {
-        (None, None)
     };
     
     // Start streaming file audio in the background
@@ -633,11 +893,17 @@ async fn run_file_mode(
         file_reader.stream_file(audio_tx, config_tx, ready_rx, fast).await
     });
     
-    // Wait for the audio configuration to be sent
-    let (sample_rate, channels) = config_rx.await
-        .map_err(|_| "Failed to receive audio configuration")?;
-    
-    println!("Sample rate: {}, Channels: {}", sample_rate, channels);
+    // Wait for the audio configuration to be sent. If the channel closed without
+    // sending, stream_file failed early (e.g. unsupported format) — surface that error.
+    let (sample_rate, channels) = match config_rx.await {
+        Ok(cfg) => cfg,
+        Err(_) => {
+            return match stream_task.await {
+                Ok(Err(e)) => Err(format!("Failed to read audio file: {e}").into()),
+                _ => Err("Failed to read audio file: unknown error".into()),
+            };
+        }
+    };
     
     // Start the Deepgram client (now both tasks run concurrently)
     let deepgram_task = tokio::spawn(run_deepgram_client(
@@ -653,15 +919,25 @@ async fn run_file_mode(
         sample_rate_override,
         channels_override,
         multichannel,
+        diarize,
+        detect_entities,
         interim_results,
+        vad_events,
         punctuate,
         smart_format,
+        sentiment,
+        intents,
+        topics,
         model,
         redact,
         language,
+        endpointing,
+        utterance_end,
+        keyterm,
+        keywords,
         shutdown_rx,
     ));
-    
+
     // Wait for either CTRL+C or both tasks to complete
     let ctrl_c_future = tokio::signal::ctrl_c();
     let tasks_future = async {
@@ -733,12 +1009,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sample_rate,
                 channels,
                 multichannel,
+                diarize,
+                detect_entities,
                 interim_results,
+                vad_events,
                 punctuate,
                 smart_format,
+                sentiment,
+                intents,
+                topics,
                 model,
                 redact,
                 language,
+                keyterm,
+                keywords,
             } => {
                 run_microphone_mode(
                     api_key,
@@ -749,12 +1033,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     sample_rate,
                     channels,
                     multichannel,
+                    diarize,
+                    detect_entities,
                     interim_results,
+                    vad_events,
                     punctuate,
                     smart_format,
+                    sentiment,
+                    intents,
+                    topics,
                     model,
                     redact,
                     language,
+                    keyterm,
+                    keywords,
                 )
                 .await?
             }
@@ -768,12 +1060,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sample_rate,
                 channels,
                 multichannel,
+                diarize,
+                detect_entities,
                 interim_results,
+                vad_events,
                 punctuate,
                 smart_format,
+                sentiment,
+                intents,
+                topics,
                 model,
                 redact,
                 language,
+                endpointing,
+                utterance_end,
+                keyterm,
+                keywords,
             } => {
                 run_file_mode(
                     api_key,
@@ -786,12 +1088,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     sample_rate,
                     channels,
                     multichannel,
+                    diarize,
+                    detect_entities,
                     interim_results,
+                    vad_events,
                     punctuate,
                     smart_format,
+                    sentiment,
+                    intents,
+                    topics,
                     model,
                     redact,
                     language,
+                    endpointing,
+                    utterance_end,
+                    keyterm,
+                    keywords,
                 )
                 .await?
             }

@@ -1,6 +1,6 @@
 [package]
 name = "dg-stt"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 default-run = "dg-stt"
 
@@ -17,6 +17,7 @@ async-trait = "0.1"
 dotenv = "0.15"
 bytes = "1"
 clap = { version = "4.5", features = ["derive"] }
-symphonia = { version = "0.5", features = ["mp3", "wav", "flac"] }
+symphonia = { version = "0.5", features = ["mp3", "wav", "flac", "aac", "isomp4", "ogg", "vorbis", "mkv", "alac"] }
 urlencoding = "2.1"
+indicatif = "0.17"
 reqwest = { version = "0.13.1", features = ["json"] }
