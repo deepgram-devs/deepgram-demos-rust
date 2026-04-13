@@ -7,5 +7,6 @@ members = [
   "text-to-speech",
   "tts-tui",
   "voice-agent",
+  "velocity",
 ]
 resolver = "3"
