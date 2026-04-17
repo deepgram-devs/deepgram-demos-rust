@@ -9,10 +9,10 @@ Feel free to use these applications to learn from, and adapt them to your unique
 In general, you can run a Rust application by changing into the project directory and running `cargo run`.
 The project directory is typically the one containing a `Cargo.toml` file and a `./src/` child directory.
 
-If you'd rather "install" the sample applications, so you can execute them using their binary name, you can run:
+If you'd rather install one of the sample applications so you can execute it using its binary name, you can run:
 
 ```bash
-cargo install --path text-to-speech
+cargo install --path velocity
 ```
 
 If you try running `cargo run` from the repository root, you will need to add the `--bin` option to the `cargo` command.
@@ -32,12 +32,13 @@ cargo run --bin dg-tts -- --help
 
 ## Application Ideas
 
-Use these ideas to inspire business and application ideas you could build with Deepgram!
+Use these ideas to inspire business and application ideas you could build with Deepgram.
 
 - Schedule vehicle maintenance appointments automatically, with Voice Agent
 - Language training application, using Text-to-Speech
 - Customer service quality improvement, using Speech-to-Text transcription
 - Sales tracking and marketing optimization, using Speech-to-Text transcriptions
+- Windows dictation assistant with configurable hotkeys, audio devices, and transcript history
 
 ## Sample Applications
 
@@ -49,6 +50,7 @@ Use these ideas to inspire business and application ideas you could build with D
 | [Flux Turn-Taking](flux-turn-taking/) | Real-time audio streaming to Deepgram Flux API for speech recognition | STT |
 | [TTS TUI](tts-tui/) | Terminal UI for interacting with Deepgram TTS | TTS |
 | [Audio Recorder](audio-recorder/) | An audio recording application, from local input devices | --- |
+| [Velocity](velocity/) | Windows 11 tray dictation app with configurable hotkeys, microphone selection, transcript history, and WinUI settings | STT |
 
 ## License
 
