@@ -1,10 +1,10 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
-use crate::{audio, beep, logger, typer};
+use crate::{audio, beep, logger};
 
 // ── Deepgram streaming response types ────────────────────────────────────────
 
@@ -53,17 +53,13 @@ pub fn run(
     api_key: &str,
     smart_format: bool,
     model: &str,
+    key_terms: &[String],
+    selected_device_name: Option<&str>,
     active: Arc<AtomicBool>,
-    capture: Arc<Mutex<audio::AudioCapture>>,
+    on_transcript: Arc<dyn Fn(String) + Send + Sync>,
 ) {
-    let mut url = format!(
-        "wss://api.deepgram.com/v1/listen\
-         ?model={}&encoding=linear16&sample_rate=48000&channels=1",
-        model
-    );
-    if smart_format {
-        url.push_str("&smart_format=true");
-    }
+    let url = build_streaming_url(model, smart_format, key_terms);
+    log_query_string("Deepgram streaming", &url);
 
     // Build the request via IntoClientRequest so tungstenite populates all
     // required WebSocket handshake headers (Sec-WebSocket-Key, Upgrade, etc.)
@@ -108,12 +104,10 @@ pub fn run(
         _ => {}
     }
 
-    // Lock the shared capture for the duration of the streaming session.
-    // Recording is blocked while streaming is active, so there is no contention.
-    let mut cap = match capture.lock() {
-        Ok(g) => g,
-        Err(e) => {
-            logger::verbose(&format!("Streaming: could not lock audio capture: {e}"));
+    let mut cap = match audio::AudioCapture::new(selected_device_name) {
+        Some(capture) => capture,
+        None => {
+            logger::verbose("Streaming: could not open selected audio capture device");
             active.store(false, Ordering::Relaxed);
             let _ = ws.close(None);
             return;
@@ -168,7 +162,7 @@ pub fn run(
             Ok(tungstenite::Message::Text(txt)) => {
                 if let Some(transcript) = parse_transcript(&txt) {
                     logger::verbose(&format!("Streaming transcript: {transcript}"));
-                    typer::type_text(&format!("{transcript} "));
+                    on_transcript(format!("{transcript} "));
                 }
             }
             Ok(tungstenite::Message::Close(_)) => {
@@ -194,8 +188,6 @@ pub fn run(
     // Graceful shutdown: stop audio capture, then close the WebSocket.
     let mut drain = Vec::new();
     cap.stop(&mut drain);
-    drop(cap); // release the Mutex before blocking on WebSocket close
-
     let _ = ws.send(tungstenite::Message::Text(
         r#"{"type":"CloseStream"}"#.to_string().into(),
     ));
@@ -203,4 +195,71 @@ pub fn run(
     let _ = ws.close(None);
 
     beep::play_end();
+}
+
+fn build_streaming_url(model: &str, smart_format: bool, key_terms: &[String]) -> String {
+    let mut params = vec![
+        format!("model={}", url_encode(model)),
+        "encoding=linear16".to_string(),
+        "sample_rate=48000".to_string(),
+        "channels=1".to_string(),
+    ];
+    let key_term_param = deepgram_key_term_param(model);
+    if smart_format {
+        params.push("smart_format=true".to_string());
+    }
+    for term in key_terms {
+        if !term.trim().is_empty() {
+            params.push(format!("{key_term_param}={}", url_encode(term.trim())));
+        }
+    }
+
+    format!("wss://api.deepgram.com/v1/listen?{}", params.join("&"))
+}
+
+fn deepgram_key_term_param(model: &str) -> &'static str {
+    match model.trim().to_ascii_lowercase().as_str() {
+        "nova-2" => "keyword",
+        _ => "keyterm",
+    }
+}
+
+fn log_query_string(context: &str, url: &str) {
+    if let Some((_, query)) = url.split_once('?') {
+        logger::verbose(&format!("{context} query: {query}"));
+    }
+}
+
+fn url_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char)
+            }
+            b' ' => encoded.push_str("%20"),
+            _ => encoded.push_str(&format!("%{:02X}", byte)),
+        }
+    }
+    encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn streaming_url_includes_keywords() {
+        let url = build_streaming_url("nova-3", true, &["alpha".into(), "beta test".into()]);
+        assert!(url.contains("keyterm=alpha"));
+        assert!(url.contains("keyterm=beta%20test"));
+        assert!(url.contains("smart_format=true"));
+    }
+
+    #[test]
+    fn streaming_url_uses_keyword_for_nova_2() {
+        let url = build_streaming_url("nova-2", false, &["alpha".into()]);
+        assert!(url.contains("keyword=alpha"));
+        assert!(!url.contains("keyterm=alpha"));
+    }
 }

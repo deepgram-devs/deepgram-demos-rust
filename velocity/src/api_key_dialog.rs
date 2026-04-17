@@ -9,6 +9,10 @@ use windows::{
 /// Shows a simple dialog prompting the user to enter their Deepgram API key.
 /// Returns Some(key) on OK, or None if the user cancelled.
 pub fn prompt_for_api_key() -> Option<String> {
+    if let Some(api_key) = crate::sidecar_ui::prompt_for_api_key() {
+        return Some(api_key);
+    }
+
     unsafe { show_dialog() }
 }
 

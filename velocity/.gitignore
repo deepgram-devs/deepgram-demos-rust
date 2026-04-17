@@ -1,4 +1,6 @@
 /target
+Velocity.Settings/bin/
+Velocity.Settings/obj/
 **.wav
 **.mp3
 **.aac

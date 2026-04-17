@@ -3,6 +3,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+use crate::config;
+
 static VERBOSE: OnceLock<bool> = OnceLock::new();
 
 pub fn init(verbose: bool) {
@@ -14,8 +16,7 @@ pub fn is_verbose() -> bool {
 }
 
 fn log_path() -> PathBuf {
-    let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".config").join("velocity.log")
+    config::app_data_dir().join("velocity.log")
 }
 
 /// Writes a line to the log file. Always appends; creates the file if needed.

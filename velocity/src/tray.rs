@@ -11,7 +11,13 @@ use windows::{
 static ICON_PNG: &[u8] = include_bytes!("../assets/deepgram-icon.png");
 
 pub const WM_TRAY: u32 = WM_APP + 1;
-const IDM_QUIT: usize = 1001;
+pub const WM_APP_REFRESH_TRAY: u32 = WM_APP + 2;
+pub const WM_APP_RELOAD_CONFIG: u32 = WM_APP + 3;
+const IDM_SETTINGS: usize = 1001;
+const IDM_KEEP_TALKING: usize = 1002;
+const IDM_STREAMING: usize = 1003;
+const IDM_QUIT: usize = 1004;
+const IDM_RECENT_BASE: usize = 2000;
 const TRAY_ID: u32 = 1;
 
 /// Creates a message-only window and registers the system tray icon.
@@ -134,12 +140,30 @@ unsafe fn add_tray_icon(hwnd: HWND) {
         ..Default::default()
     };
 
-    let tip = "Velocity";
+    let tip = tray_tooltip();
     let tip_utf16: Vec<u16> = tip.encode_utf16().chain(std::iter::once(0)).collect();
     let len = tip_utf16.len().min(nid.szTip.len());
     nid.szTip[..len].copy_from_slice(&tip_utf16[..len]);
 
     let _ = Shell_NotifyIconW(NIM_ADD, &nid);
+}
+
+pub fn refresh_tray(hwnd: HWND) {
+    unsafe {
+        let mut nid = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hwnd,
+            uID: TRAY_ID,
+            uFlags: NIF_TIP,
+            ..Default::default()
+        };
+
+        let tip = tray_tooltip();
+        let tip_utf16: Vec<u16> = tip.encode_utf16().chain(std::iter::once(0)).collect();
+        let len = tip_utf16.len().min(nid.szTip.len());
+        nid.szTip[..len].copy_from_slice(&tip_utf16[..len]);
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
 }
 
 pub fn remove_tray_icon(hwnd: HWND) {
@@ -165,13 +189,47 @@ unsafe extern "system" fn tray_wnd_proc(
             let event = (lparam.0 & 0xFFFF) as u32;
             if event == WM_RBUTTONUP || event == WM_CONTEXTMENU {
                 show_context_menu(hwnd);
+            } else if event == WM_LBUTTONDBLCLK {
+                crate::settings::show_settings_window();
             }
             LRESULT(0)
         }
+        WM_HOTKEY => {
+            crate::state::global().with_hotkeys(|hotkeys| hotkeys.handle(wparam.0 as i32));
+            LRESULT(0)
+        }
+        WM_APP_REFRESH_TRAY => {
+            refresh_tray(hwnd);
+            LRESULT(0)
+        }
+        WM_APP_RELOAD_CONFIG => {
+            apply_reloaded_config();
+            refresh_tray(hwnd);
+            LRESULT(0)
+        }
         WM_COMMAND => {
-            if wparam.0 == IDM_QUIT {
-                remove_tray_icon(hwnd);
-                PostQuitMessage(0);
+            match wparam.0 {
+                x if x == IDM_SETTINGS => crate::settings::show_settings_window(),
+                x if x == IDM_KEEP_TALKING => {
+                    let _ = crate::state::global()
+                        .with_hotkeys(|hotkeys| hotkeys.handle(crate::hotkey::HOTKEY_KT));
+                }
+                x if x == IDM_STREAMING => {
+                    let _ = crate::state::global()
+                        .with_hotkeys(|hotkeys| hotkeys.handle(crate::hotkey::HOTKEY_STREAM));
+                }
+                x if x == IDM_QUIT => {
+                    remove_tray_icon(hwnd);
+                    PostQuitMessage(0);
+                }
+                x if x >= IDM_RECENT_BASE => {
+                    let index = x - IDM_RECENT_BASE;
+                    let app = crate::state::global();
+                    if app.select_history(index).is_some() {
+                        app.resend_selected();
+                    }
+                }
+                _ => {}
             }
             LRESULT(0)
         }
@@ -185,6 +243,58 @@ unsafe extern "system" fn tray_wnd_proc(
 
 unsafe fn show_context_menu(hwnd: HWND) {
     let hmenu = CreatePopupMenu().unwrap();
+    let app = crate::state::global();
+    let status_line = if let Some(error) = app.last_error() {
+        format!("Velocity - {}", truncate_menu_text(&error, 40))
+    } else if app.is_streaming() {
+        "Velocity - Streaming active".to_string()
+    } else if app.is_keep_talking() || app.is_recording() {
+        "Velocity - Recording active".to_string()
+    } else {
+        "Velocity - Idle".to_string()
+    };
+    let status_wide = to_wide(&status_line);
+    let _ = AppendMenuW(hmenu, MF_STRING | MF_DISABLED, 0, PCWSTR(status_wide.as_ptr()));
+    let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+
+    let keep_label = if app.is_keep_talking() {
+        "Stop keep talking"
+    } else {
+        "Start keep talking"
+    };
+    let stream_label = if app.is_streaming() {
+        "Stop streaming"
+    } else {
+        "Start streaming"
+    };
+
+    let _ = AppendMenuW(hmenu, MF_STRING, IDM_KEEP_TALKING, PCWSTR(to_wide(keep_label).as_ptr()));
+    let _ = AppendMenuW(hmenu, MF_STRING, IDM_STREAMING, PCWSTR(to_wide(stream_label).as_ptr()));
+    let _ = AppendMenuW(hmenu, MF_STRING, IDM_SETTINGS, w!("Settings"));
+
+    let recent_menu = CreatePopupMenu().unwrap();
+    let selected_recent = app.selected_history_index();
+    let recent_entries = app.recent_entries();
+    for (index, entry) in recent_entries.iter().enumerate() {
+        let label = format_recent_label(index, &entry.text);
+        let flags = if Some(index) == selected_recent {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        let _ = AppendMenuW(
+            recent_menu,
+            flags,
+            IDM_RECENT_BASE + index,
+            PCWSTR(to_wide(&label).as_ptr()),
+        );
+    }
+    if recent_entries.is_empty() {
+        let _ = AppendMenuW(recent_menu, MF_STRING | MF_DISABLED, 0, w!("No recent transcripts"));
+    }
+    let _ = AppendMenuW(hmenu, MF_POPUP, recent_menu.0 as usize, w!("Recent transcripts"));
+
+    let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(hmenu, MF_STRING, IDM_QUIT, w!("Quit Velocity"));
 
     let mut pt = POINT::default();
@@ -202,4 +312,56 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
     let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
     let _ = DestroyMenu(hmenu);
+}
+
+fn tray_tooltip() -> String {
+    let app = crate::state::global();
+    if let Some(error) = app.last_error() {
+        format!("Velocity - Error: {}", truncate_menu_text(&error, 40))
+    } else if app.is_streaming() {
+        "Velocity - Streaming active".to_string()
+    } else if app.is_keep_talking() || app.is_recording() {
+        "Velocity - Recording active".to_string()
+    } else {
+        "Velocity - Idle".to_string()
+    }
+}
+
+fn format_recent_label(index: usize, text: &str) -> String {
+    format!("{}: {}", index + 1, truncate_menu_text(text, 48))
+}
+
+fn truncate_menu_text(text: &str, limit: usize) -> String {
+    let truncated = text.trim().replace('\n', " ");
+    if truncated.chars().count() <= limit {
+        truncated
+    } else {
+        format!("{}...", truncated.chars().take(limit).collect::<String>())
+    }
+}
+
+fn to_wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+fn apply_reloaded_config() {
+    let app = crate::state::global();
+    let path = crate::config::config_path();
+    match crate::config::load_from_path(&path) {
+        Ok(loaded) => {
+            if loaded.modified_at == app.config_modified_at() {
+                return;
+            }
+            let previous = app.config();
+            if let Some(result) = app.with_hotkeys(|hotkeys| hotkeys.apply_config(loaded.config.hotkeys.clone())) {
+                if let Err(error) = result {
+                    let _ = app.with_hotkeys(|hotkeys| hotkeys.apply_config(previous.hotkeys.clone()));
+                    app.set_error(format!("Config reload rejected: {error}"));
+                    return;
+                }
+            }
+            app.apply_config(loaded.config, loaded.modified_at);
+        }
+        Err(error) => app.set_error(format!("Config reload rejected: {error}")),
+    }
 }

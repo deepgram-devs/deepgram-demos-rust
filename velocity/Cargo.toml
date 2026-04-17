@@ -1,6 +1,6 @@
 [package]
 name = "velocity"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Windows 11 voice dictation using Deepgram Voice AI."
 
@@ -16,6 +16,8 @@ windows = { version = "0.62", features = [
     "Win32_System_Console",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
     "Win32_System_Variant",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
@@ -28,7 +30,7 @@ windows = { version = "0.62", features = [
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1"
-reqwest = { version = "0.13", features = ["blocking"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "native-tls"] }
 tungstenite = { version = "0.29", features = ["native-tls"] }
 hound = "3"
 minimp3 = "0.6"

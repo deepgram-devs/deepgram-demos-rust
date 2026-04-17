@@ -6,19 +6,27 @@
 mod api_key_dialog;
 mod audio;
 mod beep;
+mod clipboard;
 mod config;
+mod history;
 mod hotkey;
 mod logger;
+mod output;
+mod settings;
+mod sidecar_ui;
+mod state;
 mod streaming;
 mod transcribe;
 mod tray;
 mod typer;
 
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use windows::core::BOOL;
 use windows::Win32::System::Console::*;
+use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
@@ -49,134 +57,219 @@ fn main() {
         .map(|w| w[1].clone());
     logger::init(verbose);
 
-    // Load or prompt for API key
-    let mut cfg = config::load();
-    let api_key = loop {
+    let loaded_state = config::load_state().unwrap_or_else(|error| {
+        logger::verbose(&format!("Config load failed: {error}"));
+        config::ConfigFileState {
+            config: config::Config::default(),
+            modified_at: None,
+        }
+    });
+    let mut cfg = loaded_state.config;
+    if smart_format_flag {
+        cfg.smart_format = true;
+    }
+    if let Some(model) = model_flag {
+        cfg.model = model;
+    }
+
+    let _api_key = loop {
         match cfg.api_key.clone().filter(|k| !k.trim().is_empty()) {
             Some(key) => break key,
             None => match api_key_dialog::prompt_for_api_key() {
                 Some(key) => {
                     cfg.api_key = Some(key.clone());
-                    config::save(&cfg);
+                    let _ = config::save(&cfg);
                     break key;
                 }
-                None => return, // user cancelled
+                None => return,
             },
         }
     };
 
-    // --smart-format CLI flag takes priority; otherwise fall back to config value.
-    let smart_format = smart_format_flag || cfg.smart_format.unwrap_or(false);
+    let _ = config::ensure_backup(&cfg);
 
-    // --model CLI flag takes priority; then config; then default "nova-3".
-    let model = model_flag
-        .or_else(|| cfg.model.clone())
-        .unwrap_or_else(|| "nova-3".to_string());
+    let app = Arc::new(state::AppState::new(cfg.clone(), loaded_state.modified_at));
+    state::install_global(Arc::clone(&app));
 
-    let api_key = Arc::new(api_key);
-    let recording = Arc::new(AtomicBool::new(false));
+    let tray_hwnd = tray::create_tray_window();
+    app.set_tray_hwnd(tray_hwnd);
 
-    // Clone model before it is moved into the audio thread closure.
-    let model_for_stream = model.clone();
+    let recording = app.recording_flag();
+    let keep_talking = app.keep_talking_flag();
+    let streaming_active = app.streaming_flag();
 
-    let recording_for_audio = Arc::clone(&recording);
-    let api_key_for_thread = Arc::clone(&api_key);
-
-    // Open the audio device once at startup so there is no initialization
-    // delay when the user presses the hotkey.  The device is shared between
-    // the regular recording path and the streaming path via Arc<Mutex<>>;
-    // the two modes are mutually exclusive so there is never real contention.
-    let capture = Arc::new(Mutex::new(
-        audio::AudioCapture::new().expect("Failed to open audio input device"),
-    ));
-    let capture_for_audio  = Arc::clone(&capture);
-    let capture_for_stream = Arc::clone(&capture);
-
-    // Audio thread: parked until the hook signals start, then captures + transcribes.
+    let audio_thread_app = Arc::clone(&app);
+    let audio_thread_recording = Arc::clone(&recording);
     let audio_thread = std::thread::spawn(move || {
         let mut samples = Vec::new();
         loop {
             std::thread::park();
+            if !audio_thread_recording.load(Ordering::Relaxed) {
+                continue;
+            }
 
             samples.clear();
-
-            // Lock the shared device for the duration of this recording session.
-            {
-                let mut cap = capture_for_audio.lock().unwrap();
-                cap.start();
-                while recording_for_audio.load(Ordering::Relaxed) {
-                    cap.collect_ready(&mut samples);
-                    std::thread::sleep(std::time::Duration::from_millis(10));
+            let config = audio_thread_app.config();
+            let api_key = match config.api_key.clone().filter(|key| !key.trim().is_empty()) {
+                Some(key) => key,
+                None => {
+                    audio_thread_app.set_error("Deepgram API key is not configured".to_string());
+                    audio_thread_app.set_recording(false);
+                    continue;
                 }
-                cap.stop(&mut samples);
-            } // MutexGuard dropped — streaming mode can now acquire the device.
+            };
+
+            let mut capture = match audio::AudioCapture::new(config.audio_input.as_deref()) {
+                Some(capture) => capture,
+                None => {
+                    audio_thread_app.set_error("Failed to open audio input device".to_string());
+                    audio_thread_app.set_recording(false);
+                    continue;
+                }
+            };
+
+            if capture.actual_device.fell_back_to_default {
+                logger::verbose(&format!(
+                    "Requested microphone {:?} unavailable, using {}",
+                    capture.actual_device.requested_name,
+                    capture.actual_device.actual_name
+                ));
+            }
+
+            capture.start();
+            while audio_thread_recording.load(Ordering::Relaxed) {
+                let start = samples.len();
+                capture.collect_ready(&mut samples);
+                if samples.len() > start {
+                    audio_thread_app.set_meter_level(audio::peak_level_percent(&samples[start..]));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            capture.stop(&mut samples);
+            audio_thread_app.set_meter_level(0);
 
             if samples.is_empty() {
-                logger::verbose("Audio capture returned empty — check microphone permissions");
+                logger::verbose("Audio capture returned empty - check microphone permissions");
                 continue;
             }
 
             logger::verbose(&format!("Captured {} samples, sending to Deepgram", samples.len()));
-
             let wav = audio::encode_wav(&samples, 48_000);
-            if let Some(text) = transcribe::transcribe(wav, &api_key_for_thread, smart_format, &model) {
+            if let Some(text) = transcribe::transcribe(
+                wav,
+                &api_key,
+                config.smart_format,
+                &config.model,
+                &config.key_terms,
+            ) {
                 logger::verbose(&format!("Transcript: {text}"));
-                typer::type_text(&text);
+                audio_thread_app.push_history_and_deliver(text);
             }
         }
     });
 
     let audio_thread_handle = audio_thread.thread().clone();
-    let recording_for_hook = Arc::clone(&recording);
-
+    let on_start_app = Arc::clone(&app);
     let on_start: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         logger::verbose("Recording started");
+        on_start_app.set_recording(true);
         std::thread::spawn(|| beep::play_start());
         audio_thread_handle.unpark();
     });
 
+    let on_stop_app = Arc::clone(&app);
+    let keep_flag_for_stop = Arc::clone(&keep_talking);
     let on_stop: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         logger::verbose("Recording stopped");
+        on_stop_app.set_recording(false);
+        if !keep_flag_for_stop.load(Ordering::Relaxed) {
+            on_stop_app.set_keep_talking(false);
+        }
+        on_stop_app.set_meter_level(0);
         beep::play_end();
     });
 
-    // Streaming mode state and callbacks.
-    let streaming_active = Arc::new(AtomicBool::new(false));
-    let streaming_active_for_start = Arc::clone(&streaming_active);
-    let api_key_for_stream = Arc::clone(&api_key);
-
+    let on_stream_app = Arc::clone(&app);
     let on_stream_start: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         logger::verbose("Streaming mode started");
-        let active  = Arc::clone(&streaming_active_for_start);
-        let key     = Arc::clone(&api_key_for_stream);
-        let mdl     = model_for_stream.clone();
-        let cap     = Arc::clone(&capture_for_stream);
+        on_stream_app.set_streaming(true);
+        let stream_app = Arc::clone(&on_stream_app);
         std::thread::spawn(move || {
-            streaming::run(&key, smart_format, &mdl, active, cap);
+            let config = stream_app.config();
+            let api_key = match config.api_key.clone().filter(|key| !key.trim().is_empty()) {
+                Some(key) => key,
+                None => {
+                    stream_app.set_error("Deepgram API key is not configured".to_string());
+                    stream_app.set_streaming(false);
+                    return;
+                }
+            };
+
+            let transcript_target = Arc::clone(&stream_app);
+            let on_transcript: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |text| {
+                transcript_target.push_history_and_deliver(format!("{text} "));
+            });
+
+            streaming::run(
+                &api_key,
+                config.smart_format,
+                &config.model,
+                &config.key_terms,
+                config.audio_input.as_deref(),
+                stream_app.streaming_flag(),
+                on_transcript,
+            );
+
+            stream_app.set_streaming(false);
+            stream_app.set_meter_level(0);
         });
     });
 
-    let hotkey_mgr = hotkey::HotkeyManager::new(
-        recording_for_hook,
+    let on_resend_app = Arc::clone(&app);
+    let on_resend_selected: Arc<dyn Fn() + Send + Sync> =
+        Arc::new(move || on_resend_app.resend_selected());
+
+    let mut hotkeys = hotkey::HotkeyManager::new(
+        tray_hwnd,
+        cfg.hotkeys.clone(),
+        Arc::clone(&recording),
+        Arc::clone(&keep_talking),
         on_start,
         on_stop,
-        streaming_active,
+        Arc::clone(&streaming_active),
         on_stream_start,
+        on_resend_selected,
     );
-    let _tray_hwnd = tray::create_tray_window();
+    if let Err(error) = hotkeys.register() {
+        app.set_error(error);
+    }
+    app.set_hotkeys(hotkeys);
 
-    // Register hotkeys after the tray window exists so the message loop is ready.
-    hotkey_mgr.register();
+    spawn_config_watcher(Arc::clone(&app));
 
-    // Main thread runs the Win32 message loop — required for RegisterHotKey.
     unsafe {
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            if msg.message == WM_HOTKEY {
-                hotkey_mgr.handle(msg.wParam.0 as i32);
-            }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
     }
+}
+
+fn spawn_config_watcher(app: Arc<state::AppState>) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(1));
+        let Some(hwnd) = app.tray_hwnd() else {
+            continue;
+        };
+
+        let modified_at = std::fs::metadata(config::config_path())
+            .ok()
+            .and_then(|meta| meta.modified().ok());
+        if modified_at.is_some() && modified_at != app.config_modified_at() {
+            unsafe {
+                let _ = PostMessageW(Some(hwnd), tray::WM_APP_RELOAD_CONFIG, WPARAM(0), LPARAM(0));
+            }
+        }
+    });
 }
