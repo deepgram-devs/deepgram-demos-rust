@@ -1,155 +1,152 @@
 # Velocity
 
-Velocity is a Windows 11 dictation application powered by Deepgram speech-to-text APIs. It runs primarily as a tray app written in Rust, with a WinUI 3 settings sidecar for a more modern configuration experience.
+Velocity is a Windows 11 dictation application powered by Deepgram speech-to-text APIs. The shipped app is a Rust tray process with a WinUI 3 settings sidecar when `Velocity.Settings.exe` is available, plus built-in Win32 fallback dialogs for onboarding and settings.
 
-## Core Direction
+## Current Application State
 
-- Keep the background engine in Rust.
-- Use the `windows` crate for native Windows integration.
-- Prefer current stable Rust dependency versions.
-- Maintain a lightweight tray-first workflow, but support a comprehensive settings experience for configuration and onboarding.
-- Keep README and test coverage aligned with shipped functionality.
+- Current app version: `0.3.5`.
+- Primary runtime: Rust background/tray app in `src/`.
+- Primary settings UX: WinUI 3 sidecar in `Velocity.Settings/`.
+- Fallback settings UX: native Win32 dialogs implemented in Rust.
+- Configuration and transcript history live under `%USERPROFILE%\.config\deepgram`.
+- The app reloads config changes while running and keeps an in-memory last-known-good config if a reload fails.
 
 ## Speech And Transcription
 
-- Support both Deepgram pre-recorded HTTP transcription and streaming WebSocket transcription.
-- Capture mono `linear16` PCM audio at `48000` Hz.
-- Do not use interim streaming transcript results for output.
-- Respect the configured Deepgram model, defaulting to `nova-3`.
-- Support Deepgram Smart Formatting.
-- Support custom recognition terms for both pre-recorded and streaming requests.
-- Persist recognition terms in config as a YAML array under `keyterms`.
-- In settings UIs, display and edit recognition terms as a comma-separated text value.
-- When sending Deepgram requests:
-  - Use `keyterm` for `nova-3`.
-  - Use `keyword` for `nova-2`.
-  - Send one query parameter per term, repeating the parameter for multiple terms.
-- When `--verbose` is specified, log Deepgram request query string parameters and API/parse errors.
-
-## User Interface
-
-- The application runs from the Windows system tray.
-- The tray menu must expose meaningful state and actions, not just quit behavior.
-- Provide a settings experience reachable from the tray.
-- Prefer launching the WinUI 3 settings sidecar when available.
-- Keep the built-in Rust settings window as a fallback path if the sidecar is unavailable.
-- The settings experience must let the user configure major application behavior without manual YAML editing.
-- Surface validation failures clearly and do not silently discard invalid values.
-- Continue using audible start/stop cues for capture feedback.
-
-## Settings Requirements
-
-- The settings experience must include:
-  - Deepgram API key
-  - transcription model
-  - smart formatting
-  - recognition key terms
-  - hotkeys
-  - selected microphone
-  - transcript delivery mode
-  - append-newline behavior
-  - history retention
-- Recognition key terms must be shown as a comma-separated textbox value in the UI.
-- Saving from the UI must parse the textbox as a comma-separated list and persist a YAML array to config.
-- The settings UI should reflect live microphone activity for the selected input when practical.
-
-## Hotkeys
-
-- Use `RegisterHotKey` for global hotkeys.
-- Hotkeys must be configurable by the user.
-- Preserve these defaults:
-  - Push to Talk: `Win+Ctrl+'`
-  - Keep Talking: `Win+Ctrl+Shift+'`
-  - Streaming: `Win+Ctrl+[`
-  - Resend Selected Transcript: `Win+Ctrl+]`
-- Validate hotkey text before saving.
-- If a new hotkey binding cannot be registered, keep the previous known-good bindings active and report the error.
+- Velocity supports both Deepgram pre-recorded HTTP transcription and streaming WebSocket transcription.
+- Audio capture is mono `linear16` PCM at `48000` Hz.
+- Streaming output uses final transcript results only; interim results are ignored.
+- Supported Deepgram models are currently limited to `nova-2` and `nova-3`.
+- The default model is `nova-3`.
+- The config may include an optional `language` value.
+- When no language is selected, Velocity omits the `language` query parameter entirely.
+- Language choices are restricted by the selected model:
+  - `nova-2` exposes its supported language list.
+  - `nova-3` exposes its supported language list, which is broader than `nova-2`.
+- Smart Formatting is supported for both pre-recorded and streaming requests.
+- Custom recognition terms are supported for both request types.
+- Recognition terms are stored canonically in YAML as `keyterms`.
+- Velocity still accepts legacy `key_terms` on read for compatibility.
+- Recognition terms are sent as repeated query parameters:
+  - `keyterm` for `nova-3`
+  - `keyword` for `nova-2`
+- With `--verbose`, the app logs request query-string details plus API and parsing failures.
 
 ## Recording Modes
 
 - Push to Talk:
-  - Record only while the shortcut is held.
-  - On release, send the buffered audio to the pre-recorded Deepgram API.
+  - Default hotkey: `Win+Ctrl+'`
+  - Records while held, then submits buffered audio on release.
 - Keep Talking:
-  - Toggle recording on/off with its hotkey.
+  - Default hotkey: `Win+Ctrl+Shift+'`
+  - Toggles recording on and off.
 - Streaming:
-  - Toggle streaming mode with its hotkey.
-  - Use the Deepgram WebSocket API.
-  - Send `KeepAlive` messages every 5 seconds.
-  - Close the stream with the documented `CloseStream` message when stopping.
-  - Stop immediately if the user changes focus to another window.
-- While streaming is active, push-to-talk and keep-talking must not run.
+  - Default hotkey: `Win+Ctrl+[`
+  - Uses the Deepgram WebSocket API.
+  - Sends `KeepAlive` messages every 5 seconds.
+  - Sends Deepgram's `CloseStream` message when stopping.
+  - Stops if focus changes to another window.
+- Re-send selected transcript:
+  - Default hotkey: `Win+Ctrl+]`
+  - Re-sends the currently selected recent transcript using the active output mode.
+- Streaming remains mutually exclusive with push-to-talk and keep-talking.
+- Audible start and stop tones are still used for capture feedback.
+
+## Settings Surface
+
+Both settings UIs currently expose:
+
+- Deepgram API key
+- model selection
+- language selection with a `Do not specify` option
+- smart formatting
+- recognition key terms
+- hotkeys
+- audio input selection
+- transcript delivery mode
+- append-newline behavior
+- history retention
+
+Current UX details:
+
+- The WinUI sidecar is the preferred settings and onboarding path when present.
+- The Win32 Rust settings window is the fallback path when the sidecar is missing.
+- The WinUI sidecar supports `--page settings` and `--page api-key`.
+- Both settings UIs present recognition terms as a comma-separated text value and persist them as a YAML array.
+- Both settings UIs restrict language choices to the currently selected model.
+- Both settings UIs show live microphone activity for the selected device.
+- The WinUI sidecar warns when the config file changed on disk before the user saves.
+- The Rust fallback UI validates hotkey text before saving and restores prior hotkeys if registration fails.
+- The WinUI sidecar currently normalizes and saves config data, but hotkey registration validation still happens in the Rust tray process during reload.
 
 ## Audio Input
 
-- Let the user choose the sound input device used for transcription.
-- Persist the selected input device in configuration.
-- Expose available input devices in settings through a combo box.
-- If the selected device is unavailable, fail safely and surface the issue.
-- Show microphone activity so the user can verify the selected mic is receiving audio.
+- Users can select a preferred microphone input device.
+- The selected device name is persisted in config as `audio_input`.
+- If the requested device cannot be opened for transcription, the Rust app surfaces an error.
+- During active capture, the Rust app logs when it falls back from an unavailable requested device to the actual default device.
+- The Rust fallback settings UI and the WinUI sidecar both provide live microphone metering for the selected input.
 
-## Transcript Output
+## Transcript Output And History
 
-- Support these delivery modes:
-  - direct keyboard input
-  - copy to clipboard
-  - paste from clipboard into the active application
-- Support appending a newline after the transcript.
-- Persist output behavior in configuration.
-- Re-sent transcripts must respect the currently selected output mode.
+- Supported output modes:
+  - `direct-input`
+  - `clipboard`
+  - `paste`
+- Output mode is persisted as `output_mode`.
+- Optional newline appending is persisted as `append_newline`.
+- Delivered transcripts and re-sent history items both respect the active output mode.
+- Transcript history is stored in `%USERPROFILE%\.config\deepgram\velocity-history.yml`.
+- Default retention is `20`.
+- History entries are de-duplicated by transcript text, newest-first.
+- The most recent pushed transcript becomes the selected history item.
+- The tray menu shows recent transcript items and marks the selected one.
 
-## Transcript History
+## Configuration Files
 
-- Save transcript history locally.
-- Default retention to `20` items.
-- Let the user configure the retention count.
-- Show recent transcripts in the tray menu.
-- Let the user select a recent transcript from the tray and resend it.
-- Provide a hotkey that resends the currently selected recent transcript.
+- Main config file: `%USERPROFILE%\.config\deepgram\velocity.yml`
+- Backup config file: `%USERPROFILE%\.config\deepgram\velocity.backup.yml`
+- Transcript history file: `%USERPROFILE%\.config\deepgram\velocity-history.yml`
 
-## Configuration
+Current config behavior:
 
-- Store config under `%USERPROFILE%\.config\deepgram`.
-- Use `velocity.yml` as the main config file.
-- Use `velocity.backup.yml` as the backup copy.
-- Use `velocity-history.yml` for transcript history.
-- If the config file is missing or the API key is unavailable, prompt for API key entry through the settings/onboarding flow.
-- Persist the Deepgram API key after entry.
-- Reload config changes while the app is running.
-- If a config change is valid, apply it without restart whenever practical.
-- If a config change is invalid, reject it, keep the last known good configuration active, and surface the error.
-- Always maintain a backup config copy when the app runs.
-- The canonical YAML field for recognition terms is `keyterms`.
-- The app may continue reading legacy `key_terms` for compatibility, but should write `keyterms`.
+- Missing config loads as defaults.
+- Missing or empty API key triggers onboarding.
+- The Rust process writes a backup config on startup.
+- The WinUI sidecar writes both the main config and backup config on save.
+- Config normalization trims key terms and audio device values.
+- Config normalization rejects unsupported models, unsupported model/language combinations, zero history retention, and malformed hotkey text during Rust-side load/save.
+- A background watcher checks for config timestamp changes and posts a reload message to the tray process.
+- If a reload is invalid, the tray process keeps the previous active config and surfaces an error in tray/settings state.
 
 ## System Tray
 
-- Show meaningful current state in the tray menu.
-- Reflect whether recording is active.
-- Reflect whether keep-talking is active.
-- Reflect whether streaming is active.
-- Include tray actions for:
+- Velocity runs as a tray-first application.
+- Tray tooltip and status text reflect:
+  - idle
+  - recording active
+  - streaming active
+  - last error
+- Tray menu actions currently include:
   - opening settings
   - toggling keep-talking
   - toggling streaming
-  - resending recent transcripts
+  - selecting and re-sending recent transcripts
   - quitting the app
-- Keep tray state synchronized with actual runtime state.
+- Double-clicking the tray icon opens settings.
 
 ## WinUI Sidecar
 
-- Keep the WinUI 3 settings app in `Velocity.Settings/`.
-- Use it for API key onboarding and settings when available.
-- Make sure it reads and writes the same `velocity.yml` file as the Rust process.
-- Keep its behavior aligned with the Rust fallback settings UI.
+- The sidecar project lives in `Velocity.Settings/`.
+- It targets `net10.0-windows10.0.19041.0` and builds as `x64`.
+- Rust locates the sidecar in this order:
+  - `VELOCITY_SETTINGS_EXE` if set
+  - `Velocity.Settings.exe` next to `velocity.exe`
+  - common development build output paths under `Velocity.Settings\bin`
+- The WinUI project copies its build output into the Rust workspace `target\<configuration>\` directory after build so the tray app can launch it directly from local builds.
+- API key onboarding waits for the sidecar to write a non-empty API key to config, then returns that value to the Rust process.
 
-## Miscellaneous Requirements
+## Testing And Documentation Status
 
-- Use native Windows APIs for text input, clipboard behavior, tray integration, and audio device access.
-- Support a `CTRL+C` handler to exit cleanly when running in a terminal.
-
-## Documentation And Testing
-
-- Keep `README.md` user-focused and current with shipped behavior.
-- Maintain automated tests for config parsing/serialization, key term behavior, output formatting, history logic, and hotkey parsing.
-- Add or update manual test steps when behavior depends on Windows UI, tray integration, microphone devices, or OS-specific interactions.
+- The Rust codebase currently includes automated tests for config normalization, key term serialization and legacy compatibility, language validation, history behavior, output formatting, hotkey parsing, and Deepgram URL construction.
+- `README.md`, `CHANGELOG.md`, and `CLAUDE.md` should stay aligned with the shipped `0.3.5` behavior, especially around model/language support, sidecar behavior, and current settings capabilities.
