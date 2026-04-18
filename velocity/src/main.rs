@@ -8,6 +8,7 @@ mod audio;
 mod beep;
 mod clipboard;
 mod config;
+mod deepgram;
 mod history;
 mod hotkey;
 mod logger;
@@ -160,6 +161,7 @@ fn main() {
                 &api_key,
                 config.smart_format,
                 &config.model,
+                config.language.as_deref(),
                 &config.key_terms,
             ) {
                 logger::verbose(&format!("Transcript: {text}"));
@@ -214,6 +216,7 @@ fn main() {
                 &api_key,
                 config.smart_format,
                 &config.model,
+                config.language.as_deref(),
                 &config.key_terms,
                 config.audio_input.as_deref(),
                 stream_app.streaming_flag(),

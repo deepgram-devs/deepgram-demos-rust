@@ -10,6 +10,8 @@ public sealed class VelocityConfig
 
     public string Model { get; set; } = "nova-3";
 
+    public string? Language { get; set; }
+
     [YamlMember(Alias = "keyterms", ApplyNamingConventions = false)]
     public List<string> KeyTerms { get; set; } = [];
 

@@ -70,7 +70,8 @@ public sealed class ConfigFileService
 
     private static VelocityConfig Normalize(VelocityConfig config)
     {
-        config.Model = string.IsNullOrWhiteSpace(config.Model) ? "nova-3" : config.Model.Trim();
+        config.Model = DeepgramModelCatalog.NormalizeModel(config.Model);
+        config.Language = DeepgramModelCatalog.NormalizeLanguage(config.Model, config.Language);
         config.ApiKey = string.IsNullOrWhiteSpace(config.ApiKey) ? null : config.ApiKey.Trim();
         config.AudioInput = string.IsNullOrWhiteSpace(config.AudioInput) ? null : config.AudioInput.Trim();
         config.HistoryLimit = config.HistoryLimit <= 0 ? 20 : config.HistoryLimit;

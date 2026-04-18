@@ -24,6 +24,9 @@ public partial class MainViewModel : ObservableObject
     private string _model = "nova-3";
 
     [ObservableProperty]
+    private string _selectedLanguage = DeepgramModelCatalog.DoNotSpecifyLanguageLabel;
+
+    [ObservableProperty]
     private bool _smartFormat;
 
     [ObservableProperty]
@@ -79,6 +82,16 @@ public partial class MainViewModel : ObservableObject
         "Type directly",
         "Copy to clipboard",
         "Paste clipboard"
+    ];
+
+    public ObservableCollection<string> ModelOptions { get; } =
+    [
+        .. DeepgramModelCatalog.SupportedModels
+    ];
+
+    public ObservableCollection<string> LanguageOptions { get; } =
+    [
+        DeepgramModelCatalog.DoNotSpecifyLanguageLabel
     ];
 
     public IAsyncRelayCommand ReloadCommand { get; }
@@ -148,7 +161,8 @@ public partial class MainViewModel : ObservableObject
     private void Apply(VelocityConfig config)
     {
         ApiKey = config.ApiKey ?? string.Empty;
-        Model = config.Model;
+        Model = DeepgramModelCatalog.NormalizeModel(config.Model);
+        RefreshLanguageOptions(config.Language);
         SmartFormat = config.SmartFormat;
         KeyTermsText = string.Join(Environment.NewLine, config.KeyTerms);
         PushToTalkHotkey = config.Hotkeys.PushToTalk;
@@ -183,7 +197,8 @@ public partial class MainViewModel : ObservableObject
         return new VelocityConfig
         {
             ApiKey = string.IsNullOrWhiteSpace(ApiKey) ? null : ApiKey.Trim(),
-            Model = Model.Trim(),
+            Model = DeepgramModelCatalog.NormalizeModel(Model),
+            Language = DeepgramModelCatalog.LanguageCodeFromDisplay(Model, SelectedLanguage),
             SmartFormat = SmartFormat,
             KeyTerms = KeyTermsText
                 .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -208,5 +223,29 @@ public partial class MainViewModel : ObservableObject
         {
             AudioInputOptions.Add(selectedValue);
         }
+    }
+
+    partial void OnModelChanged(string value)
+    {
+        RefreshLanguageOptions(DeepgramModelCatalog.LanguageCodeFromDisplay(value, SelectedLanguage));
+    }
+
+    private void RefreshLanguageOptions(string? selectedLanguageCode)
+    {
+        var model = DeepgramModelCatalog.NormalizeModel(Model);
+        var normalizedLanguage = DeepgramModelCatalog.NormalizeLanguage(model, selectedLanguageCode);
+
+        LanguageOptions.Clear();
+        LanguageOptions.Add(DeepgramModelCatalog.DoNotSpecifyLanguageLabel);
+        foreach (var option in DeepgramModelCatalog.LanguagesForModel(model))
+        {
+            LanguageOptions.Add(option.DisplayText);
+        }
+
+        SelectedLanguage = normalizedLanguage is null
+            ? DeepgramModelCatalog.DoNotSpecifyLanguageLabel
+            : DeepgramModelCatalog.LanguagesForModel(model)
+                .First(option => string.Equals(option.Code, normalizedLanguage, StringComparison.OrdinalIgnoreCase))
+                .DisplayText;
     }
 }

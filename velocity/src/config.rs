@@ -4,7 +4,6 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_MODEL: &str = "nova-3";
 pub const DEFAULT_HISTORY_LIMIT: usize = 20;
 pub const CONFIG_SUBDIRECTORY: &str = "deepgram";
 pub const CONFIG_FILE_NAME: &str = "velocity.yml";
@@ -60,6 +59,8 @@ pub struct Config {
     pub smart_format: bool,
     #[serde(default = "default_model")]
     pub model: String,
+    #[serde(default)]
+    pub language: Option<String>,
     #[serde(default, rename = "keyterms", alias = "key_terms")]
     pub key_terms: Vec<String>,
     #[serde(default)]
@@ -79,6 +80,7 @@ impl Default for Config {
             api_key: None,
             smart_format: false,
             model: default_model(),
+            language: None,
             key_terms: Vec::new(),
             hotkeys: HotkeyConfig::default(),
             audio_input: None,
@@ -96,7 +98,7 @@ pub struct ConfigFileState {
 }
 
 fn default_model() -> String {
-    DEFAULT_MODEL.to_string()
+    crate::deepgram::DEFAULT_MODEL.to_string()
 }
 
 fn default_history_limit() -> usize {
@@ -174,10 +176,10 @@ pub fn ensure_backup(config: &Config) -> Result<(), String> {
 
 impl Config {
     pub fn normalize(&mut self) -> Result<(), String> {
-        self.model = self.model.trim().to_string();
-        if self.model.is_empty() {
-            return Err("Model must not be empty".to_string());
-        }
+        self.model = crate::deepgram::normalize_model(&self.model)
+            .ok_or_else(|| format!("Unsupported model: {}", self.model.trim()))?
+            .to_string();
+        self.language = crate::deepgram::normalize_language(&self.model, self.language.as_deref())?;
 
         self.key_terms = self
             .key_terms
@@ -229,7 +231,8 @@ mod tests {
     #[test]
     fn default_config_contains_expected_values() {
         let config = Config::default();
-        assert_eq!(config.model, DEFAULT_MODEL);
+        assert_eq!(config.model, crate::deepgram::DEFAULT_MODEL);
+        assert_eq!(config.language, None);
         assert_eq!(config.history_limit, DEFAULT_HISTORY_LIMIT);
         assert_eq!(config.hotkeys.push_to_talk, "Win+Ctrl+'");
         assert_eq!(config.hotkeys.resend_selected, "Win+Ctrl+]");
@@ -257,6 +260,17 @@ mod tests {
 
         assert_eq!(config.key_terms, vec!["alpha", "beta"]);
         assert_eq!(config.audio_input.as_deref(), Some("Headset Mic"));
+    }
+
+    #[test]
+    fn normalize_rejects_language_not_supported_by_model() {
+        let mut config = Config {
+            model: "nova-2".to_string(),
+            language: Some("ar".to_string()),
+            ..Config::default()
+        };
+
+        assert!(config.normalize().is_err());
     }
 
     #[test]

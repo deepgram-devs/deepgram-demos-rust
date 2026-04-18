@@ -55,7 +55,13 @@
                                 ToolTipService.ToolTip="Only nova-2 and nova-3 are supported Deepgram transcription models right now."
                                 VerticalAlignment="Center" />
                         </StackPanel>
-                        <TextBox x:Name="ModelBox" PlaceholderText="nova-3" />
+                        <ComboBox
+                            x:Name="ModelComboBox"
+                            SelectionChanged="ModelComboBox_SelectionChanged" />
+                    </StackPanel>
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Language" />
+                        <ComboBox x:Name="LanguageComboBox" />
                     </StackPanel>
                     <StackPanel Spacing="6">
                         <TextBlock Text="Smart formatting" />

@@ -53,12 +53,13 @@ pub fn run(
     api_key: &str,
     smart_format: bool,
     model: &str,
+    language: Option<&str>,
     key_terms: &[String],
     selected_device_name: Option<&str>,
     active: Arc<AtomicBool>,
     on_transcript: Arc<dyn Fn(String) + Send + Sync>,
 ) {
-    let url = build_streaming_url(model, smart_format, key_terms);
+    let url = build_streaming_url(model, language, smart_format, key_terms);
     log_query_string("Deepgram streaming", &url);
 
     // Build the request via IntoClientRequest so tungstenite populates all
@@ -197,13 +198,21 @@ pub fn run(
     beep::play_end();
 }
 
-fn build_streaming_url(model: &str, smart_format: bool, key_terms: &[String]) -> String {
+fn build_streaming_url(
+    model: &str,
+    language: Option<&str>,
+    smart_format: bool,
+    key_terms: &[String],
+) -> String {
     let mut params = vec![
         format!("model={}", url_encode(model)),
         "encoding=linear16".to_string(),
         "sample_rate=48000".to_string(),
         "channels=1".to_string(),
     ];
+    if let Some(language) = language.map(str::trim).filter(|value| !value.is_empty()) {
+        params.push(format!("language={}", url_encode(language)));
+    }
     let key_term_param = deepgram_key_term_param(model);
     if smart_format {
         params.push("smart_format=true".to_string());
@@ -250,16 +259,23 @@ mod tests {
 
     #[test]
     fn streaming_url_includes_keywords() {
-        let url = build_streaming_url("nova-3", true, &["alpha".into(), "beta test".into()]);
+        let url = build_streaming_url(
+            "nova-3",
+            Some("fr"),
+            true,
+            &["alpha".into(), "beta test".into()],
+        );
         assert!(url.contains("keyterm=alpha"));
         assert!(url.contains("keyterm=beta%20test"));
+        assert!(url.contains("language=fr"));
         assert!(url.contains("smart_format=true"));
     }
 
     #[test]
     fn streaming_url_uses_keyword_for_nova_2() {
-        let url = build_streaming_url("nova-2", false, &["alpha".into()]);
+        let url = build_streaming_url("nova-2", None, false, &["alpha".into()]);
         assert!(url.contains("keyword=alpha"));
         assert!(!url.contains("keyterm=alpha"));
+        assert!(!url.contains("language="));
     }
 }

@@ -28,10 +28,11 @@ pub fn transcribe(
     api_key: &str,
     smart_format: bool,
     model: &str,
+    language: Option<&str>,
     key_terms: &[String],
 ) -> Option<String> {
     let client = reqwest::blocking::Client::new();
-    let url = build_listen_url(model, smart_format, key_terms);
+    let url = build_listen_url(model, language, smart_format, key_terms);
     log_query_string("Deepgram listen", &url);
 
     let resp = client
@@ -72,8 +73,16 @@ pub fn transcribe(
     }
 }
 
-fn build_listen_url(model: &str, smart_format: bool, key_terms: &[String]) -> String {
+fn build_listen_url(
+    model: &str,
+    language: Option<&str>,
+    smart_format: bool,
+    key_terms: &[String],
+) -> String {
     let mut params = vec![format!("model={}", url_encode(model))];
+    if let Some(language) = language.map(str::trim).filter(|value| !value.is_empty()) {
+        params.push(format!("language={}", url_encode(language)));
+    }
     let key_term_param = deepgram_key_term_param(model);
     if smart_format {
         params.push("smart_format=true".to_string());
@@ -122,11 +131,13 @@ mod tests {
     fn build_listen_url_includes_key_terms() {
         let url = build_listen_url(
             "nova-3",
+            Some("multi"),
             true,
             &["Deepgram".into(), "Rust SDK".into()],
         );
 
         assert!(url.contains("model=nova-3"));
+        assert!(url.contains("language=multi"));
         assert!(url.contains("smart_format=true"));
         assert!(url.contains("keyterm=Deepgram"));
         assert!(url.contains("keyterm=Rust%20SDK"));
@@ -134,10 +145,11 @@ mod tests {
 
     #[test]
     fn build_listen_url_uses_keyword_for_nova_2() {
-        let url = build_listen_url("nova-2", false, &["Deepgram".into()]);
+        let url = build_listen_url("nova-2", None, false, &["Deepgram".into()]);
 
         assert!(url.contains("model=nova-2"));
         assert!(url.contains("keyword=Deepgram"));
         assert!(!url.contains("keyterm=Deepgram"));
+        assert!(!url.contains("language="));
     }
 }

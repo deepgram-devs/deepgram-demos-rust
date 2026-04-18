@@ -8,6 +8,7 @@ use windows::{
 
 use crate::audio::{self, AudioMeter};
 use crate::config::{self, Config, OutputMode};
+use crate::deepgram;
 use crate::hotkey;
 use crate::state;
 
@@ -17,20 +18,21 @@ const BST_UNCHECKED: usize = 0;
 
 const IDC_API_KEY: i32 = 100;
 const IDC_MODEL: i32 = 101;
-const IDC_SMART_FORMAT: i32 = 102;
-const IDC_KEY_TERMS: i32 = 103;
-const IDC_PUSH_TO_TALK: i32 = 104;
-const IDC_KEEP_TALKING: i32 = 105;
-const IDC_STREAMING: i32 = 106;
-const IDC_RESEND: i32 = 107;
-const IDC_AUDIO_INPUT: i32 = 108;
-const IDC_MIC_ACTIVITY: i32 = 109;
-const IDC_HISTORY_LIMIT: i32 = 110;
-const IDC_OUTPUT_MODE: i32 = 111;
-const IDC_APPEND_NEWLINE: i32 = 112;
-const IDC_STATUS: i32 = 113;
-const IDC_SAVE: i32 = 114;
-const IDC_CANCEL: i32 = 115;
+const IDC_LANGUAGE: i32 = 102;
+const IDC_SMART_FORMAT: i32 = 103;
+const IDC_KEY_TERMS: i32 = 104;
+const IDC_PUSH_TO_TALK: i32 = 105;
+const IDC_KEEP_TALKING: i32 = 106;
+const IDC_STREAMING: i32 = 107;
+const IDC_RESEND: i32 = 108;
+const IDC_AUDIO_INPUT: i32 = 109;
+const IDC_MIC_ACTIVITY: i32 = 110;
+const IDC_HISTORY_LIMIT: i32 = 111;
+const IDC_OUTPUT_MODE: i32 = 112;
+const IDC_APPEND_NEWLINE: i32 = 113;
+const IDC_STATUS: i32 = 114;
+const IDC_SAVE: i32 = 115;
+const IDC_CANCEL: i32 = 116;
 
 const SETTINGS_TIMER_ID: usize = 1;
 
@@ -114,6 +116,12 @@ unsafe extern "system" fn settings_wnd_proc(
                     }
                     LRESULT(0)
                 }
+                IDC_MODEL => {
+                    if ((wparam.0 >> 16) & 0xFFFF) as u16 == CBN_SELCHANGE as u16 {
+                        update_language_options_for_selected_model(hwnd);
+                    }
+                    LRESULT(0)
+                }
                 _ => DefWindowProcW(hwnd, msg, wparam, lparam),
             }
         }
@@ -156,8 +164,12 @@ unsafe fn initialize_window(hwnd: HWND) {
     y += 30;
 
     create_label(hwnd, hinstance, "Model", 12, y, 150, 18);
-    create_edit(hwnd, hinstance, IDC_MODEL, 170, y - 2, 180, 22, false);
+    create_combo_box(hwnd, hinstance, IDC_MODEL, 170, y - 4, 180, 120);
     create_checkbox(hwnd, hinstance, IDC_SMART_FORMAT, "Enable smart formatting", 370, y - 2, 220, 22);
+    y += 30;
+
+    create_label(hwnd, hinstance, "Language", 12, y, 150, 18);
+    create_combo_box(hwnd, hinstance, IDC_LANGUAGE, 170, y - 4, 420, 320);
     y += 30;
 
     create_label(hwnd, hinstance, "Key terms (comma-separated)", 12, y, 150, 18);
@@ -228,10 +240,20 @@ unsafe fn initialize_window(hwnd: HWND) {
     )
     .unwrap();
 
+    populate_model_options(hwnd);
     populate_output_modes(hwnd);
     populate_audio_devices(hwnd);
     populate_controls(hwnd, &state::global().config());
     SetTimer(Some(hwnd), SETTINGS_TIMER_ID, 150, None);
+}
+
+unsafe fn populate_model_options(hwnd: HWND) {
+    let combo = GetDlgItem(Some(hwnd), IDC_MODEL).unwrap();
+    send_message(combo, CB_RESETCONTENT, WPARAM(0), LPARAM(0));
+    for model in deepgram::supported_models() {
+        let wide = to_wide(model);
+        send_message(combo, CB_ADDSTRING, WPARAM(0), LPARAM(wide.as_ptr() as isize));
+    }
 }
 
 unsafe fn populate_output_modes(hwnd: HWND) {
@@ -254,7 +276,8 @@ unsafe fn populate_audio_devices(hwnd: HWND) {
 
 unsafe fn populate_controls(hwnd: HWND, config: &Config) {
     set_control_text(hwnd, IDC_API_KEY, config.api_key.as_deref().unwrap_or(""));
-    set_control_text(hwnd, IDC_MODEL, &config.model);
+    select_combo_value(hwnd, IDC_MODEL, &config.model);
+    populate_language_options(hwnd, &config.model, config.language.as_deref());
     set_control_text(hwnd, IDC_KEY_TERMS, &format_key_terms_display(&config.key_terms));
     set_control_text(hwnd, IDC_PUSH_TO_TALK, &config.hotkeys.push_to_talk);
     set_control_text(hwnd, IDC_KEEP_TALKING, &config.hotkeys.keep_talking);
@@ -283,6 +306,39 @@ unsafe fn populate_controls(hwnd: HWND, config: &Config) {
     update_status_text(hwnd);
 }
 
+unsafe fn populate_language_options(hwnd: HWND, model: &str, selected_language: Option<&str>) {
+    let combo = GetDlgItem(Some(hwnd), IDC_LANGUAGE).unwrap();
+    send_message(combo, CB_RESETCONTENT, WPARAM(0), LPARAM(0));
+
+    let default_label = to_wide(deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL);
+    send_message(combo, CB_ADDSTRING, WPARAM(0), LPARAM(default_label.as_ptr() as isize));
+
+    for option in deepgram::languages_for_model(model) {
+        let display = deepgram::language_display(option);
+        let wide = to_wide(&display);
+        send_message(combo, CB_ADDSTRING, WPARAM(0), LPARAM(wide.as_ptr() as isize));
+    }
+
+    if let Some(language) = selected_language.and_then(|value| deepgram::normalize_language(model, Some(value)).ok().flatten()) {
+        for option in deepgram::languages_for_model(model) {
+            if option.code.eq_ignore_ascii_case(&language) {
+                let display = deepgram::language_display(option);
+                select_combo_value(hwnd, IDC_LANGUAGE, &display);
+                return;
+            }
+        }
+    }
+
+    select_combo_value(hwnd, IDC_LANGUAGE, deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL);
+}
+
+unsafe fn update_language_options_for_selected_model(hwnd: HWND) {
+    let model = get_selected_combo_text(hwnd, IDC_MODEL);
+    let current_language = get_selected_combo_text(hwnd, IDC_LANGUAGE);
+    let selected_language = deepgram::language_code_from_display(&model, &current_language);
+    populate_language_options(hwnd, &model, selected_language.as_deref());
+}
+
 unsafe fn update_status_text(hwnd: HWND) {
     let app = state::global();
     let status = if let Some(error) = app.last_error() {
@@ -307,7 +363,11 @@ unsafe fn save_settings(hwnd: HWND) {
 
     let api_key = get_control_text(hwnd, IDC_API_KEY);
     updated.api_key = (!api_key.trim().is_empty()).then(|| api_key.trim().to_string());
-    updated.model = get_control_text(hwnd, IDC_MODEL);
+    updated.model = get_selected_combo_text(hwnd, IDC_MODEL);
+    updated.language = deepgram::language_code_from_display(
+        &updated.model,
+        &get_selected_combo_text(hwnd, IDC_LANGUAGE),
+    );
     updated.smart_format = is_checked(hwnd, IDC_SMART_FORMAT);
     updated.key_terms = parse_key_terms_text(&get_control_text(hwnd, IDC_KEY_TERMS));
     updated.hotkeys.push_to_talk = get_control_text(hwnd, IDC_PUSH_TO_TALK);

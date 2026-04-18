@@ -56,6 +56,7 @@ The repo now includes a WinUI 3 sidecar scaffold in `Velocity.Settings/README.md
 - If `Velocity.Settings.exe` is present next to `velocity.exe`, the Rust app will launch it for tray settings and API key onboarding.
 - If the sidecar is not present, Velocity falls back to the built-in Win32 dialogs.
 - Building the WinUI app requires a current .NET SDK and Windows App SDK tooling.
+- Building the WinUI app from `Velocity.Settings/` also copies its output next to the workspace `velocity.exe` in `target\debug` or `target\release`.
 
 ### Transcript History
 

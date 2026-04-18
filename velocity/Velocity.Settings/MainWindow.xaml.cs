@@ -17,6 +17,7 @@ namespace Velocity.Settings;
 public sealed partial class MainWindow : Window
 {
     private const string DefaultAudioInputLabel = "Default system input";
+    private const string DoNotSpecifyLanguageLabel = DeepgramModelCatalog.DoNotSpecifyLanguageLabel;
     private const double MinMeterDecibels = -60.0;
 
     private readonly ConfigFileService _configFileService = new();
@@ -26,6 +27,7 @@ public sealed partial class MainWindow : Window
     private DateTimeOffset? _lastLoadedConfigWriteTimeUtc;
     private bool _configChangedExternally;
     private bool _suppressAudioSelectionChanged;
+    private bool _suppressModelSelectionChanged;
     private double _currentMeterDecibels = MinMeterDecibels;
 
     public MainWindow(string launchPage)
@@ -39,6 +41,10 @@ public sealed partial class MainWindow : Window
             : "Application settings";
         LaunchModeTextBlock.Text = $"Launch mode: {_launchPage}";
 
+        foreach (var model in DeepgramModelCatalog.SupportedModels)
+        {
+            ModelComboBox.Items.Add(model);
+        }
         OutputModeComboBox.Items.Add("Type directly");
         OutputModeComboBox.Items.Add("Copy to clipboard");
         OutputModeComboBox.Items.Add("Paste clipboard");
@@ -136,7 +142,10 @@ public sealed partial class MainWindow : Window
     private async Task ApplyConfigAsync(VelocityConfig config)
     {
         ApiKeyBox.Password = config.ApiKey ?? string.Empty;
-        ModelBox.Text = config.Model;
+        _suppressModelSelectionChanged = true;
+        ModelComboBox.SelectedItem = DeepgramModelCatalog.NormalizeModel(config.Model);
+        PopulateLanguageOptions(config.Language);
+        _suppressModelSelectionChanged = false;
         SmartFormatToggle.IsOn = config.SmartFormat;
         KeyTermsBox.Text = FormatKeyTerms(config.KeyTerms);
         PushToTalkBox.Text = config.Hotkeys.PushToTalk;
@@ -173,7 +182,8 @@ public sealed partial class MainWindow : Window
         return new VelocityConfig
         {
             ApiKey = string.IsNullOrWhiteSpace(ApiKeyBox.Password) ? null : ApiKeyBox.Password.Trim(),
-            Model = string.IsNullOrWhiteSpace(ModelBox.Text) ? "nova-3" : ModelBox.Text.Trim(),
+            Model = DeepgramModelCatalog.NormalizeModel(ModelComboBox.SelectedItem as string),
+            Language = DeepgramModelCatalog.LanguageCodeFromDisplay(ModelComboBox.SelectedItem as string, LanguageComboBox.SelectedItem as string),
             SmartFormat = SmartFormatToggle.IsOn,
             KeyTerms = ParseKeyTerms(KeyTermsBox.Text),
             Hotkeys = new HotkeyConfig
@@ -264,6 +274,19 @@ public sealed partial class MainWindow : Window
         await RestartAudioMeterAsync(GetSelectedAudioInputName());
     }
 
+    private void ModelComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressModelSelectionChanged)
+        {
+            return;
+        }
+
+        var selectedLanguage = DeepgramModelCatalog.LanguageCodeFromDisplay(
+            ModelComboBox.SelectedItem as string,
+            LanguageComboBox.SelectedItem as string);
+        PopulateLanguageOptions(selectedLanguage);
+    }
+
     private async Task RestartAudioMeterAsync(string? selectedAudioInput)
     {
         try
@@ -350,4 +373,23 @@ public sealed partial class MainWindow : Window
         rawValue
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToList();
+
+    private void PopulateLanguageOptions(string? selectedLanguageCode)
+    {
+        var model = DeepgramModelCatalog.NormalizeModel(ModelComboBox.SelectedItem as string);
+        var normalizedLanguage = DeepgramModelCatalog.NormalizeLanguage(model, selectedLanguageCode);
+
+        LanguageComboBox.Items.Clear();
+        LanguageComboBox.Items.Add(DoNotSpecifyLanguageLabel);
+        foreach (var option in DeepgramModelCatalog.LanguagesForModel(model))
+        {
+            LanguageComboBox.Items.Add(option.DisplayText);
+        }
+
+        LanguageComboBox.SelectedItem = normalizedLanguage is null
+            ? DoNotSpecifyLanguageLabel
+            : DeepgramModelCatalog.LanguagesForModel(model)
+                .First(option => string.Equals(option.Code, normalizedLanguage, StringComparison.OrdinalIgnoreCase))
+                .DisplayText;
+    }
 }
