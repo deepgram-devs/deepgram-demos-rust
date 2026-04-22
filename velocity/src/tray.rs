@@ -1,11 +1,7 @@
 use png::{ColorType, Decoder};
 use windows::{
-    core::*,
-    Win32::Foundation::*,
-    Win32::Graphics::Gdi::*,
-    Win32::System::LibraryLoader::GetModuleHandleW,
-    Win32::UI::Shell::*,
-    Win32::UI::WindowsAndMessaging::*,
+    Win32::Foundation::*, Win32::Graphics::Gdi::*, Win32::System::LibraryLoader::GetModuleHandleW,
+    Win32::UI::Shell::*, Win32::UI::WindowsAndMessaging::*, core::*,
 };
 
 static ICON_PNG: &[u8] = include_bytes!("../assets/deepgram-icon.png");
@@ -13,6 +9,7 @@ static ICON_PNG: &[u8] = include_bytes!("../assets/deepgram-icon.png");
 pub const WM_TRAY: u32 = WM_APP + 1;
 pub const WM_APP_REFRESH_TRAY: u32 = WM_APP + 2;
 pub const WM_APP_RELOAD_CONFIG: u32 = WM_APP + 3;
+pub const WM_APP_SAVE_CONFIG: u32 = WM_APP + 4;
 const IDM_SETTINGS: usize = 1001;
 const IDM_KEEP_TALKING: usize = 1002;
 const IDM_STREAMING: usize = 1003;
@@ -40,7 +37,10 @@ pub fn create_tray_window() -> HWND {
             class_name,
             w!("Velocity"),
             WS_OVERLAPPED,
-            0, 0, 0, 0,
+            0,
+            0,
+            0,
+            0,
             Some(HWND_MESSAGE),
             None,
             Some(hinstance),
@@ -103,8 +103,8 @@ unsafe fn load_icon() -> HICON {
 
     let hdc = CreateCompatibleDC(None);
     let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-    let hbm_color = CreateDIBSection(Some(hdc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
-        .unwrap_or_default();
+    let hbm_color =
+        CreateDIBSection(Some(hdc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0).unwrap_or_default();
     if !hbm_color.is_invalid() && !bits.is_null() {
         std::ptr::copy_nonoverlapping(bgra.as_ptr(), bits as *mut u8, bgra.len());
     }
@@ -207,6 +207,11 @@ unsafe extern "system" fn tray_wnd_proc(
             refresh_tray(hwnd);
             LRESULT(0)
         }
+        WM_APP_SAVE_CONFIG => {
+            crate::state::global().process_pending_config_save();
+            refresh_tray(hwnd);
+            LRESULT(0)
+        }
         WM_COMMAND => {
             match wparam.0 {
                 x if x == IDM_SETTINGS => crate::settings::show_settings_window(),
@@ -254,7 +259,12 @@ unsafe fn show_context_menu(hwnd: HWND) {
         "Velocity - Idle".to_string()
     };
     let status_wide = to_wide(&status_line);
-    let _ = AppendMenuW(hmenu, MF_STRING | MF_DISABLED, 0, PCWSTR(status_wide.as_ptr()));
+    let _ = AppendMenuW(
+        hmenu,
+        MF_STRING | MF_DISABLED,
+        0,
+        PCWSTR(status_wide.as_ptr()),
+    );
     let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
 
     let keep_label = if app.is_keep_talking() {
@@ -268,8 +278,18 @@ unsafe fn show_context_menu(hwnd: HWND) {
         "Start streaming"
     };
 
-    let _ = AppendMenuW(hmenu, MF_STRING, IDM_KEEP_TALKING, PCWSTR(to_wide(keep_label).as_ptr()));
-    let _ = AppendMenuW(hmenu, MF_STRING, IDM_STREAMING, PCWSTR(to_wide(stream_label).as_ptr()));
+    let _ = AppendMenuW(
+        hmenu,
+        MF_STRING,
+        IDM_KEEP_TALKING,
+        PCWSTR(to_wide(keep_label).as_ptr()),
+    );
+    let _ = AppendMenuW(
+        hmenu,
+        MF_STRING,
+        IDM_STREAMING,
+        PCWSTR(to_wide(stream_label).as_ptr()),
+    );
     let _ = AppendMenuW(hmenu, MF_STRING, IDM_SETTINGS, w!("Settings"));
 
     let recent_menu = CreatePopupMenu().unwrap();
@@ -290,9 +310,19 @@ unsafe fn show_context_menu(hwnd: HWND) {
         );
     }
     if recent_entries.is_empty() {
-        let _ = AppendMenuW(recent_menu, MF_STRING | MF_DISABLED, 0, w!("No recent transcripts"));
+        let _ = AppendMenuW(
+            recent_menu,
+            MF_STRING | MF_DISABLED,
+            0,
+            w!("No recent transcripts"),
+        );
     }
-    let _ = AppendMenuW(hmenu, MF_POPUP, recent_menu.0 as usize, w!("Recent transcripts"));
+    let _ = AppendMenuW(
+        hmenu,
+        MF_POPUP,
+        recent_menu.0 as usize,
+        w!("Recent transcripts"),
+    );
 
     let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(hmenu, MF_STRING, IDM_QUIT, w!("Quit Velocity"));
@@ -353,9 +383,12 @@ fn apply_reloaded_config() {
                 return;
             }
             let previous = app.config();
-            if let Some(result) = app.with_hotkeys(|hotkeys| hotkeys.apply_config(loaded.config.hotkeys.clone())) {
+            if let Some(result) =
+                app.with_hotkeys(|hotkeys| hotkeys.apply_config(loaded.config.hotkeys.clone()))
+            {
                 if let Err(error) = result {
-                    let _ = app.with_hotkeys(|hotkeys| hotkeys.apply_config(previous.hotkeys.clone()));
+                    let _ =
+                        app.with_hotkeys(|hotkeys| hotkeys.apply_config(previous.hotkeys.clone()));
                     app.set_error(format!("Config reload rejected: {error}"));
                     return;
                 }

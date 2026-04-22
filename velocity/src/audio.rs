@@ -1,10 +1,12 @@
 use std::mem::size_of;
 
-use windows::core::PSTR;
 use windows::Win32::Media::Audio::*;
+use windows::core::PSTR;
 
-// 100 ms of audio at 48000 Hz, 16-bit mono
-const BUF_BYTES: usize = 9_600;
+const SAMPLE_RATE: usize = 48_000;
+const BYTES_PER_SAMPLE: usize = 2;
+const DEFAULT_BUFFER_MS: usize = 100;
+const METER_BUFFER_MS: usize = 25;
 const NUM_BUFS: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,8 +30,9 @@ pub struct ResolvedAudioInputDevice {
 pub struct AudioCapture {
     hwi: HWAVEIN,
     pub actual_device: ResolvedAudioInputDevice,
+    buf_bytes: usize,
     // Boxed so their heap addresses are stable; hdrs holds raw pointers into them.
-    bufs: Vec<Box<[u8; BUF_BYTES]>>,
+    bufs: Vec<Box<[u8]>>,
     hdrs: Vec<WAVEHDR>,
 }
 
@@ -38,18 +41,24 @@ unsafe impl Send for AudioCapture {}
 
 impl AudioCapture {
     pub fn new(selected_name: Option<&str>) -> Option<Self> {
+        Self::new_with_buffer_ms(selected_name, DEFAULT_BUFFER_MS)
+    }
+
+    pub fn new_with_buffer_ms(selected_name: Option<&str>, buffer_ms: usize) -> Option<Self> {
         unsafe {
             let format = WAVEFORMATEX {
                 wFormatTag: WAVE_FORMAT_PCM as u16,
                 nChannels: 1,
-                nSamplesPerSec: 48_000,
-                nAvgBytesPerSec: 96_000,
-                nBlockAlign: 2,
+                nSamplesPerSec: SAMPLE_RATE as u32,
+                nAvgBytesPerSec: (SAMPLE_RATE * BYTES_PER_SAMPLE) as u32,
+                nBlockAlign: BYTES_PER_SAMPLE as u16,
                 wBitsPerSample: 16,
                 cbSize: 0,
             };
 
             let resolved = resolve_input_device(selected_name);
+            let buf_bytes =
+                (SAMPLE_RATE * BYTES_PER_SAMPLE * buffer_ms / 1000).max(BYTES_PER_SAMPLE);
             let mut hwi = std::mem::zeroed::<HWAVEIN>();
             let r = waveInOpen(
                 Some(&mut hwi),
@@ -64,8 +73,9 @@ impl AudioCapture {
                 return None;
             }
 
-            let mut bufs: Vec<Box<[u8; BUF_BYTES]>> =
-                (0..NUM_BUFS).map(|_| Box::new([0u8; BUF_BYTES])).collect();
+            let mut bufs: Vec<Box<[u8]>> = (0..NUM_BUFS)
+                .map(|_| vec![0u8; buf_bytes].into_boxed_slice())
+                .collect();
 
             // Build headers pointing at the stable Box allocations. These pointers
             // remain valid as long as `bufs` is not resized or dropped.
@@ -73,7 +83,7 @@ impl AudioCapture {
                 .iter_mut()
                 .map(|b| WAVEHDR {
                     lpData: PSTR(b.as_mut_ptr()),
-                    dwBufferLength: BUF_BYTES as u32,
+                    dwBufferLength: buf_bytes as u32,
                     ..std::mem::zeroed()
                 })
                 .collect();
@@ -81,6 +91,7 @@ impl AudioCapture {
             Some(AudioCapture {
                 hwi,
                 actual_device: resolved,
+                buf_bytes,
                 bufs,
                 hdrs,
             })
@@ -94,7 +105,7 @@ impl AudioCapture {
                 // Reset to a clean state while preserving the data pointer.
                 *hdr = WAVEHDR {
                     lpData: PSTR(buf.as_mut_ptr()),
-                    dwBufferLength: BUF_BYTES as u32,
+                    dwBufferLength: self.buf_bytes as u32,
                     ..std::mem::zeroed()
                 };
                 waveInPrepareHeader(self.hwi, hdr, size_of::<WAVEHDR>() as u32);
@@ -121,7 +132,7 @@ impl AudioCapture {
                 waveInUnprepareHeader(self.hwi, hdr, size_of::<WAVEHDR>() as u32);
                 *hdr = WAVEHDR {
                     lpData: PSTR(buf.as_mut_ptr()),
-                    dwBufferLength: BUF_BYTES as u32,
+                    dwBufferLength: self.buf_bytes as u32,
                     ..std::mem::zeroed()
                 };
                 waveInPrepareHeader(self.hwi, hdr, size_of::<WAVEHDR>() as u32);
@@ -150,7 +161,9 @@ impl AudioCapture {
 
 impl Drop for AudioCapture {
     fn drop(&mut self) {
-        unsafe { waveInClose(self.hwi); }
+        unsafe {
+            waveInClose(self.hwi);
+        }
     }
 }
 
@@ -217,13 +230,10 @@ pub fn resolve_input_device(selected_name: Option<&str>) -> ResolvedAudioInputDe
         }
     }
 
-    let fallback = devices
-        .into_iter()
-        .next()
-        .unwrap_or(AudioInputDevice {
-            id: None,
-            name: "Default system input".to_string(),
-        });
+    let fallback = devices.into_iter().next().unwrap_or(AudioInputDevice {
+        id: None,
+        name: "Default system input".to_string(),
+    });
 
     ResolvedAudioInputDevice {
         requested_name,
@@ -256,22 +266,32 @@ pub fn peak_level_percent(samples: &[i16]) -> u8 {
 pub struct AudioMeter {
     capture: AudioCapture,
     scratch: Vec<i16>,
+    displayed_level: f32,
 }
 
 impl AudioMeter {
     pub fn new(selected_name: Option<&str>) -> Option<Self> {
-        let mut capture = AudioCapture::new(selected_name)?;
+        let mut capture = AudioCapture::new_with_buffer_ms(selected_name, METER_BUFFER_MS)?;
         capture.start();
         Some(Self {
             capture,
             scratch: Vec::new(),
+            displayed_level: 0.0,
         })
     }
 
     pub fn sample_level(&mut self) -> u8 {
         self.scratch.clear();
         self.capture.collect_ready(&mut self.scratch);
-        peak_level_percent(&self.scratch)
+        let target = peak_level_percent(&self.scratch) as f32;
+
+        self.displayed_level = if target >= self.displayed_level {
+            (self.displayed_level * 0.2) + (target * 0.8)
+        } else {
+            (self.displayed_level - 6.0).max(target)
+        };
+
+        self.displayed_level.round().clamp(0.0, 100.0) as u8
     }
 }
 

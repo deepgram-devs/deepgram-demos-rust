@@ -140,23 +140,25 @@ impl HotkeyManager {
         let keep_talking = Arc::clone(&self.keep_talking);
         let on_stop = Arc::clone(&self.on_stop);
 
-        std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_millis(10));
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(10));
 
-            if keep_talking.load(Ordering::Relaxed) || !recording.load(Ordering::Relaxed) {
-                break;
-            }
-
-            unsafe {
-                let win_held = GetAsyncKeyState(VK_LWIN.0 as i32) < 0
-                    || GetAsyncKeyState(VK_RWIN.0 as i32) < 0;
-                let ctrl_held = GetAsyncKeyState(VK_LCONTROL.0 as i32) < 0
-                    || GetAsyncKeyState(VK_RCONTROL.0 as i32) < 0;
-
-                if !win_held || !ctrl_held {
-                    recording.store(false, Ordering::Relaxed);
-                    on_stop();
+                if keep_talking.load(Ordering::Relaxed) || !recording.load(Ordering::Relaxed) {
                     break;
+                }
+
+                unsafe {
+                    let win_held = GetAsyncKeyState(VK_LWIN.0 as i32) < 0
+                        || GetAsyncKeyState(VK_RWIN.0 as i32) < 0;
+                    let ctrl_held = GetAsyncKeyState(VK_LCONTROL.0 as i32) < 0
+                        || GetAsyncKeyState(VK_RCONTROL.0 as i32) < 0;
+
+                    if !win_held || !ctrl_held {
+                        recording.store(false, Ordering::Relaxed);
+                        on_stop();
+                        break;
+                    }
                 }
             }
         });
@@ -186,7 +188,9 @@ pub fn parse_hotkey(text: &str) -> Result<HotkeyBinding, String> {
         .collect::<Vec<_>>();
 
     if parts.len() < 2 {
-        return Err(format!("Hotkey must include at least one modifier and one key: {text}"));
+        return Err(format!(
+            "Hotkey must include at least one modifier and one key: {text}"
+        ));
     }
 
     let mut modifiers = HOT_KEY_MODIFIERS(0);
@@ -290,7 +294,9 @@ fn format_key(vk: u32) -> String {
         x if x == VK_RETURN.0 as u32 => "Enter".to_string(),
         x if x == VK_TAB.0 as u32 => "Tab".to_string(),
         x if x == VK_ESCAPE.0 as u32 => "Escape".to_string(),
-        x if (VK_F1.0 as u32..=VK_F24.0 as u32).contains(&x) => format!("F{}", x - VK_F1.0 as u32 + 1),
+        x if (VK_F1.0 as u32..=VK_F24.0 as u32).contains(&x) => {
+            format!("F{}", x - VK_F1.0 as u32 + 1)
+        }
         x if char::from_u32(x).is_some_and(|c| c.is_ascii_alphanumeric()) => {
             char::from_u32(x).unwrap_or('?').to_string()
         }

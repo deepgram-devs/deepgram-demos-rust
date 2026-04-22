@@ -35,10 +35,9 @@ impl TranscriptHistory {
                 .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
         }
 
-        let contents = serde_yaml::to_string(self)
-            .map_err(|e| format!("Failed to serialize history: {e}"))?;
-        fs::write(path, contents)
-            .map_err(|e| format!("Failed to write {}: {e}", path.display()))
+        let contents =
+            serde_yaml::to_string(self).map_err(|e| format!("Failed to serialize history: {e}"))?;
+        fs::write(path, contents).map_err(|e| format!("Failed to write {}: {e}", path.display()))
     }
 
     pub fn push(&mut self, text: String, limit: usize) {
@@ -77,7 +76,10 @@ impl TranscriptHistory {
         self.entries.truncate(limit);
         if self.entries.is_empty() {
             self.selected_index = None;
-        } else if self.selected_index.is_some_and(|index| index >= self.entries.len()) {
+        } else if self
+            .selected_index
+            .is_some_and(|index| index >= self.entries.len())
+        {
             self.selected_index = Some(0);
         }
     }

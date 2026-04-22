@@ -29,7 +29,11 @@ impl OutputMode {
     }
 
     pub fn all() -> [OutputMode; 3] {
-        [OutputMode::DirectInput, OutputMode::Clipboard, OutputMode::Paste]
+        [
+            OutputMode::DirectInput,
+            OutputMode::Clipboard,
+            OutputMode::Paste,
+        ]
     }
 }
 
@@ -72,6 +76,10 @@ pub struct Config {
     pub output_mode: OutputMode,
     #[serde(default)]
     pub append_newline: bool,
+    /// Automatically stop push-to-talk recording after this many ms of silence.
+    /// Set to 0 to disable VAD auto-stop (default).
+    #[serde(default)]
+    pub vad_silence_ms: u32,
 }
 
 impl Default for Config {
@@ -87,6 +95,7 @@ impl Default for Config {
             history_limit: default_history_limit(),
             output_mode: OutputMode::default(),
             append_newline: false,
+            vad_silence_ms: 0,
         }
     }
 }
@@ -107,7 +116,9 @@ fn default_history_limit() -> usize {
 
 pub fn app_data_dir() -> PathBuf {
     let home = std::env::var("USERPROFILE").expect("USERPROFILE not set");
-    PathBuf::from(home).join(".config").join(CONFIG_SUBDIRECTORY)
+    PathBuf::from(home)
+        .join(".config")
+        .join(CONFIG_SUBDIRECTORY)
 }
 
 pub fn config_path() -> PathBuf {
@@ -139,14 +150,17 @@ pub fn load_from_path(path: &Path) -> Result<ConfigFileState, String> {
         });
     }
 
-    let contents = fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    let contents =
+        fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
     let mut config = serde_yaml::from_str::<Config>(&contents)
         .map_err(|e| format!("Failed to parse {}: {e}", path.display()))?;
     config.normalize()?;
 
     let modified_at = fs::metadata(path).ok().and_then(|m| m.modified().ok());
-    Ok(ConfigFileState { config, modified_at })
+    Ok(ConfigFileState {
+        config,
+        modified_at,
+    })
 }
 
 pub fn save(config: &Config) -> Result<(), String> {
@@ -165,8 +179,7 @@ pub fn save_to_path(path: &Path, config: &Config) -> Result<(), String> {
 
     let contents = serde_yaml::to_string(&normalized)
         .map_err(|e| format!("Failed to serialize config: {e}"))?;
-    fs::write(path, contents)
-        .map_err(|e| format!("Failed to write {}: {e}", path.display()))
+    fs::write(path, contents).map_err(|e| format!("Failed to write {}: {e}", path.display()))
 }
 
 pub fn ensure_backup(config: &Config) -> Result<(), String> {

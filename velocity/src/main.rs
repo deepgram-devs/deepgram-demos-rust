@@ -3,7 +3,6 @@
 
 #![windows_subsystem = "windows"]
 
-mod api_key_dialog;
 mod audio;
 mod beep;
 mod clipboard;
@@ -14,7 +13,7 @@ mod hotkey;
 mod logger;
 mod output;
 mod settings;
-mod sidecar_ui;
+mod single_instance;
 mod state;
 mod streaming;
 mod transcribe;
@@ -25,10 +24,10 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use windows::core::BOOL;
-use windows::Win32::System::Console::*;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
+use windows::Win32::System::Console::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::BOOL;
 
 unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
     if ctrl_type == CTRL_C_EVENT {
@@ -48,12 +47,23 @@ fn setup_ctrl_c() {
 }
 
 fn main() {
+    let _single_instance = match single_instance::acquire("Velocity.SingleInstance") {
+        Ok(Some(guard)) => guard,
+        Ok(None) => return,
+        Err(error) => {
+            logger::init(false);
+            logger::verbose(&error);
+            return;
+        }
+    };
+
     setup_ctrl_c();
 
     let args: Vec<String> = std::env::args().collect();
     let verbose = args.iter().any(|a| a == "--verbose");
     let smart_format_flag = args.iter().any(|a| a == "--smart-format");
-    let model_flag = args.windows(2)
+    let model_flag = args
+        .windows(2)
         .find(|w| w[0] == "--model")
         .map(|w| w[1].clone());
     logger::init(verbose);
@@ -76,7 +86,7 @@ fn main() {
     let _api_key = loop {
         match cfg.api_key.clone().filter(|k| !k.trim().is_empty()) {
             Some(key) => break key,
-            None => match api_key_dialog::prompt_for_api_key() {
+            None => match settings::prompt_for_api_key() {
                 Some(key) => {
                     cfg.api_key = Some(key.clone());
                     let _ = config::save(&cfg);
@@ -132,8 +142,7 @@ fn main() {
             if capture.actual_device.fell_back_to_default {
                 logger::verbose(&format!(
                     "Requested microphone {:?} unavailable, using {}",
-                    capture.actual_device.requested_name,
-                    capture.actual_device.actual_name
+                    capture.actual_device.requested_name, capture.actual_device.actual_name
                 ));
             }
 
@@ -154,7 +163,10 @@ fn main() {
                 continue;
             }
 
-            logger::verbose(&format!("Captured {} samples, sending to Deepgram", samples.len()));
+            logger::verbose(&format!(
+                "Captured {} samples, sending to Deepgram",
+                samples.len()
+            ));
             let wav = audio::encode_wav(&samples, 48_000);
             if let Some(text) = transcribe::transcribe(
                 wav,
@@ -253,25 +265,28 @@ fn main() {
     unsafe {
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            TranslateMessage(&msg);
+            let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
     }
 }
 
 fn spawn_config_watcher(app: Arc<state::AppState>) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(1));
-        let Some(hwnd) = app.tray_hwnd() else {
-            continue;
-        };
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let Some(hwnd) = app.tray_hwnd() else {
+                continue;
+            };
 
-        let modified_at = std::fs::metadata(config::config_path())
-            .ok()
-            .and_then(|meta| meta.modified().ok());
-        if modified_at.is_some() && modified_at != app.config_modified_at() {
-            unsafe {
-                let _ = PostMessageW(Some(hwnd), tray::WM_APP_RELOAD_CONFIG, WPARAM(0), LPARAM(0));
+            let modified_at = std::fs::metadata(config::config_path())
+                .ok()
+                .and_then(|meta| meta.modified().ok());
+            if modified_at.is_some() && modified_at != app.config_modified_at() {
+                unsafe {
+                    let _ =
+                        PostMessageW(Some(hwnd), tray::WM_APP_RELOAD_CONFIG, WPARAM(0), LPARAM(0));
+                }
             }
         }
     });

@@ -1,6 +1,6 @@
 use minimp3::{Decoder, Error, Frame};
-use windows::core::PSTR;
 use windows::Win32::Media::Audio::*;
+use windows::core::PSTR;
 
 static START_MP3: &[u8] = include_bytes!("../assets/record-start.mp3");
 static END_MP3: &[u8] = include_bytes!("../assets/record-end.mp3");

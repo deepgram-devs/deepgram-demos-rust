@@ -2,7 +2,11 @@ use crate::clipboard;
 use crate::config::OutputMode;
 use crate::typer;
 
-pub fn deliver_text(text: &str, output_mode: OutputMode, append_newline: bool) -> Result<String, String> {
+pub fn deliver_text(
+    text: &str,
+    output_mode: OutputMode,
+    append_newline: bool,
+) -> Result<String, String> {
     let final_text = format_text(text, append_newline);
 
     match output_mode {

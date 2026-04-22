@@ -75,7 +75,9 @@ pub fn run(
         }
     };
     match format!("Token {}", api_key).parse() {
-        Ok(v) => { req.headers_mut().insert("Authorization", v); }
+        Ok(v) => {
+            req.headers_mut().insert("Authorization", v);
+        }
         Err(e) => {
             logger::verbose(&format!("Streaming: bad auth header: {e}"));
             active.store(false, Ordering::Relaxed);

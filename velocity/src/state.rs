@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::SystemTime;
 
@@ -13,6 +14,11 @@ use crate::output;
 
 static APP_STATE: OnceLock<Arc<AppState>> = OnceLock::new();
 
+struct PendingConfigSave {
+    config: Config,
+    response: mpsc::Sender<Result<Option<SystemTime>, String>>,
+}
+
 pub struct AppState {
     config: RwLock<Config>,
     last_good_config: RwLock<Config>,
@@ -22,10 +28,10 @@ pub struct AppState {
     keep_talking: Arc<AtomicBool>,
     streaming_active: Arc<AtomicBool>,
     tray_hwnd: AtomicIsize,
-    settings_hwnd: AtomicIsize,
     meter_level: AtomicUsize,
     last_error: Mutex<Option<String>>,
     hotkeys: Mutex<Option<HotkeyManager>>,
+    pending_config_save: Mutex<Option<PendingConfigSave>>,
 }
 
 impl AppState {
@@ -39,10 +45,10 @@ impl AppState {
             keep_talking: Arc::new(AtomicBool::new(false)),
             streaming_active: Arc::new(AtomicBool::new(false)),
             tray_hwnd: AtomicIsize::new(0),
-            settings_hwnd: AtomicIsize::new(0),
             meter_level: AtomicUsize::new(0),
             last_error: Mutex::new(None),
             hotkeys: Mutex::new(None),
+            pending_config_save: Mutex::new(None),
         }
     }
 
@@ -72,16 +78,6 @@ impl AppState {
 
     pub fn tray_hwnd(&self) -> Option<HWND> {
         let raw = self.tray_hwnd.load(Ordering::Relaxed);
-        (raw != 0).then_some(HWND(raw as *mut _))
-    }
-
-    pub fn set_settings_hwnd(&self, hwnd: Option<HWND>) {
-        let raw = hwnd.map(|hwnd| hwnd.0 as isize).unwrap_or(0);
-        self.settings_hwnd.store(raw, Ordering::Relaxed);
-    }
-
-    pub fn settings_hwnd(&self) -> Option<HWND> {
-        let raw = self.settings_hwnd.load(Ordering::Relaxed);
         (raw != 0).then_some(HWND(raw as *mut _))
     }
 
@@ -176,9 +172,17 @@ impl AppState {
     }
 
     pub fn resend_selected(&self) {
-        if let Some(text) = self.history.lock().unwrap().selected_text().map(|text| text.to_string()) {
+        if let Some(text) = self
+            .history
+            .lock()
+            .unwrap()
+            .selected_text()
+            .map(|text| text.to_string())
+        {
             let config = self.config();
-            if let Err(error) = output::deliver_text(&text, config.output_mode, config.append_newline) {
+            if let Err(error) =
+                output::deliver_text(&text, config.output_mode, config.append_newline)
+            {
                 self.set_error(error);
             }
         } else {
@@ -210,15 +214,74 @@ impl AppState {
         Some(f(hotkeys))
     }
 
+    pub fn request_config_save(&self, config: Config) -> Result<Option<SystemTime>, String> {
+        let hwnd = self
+            .tray_hwnd()
+            .ok_or_else(|| "Tray window is not available".to_string())?;
+        let (tx, rx) = mpsc::channel();
+
+        {
+            let mut pending = self.pending_config_save.lock().unwrap();
+            if pending.is_some() {
+                return Err("Another configuration save is already in progress".to_string());
+            }
+
+            *pending = Some(PendingConfigSave {
+                config,
+                response: tx,
+            });
+        }
+
+        unsafe {
+            PostMessageW(
+                Some(hwnd),
+                crate::tray::WM_APP_SAVE_CONFIG,
+                WPARAM(0),
+                LPARAM(0),
+            )
+            .map_err(|error| format!("Failed to queue configuration save: {error}"))?;
+        }
+
+        rx.recv()
+            .map_err(|_| "Configuration save request was cancelled".to_string())?
+    }
+
+    pub fn process_pending_config_save(&self) {
+        let pending = self.pending_config_save.lock().unwrap().take();
+        let Some(pending) = pending else {
+            return;
+        };
+
+        let previous = self.config();
+        let result = if let Some(Err(error)) =
+            self.with_hotkeys(|hotkeys| hotkeys.apply_config(pending.config.hotkeys.clone()))
+        {
+            self.set_error(error.clone());
+            Err(error)
+        } else if let Err(error) = config::save(&pending.config) {
+            let _ = self.with_hotkeys(|hotkeys| hotkeys.apply_config(previous.hotkeys.clone()));
+            self.set_error(error.clone());
+            Err(error)
+        } else {
+            let modified_at = std::fs::metadata(config::config_path())
+                .ok()
+                .and_then(|meta| meta.modified().ok());
+            self.apply_config(pending.config, modified_at);
+            Ok(modified_at)
+        };
+
+        let _ = pending.response.send(result);
+    }
+
     pub fn notify_ui(&self) {
         if let Some(hwnd) = self.tray_hwnd() {
             unsafe {
-                let _ = PostMessageW(Some(hwnd), crate::tray::WM_APP_REFRESH_TRAY, WPARAM(0), LPARAM(0));
-            }
-        }
-        if let Some(hwnd) = self.settings_hwnd() {
-            unsafe {
-                let _ = PostMessageW(Some(hwnd), crate::settings::WM_APP_SETTINGS_REFRESH, WPARAM(0), LPARAM(0));
+                let _ = PostMessageW(
+                    Some(hwnd),
+                    crate::tray::WM_APP_REFRESH_TRAY,
+                    WPARAM(0),
+                    LPARAM(0),
+                );
             }
         }
     }

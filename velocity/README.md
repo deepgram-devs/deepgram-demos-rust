@@ -10,7 +10,7 @@ Push-to-talk speech-to-text for Windows 11. Hold **Win+Ctrl+'** to record your v
 ## Setup
 
 1. Run `velocity.exe`.
-2. On first launch a dialog will ask for your Deepgram API key. Enter it and click OK. The key is saved to `%USERPROFILE%\.config\deepgram\velocity.yml` and will not be asked for again.
+2. On first launch the built-in settings window will ask for your Deepgram API key. The key is saved to `%USERPROFILE%\.config\deepgram\velocity.yml` and will not be asked for again.
 3. The app runs silently in the system tray.
 4. Open the tray menu and choose `Settings` to configure hotkeys, audio input, key terms, transcript history, and output mode.
 
@@ -32,31 +32,20 @@ Pressing **Ctrl+Win+[** activates streaming mode using the Deepgram WebSocket AP
 
 ### Settings
 
-The settings window is available from the tray menu and lets you configure:
+The settings window is available from the tray menu and is implemented directly in Rust with `iced`. Only one settings window can exist at a time. It lets you configure:
 
 - Deepgram API key
 - transcription model
+- transcription language
 - Smart Formatting
 - custom key terms, comma-separated in the settings UI
 - global hotkeys
 - microphone input device
-- output mode:
-  - type directly
-  - copy to clipboard
-  - paste clipboard into the active app
+- output mode: type directly, copy to clipboard, or paste clipboard into the active app
 - append newline after transcript
 - transcript history retention
 
 When the settings window is open, the selected microphone shows a live activity indicator.
-
-### Modern Settings UI
-
-The repo now includes a WinUI 3 sidecar scaffold in `Velocity.Settings/README.md` for replacing the legacy Win32 configuration windows with a modern Windows 11 UI.
-
-- If `Velocity.Settings.exe` is present next to `velocity.exe`, the Rust app will launch it for tray settings and API key onboarding.
-- If the sidecar is not present, Velocity falls back to the built-in Win32 dialogs.
-- Building the WinUI app requires a current .NET SDK and Windows App SDK tooling.
-- Building the WinUI app from `Velocity.Settings/` also copies its output next to the workspace `velocity.exe` in `target\debug` or `target\release`.
 
 ### Transcript History
 

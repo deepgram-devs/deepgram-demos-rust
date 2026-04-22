@@ -59,9 +59,7 @@ pub fn transcribe(
                     .map(|a| a.transcript)
                     .filter(|t| !t.is_empty()),
                 Err(e) => {
-                    logger::verbose(&format!(
-                        "Deepgram parse error: {e}\nResponse body: {text}"
-                    ));
+                    logger::verbose(&format!("Deepgram parse error: {e}\nResponse body: {text}"));
                     None
                 }
             }

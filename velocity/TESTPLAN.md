@@ -27,7 +27,9 @@ Automated coverage currently verifies:
 - Launch `velocity.exe`.
 - Open the tray menu and choose `Settings`.
 - Verify the settings window opens and can be focused again from the tray.
-- Verify the window shows fields for API key, model, smart formatting, key terms, hotkeys, audio device, history limit, output mode, and append-newline.
+- Verify launching `velocity.exe` a second time does not start a second process.
+- Verify the window shows fields for API key, model, language, smart formatting, key terms, hotkeys, audio device, history limit, output mode, and append-newline.
+- Verify only one settings window can exist at a time.
 
 ### 2. Hotkey Configuration
 
@@ -84,6 +86,6 @@ Automated coverage currently verifies:
 
 ### 8. Key Terms
 
-- Add multiple key terms in settings, one per line, and save.
+- Add multiple key terms in settings as a comma-separated list and save.
 - Dictate phrases containing those terms in both push-to-talk and streaming mode.
 - Verify the terms are better recognized and remain persisted after restarting the app.

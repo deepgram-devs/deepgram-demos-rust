@@ -1,6 +1,4 @@
-use windows::{
-    Win32::UI::Input::KeyboardAndMouse::*,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 /// Types the given text into whatever window currently has focus,
 /// using Unicode SendInput so all characters work regardless of layout.
