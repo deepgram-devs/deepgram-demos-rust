@@ -16,3 +16,7 @@
 **.DS_Store
 **.log
 **/.claude/
+.emdash.json
+velocity/.cargo-target*/
+velocity/.playwright-mcp/
+velocity/build-artifacts/
