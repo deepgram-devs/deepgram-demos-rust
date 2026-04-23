@@ -1,14 +1,30 @@
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
+use std::{panic, sync::mpsc};
 
-use iced::widget::{
-    button, checkbox, column, container, pick_list, progress_bar, row, scrollable, text, text_input,
+use anyhow::Result;
+use gpui::{
+    App, Bounds, Context, Entity, IntoElement, KeyBinding, ParentElement as _, Render,
+    Subscription, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, size,
 };
-use iced::{
-    Background, Border, Color, Element, Font, Length, Shadow, Size, Subscription, Task, Theme,
-    font, keyboard, overlay::menu, window,
+use gpui_component::{
+    ActiveTheme, Root, Sizable, Size,
+    button::{Button, ButtonVariants as _},
+    form::{field, v_form},
+    group_box::{GroupBox, GroupBoxVariants as _},
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    progress::Progress,
+    scroll::ScrollableElement as _,
+    select::{Select, SelectEvent, SelectState},
+    switch::Switch,
+    v_flex,
 };
+use windows::Win32::UI::WindowsAndMessaging::{
+    FindWindowW, SW_RESTORE, SetForegroundWindow, ShowWindow,
+};
+use windows::core::PCWSTR;
 
 use crate::audio::{self, AudioMeter};
 use crate::config::{self, Config, OutputMode};
@@ -17,15 +33,17 @@ use crate::hotkey;
 use crate::logger;
 use crate::state;
 
-static UI_COMMAND_SENDER: OnceLock<mpsc::Sender<UiCommand>> = OnceLock::new();
+actions!(velocity_settings, [SaveSettings]);
 
 const DEFAULT_AUDIO_INPUT_LABEL: &str = "Default system input";
 const SETTINGS_TITLE: &str = "Velocity Settings";
 const API_KEY_TITLE: &str = "Velocity API Key";
-const SECTION_SPACING: f32 = 14.0;
-const PANEL_RADIUS: f32 = 4.0;
 const UI_TICK_INTERVAL: Duration = Duration::from_millis(50);
 const CONFIG_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+const KEY_CONTEXT: &str = "VelocitySettings";
+
+static SETTINGS_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
+static API_KEY_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LaunchMode {
@@ -49,394 +67,160 @@ impl LaunchMode {
     }
 }
 
-enum UiCommand {
-    ShowSettings(Arc<state::AppState>),
-    PromptForApiKey(mpsc::Sender<Option<String>>),
+struct CompletionHandle(Arc<Mutex<Option<mpsc::Sender<Option<String>>>>>);
+
+impl CompletionHandle {
+    fn new(sender: mpsc::Sender<Option<String>>) -> Self {
+        Self(Arc::new(Mutex::new(Some(sender))))
+    }
+
+    fn send(&self, value: Option<String>) {
+        if let Some(tx) = self.0.lock().unwrap().take() {
+            let _ = tx.send(value);
+        }
+    }
 }
 
-#[derive(Debug, Clone)]
-enum Message {
-    ApiKeyChanged(String),
-    ModelSelected(String),
-    LanguageSelected(String),
-    SmartFormatToggled(bool),
-    KeyTermsChanged(String),
-    PushToTalkChanged(String),
-    KeepTalkingChanged(String),
-    StreamingChanged(String),
-    ResendChanged(String),
-    AudioInputSelected(String),
-    HistoryLimitChanged(String),
-    OutputModeSelected(String),
-    AppendNewlineToggled(bool),
-    SavePressed,
-    ReloadPressed,
-    KeyboardEvent(keyboard::Event),
-    CloseRequested(window::Id),
-    WindowOpened(window::Id),
-    WindowClosed(window::Id),
-    Tick,
+impl Clone for CompletionHandle {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
 }
 
 pub fn prompt_for_api_key() -> Option<String> {
-    let sender = ui_command_sender();
+    if API_KEY_WINDOW_OPEN.swap(true, Ordering::SeqCst) {
+        focus_existing_window(API_KEY_TITLE);
+        return None;
+    }
+
     let (tx, rx) = mpsc::channel();
-    let _ = sender.send(UiCommand::PromptForApiKey(tx));
+    std::thread::spawn(move || {
+        let completion = CompletionHandle::new(tx);
+        run_window(LaunchMode::ApiKey, None, Some(completion.clone()));
+        completion.send(None);
+        API_KEY_WINDOW_OPEN.store(false, Ordering::SeqCst);
+    });
+
     rx.recv().ok().flatten()
 }
 
 pub fn show_settings_window() {
+    if SETTINGS_WINDOW_OPEN.swap(true, Ordering::SeqCst) {
+        focus_existing_window(SETTINGS_TITLE);
+        return;
+    }
+
     let app = state::global();
-    let _ = ui_command_sender().send(UiCommand::ShowSettings(app));
+    std::thread::spawn(move || {
+        run_window(LaunchMode::Settings, Some(app), None);
+        SETTINGS_WINDOW_OPEN.store(false, Ordering::SeqCst);
+    });
 }
 
-fn ui_command_sender() -> &'static mpsc::Sender<UiCommand> {
-    UI_COMMAND_SENDER.get_or_init(|| {
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            run_ui_daemon(rx);
+fn run_window(
+    launch_mode: LaunchMode,
+    app: Option<Arc<state::AppState>>,
+    completion: Option<CompletionHandle>,
+) {
+    let result = panic::catch_unwind(move || {
+        let app_instance = gpui_platform::application();
+        app_instance.run(move |cx| {
+            gpui_component::init(cx);
+            cx.bind_keys([KeyBinding::new("ctrl-s", SaveSettings, Some(KEY_CONTEXT))]);
+            cx.on_window_closed(|cx, _window_id| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+
+            let window_bounds = WindowBounds::Windowed(Bounds::centered(
+                None,
+                size(
+                    px(if launch_mode == LaunchMode::Settings {
+                        920.
+                    } else {
+                        760.
+                    }),
+                    px(if launch_mode == LaunchMode::Settings {
+                        980.
+                    } else {
+                        380.
+                    }),
+                ),
+                cx,
+            ));
+
+            cx.spawn(async move |cx| {
+                let completion_for_window = completion.clone();
+                let completion_for_error = completion.clone();
+                let app_for_window = app.clone();
+                let open_result = cx.open_window(
+                    WindowOptions {
+                        window_bounds: Some(window_bounds),
+                        ..Default::default()
+                    },
+                    move |window, cx| {
+                        let view = cx.new(|cx| {
+                            SettingsView::new(
+                                launch_mode,
+                                app_for_window.clone(),
+                                completion_for_window.clone(),
+                                window,
+                                cx,
+                            )
+                        });
+                        cx.new(|cx| Root::new(view, window, cx).bg(cx.theme().background))
+                    },
+                );
+
+                if let Err(error) = open_result {
+                    logger::verbose(&format!("Failed to open GPUI settings window: {error}"));
+                    if let Some(completion) = completion_for_error {
+                        completion.send(None);
+                    }
+                    cx.update(|cx| cx.quit());
+                }
+            })
+            .detach();
         });
-        tx
-    })
-}
-
-fn run_ui_daemon(commands: mpsc::Receiver<UiCommand>) {
-    let commands = Arc::new(Mutex::new(Some(commands)));
-    let result = iced::daemon(
-        {
-            let commands = Arc::clone(&commands);
-            move || {
-                let receiver = commands
-                    .lock()
-                    .unwrap()
-                    .take()
-                    .expect("settings UI booted more than once");
-                SettingsWindow::new(receiver)
-            }
-        },
-        update,
-        view,
-    )
-    .title(window_title)
-    .theme(app_theme)
-    .subscription(subscription)
-    .run();
+    });
 
     if let Err(error) = result {
-        logger::verbose(&format!("Failed to run settings UI: {error}"));
+        logger::verbose(&format!("GPUI settings thread panicked: {error:?}"));
     }
 }
 
-fn window_title(state: &SettingsWindow, _window: window::Id) -> String {
-    state.window_title()
-}
-
-fn app_theme(_state: &SettingsWindow, _window: window::Id) -> Theme {
-    Theme::Dark
-}
-
-fn page_background() -> Color {
-    Color::from_rgb8(0x0B, 0x0B, 0x0C)
-}
-
-fn panel_background() -> Color {
-    Color::from_rgb8(0x14, 0x14, 0x16)
-}
-
-fn panel_border() -> Color {
-    Color::from_rgb8(0x28, 0x28, 0x2D)
-}
-
-fn secondary_panel_background() -> Color {
-    Color::from_rgb8(0x10, 0x10, 0x12)
-}
-
-fn primary_text() -> Color {
-    Color::from_rgb8(0xFF, 0xFF, 0xFF)
-}
-
-fn secondary_text() -> Color {
-    Color::from_rgb8(0xA9, 0xA9, 0xAD)
-}
-
-fn muted_text() -> Color {
-    Color::from_rgb8(0x78, 0x78, 0x80)
-}
-
-fn success_text() -> Color {
-    Color::from_rgb8(0xD7, 0xF9, 0xE0)
-}
-
-fn error_text() -> Color {
-    Color::from_rgb8(0xFF, 0xC1, 0xC1)
-}
-
-fn body_font() -> Font {
-    Font::DEFAULT
-}
-
-fn heading_font() -> Font {
-    Font {
-        family: Font::DEFAULT.family,
-        weight: font::Weight::Bold,
-        ..Font::DEFAULT
+fn focus_existing_window(title: &str) {
+    let title = to_wide(title);
+    unsafe {
+        let Ok(hwnd) = FindWindowW(None, PCWSTR(title.as_ptr())) else {
+            return;
+        };
+        let _ = ShowWindow(hwnd, SW_RESTORE);
+        let _ = SetForegroundWindow(hwnd);
     }
 }
 
-fn label_font() -> Font {
-    Font {
-        family: body_font().family,
-        weight: font::Weight::Semibold,
-        ..Font::DEFAULT
-    }
+fn to_wide(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn subtle_status_color(status: &str) -> Color {
-    let lower = status.to_ascii_lowercase();
-    if lower.contains("fail")
-        || lower.contains("error")
-        || lower.contains("required")
-        || lower.contains("reject")
-        || lower.contains("invalid")
-    {
-        error_text()
-    } else if lower.contains("saved") || lower.contains("loaded") {
-        success_text()
-    } else {
-        secondary_text()
-    }
-}
-
-fn panel_style() -> impl Fn(&Theme) -> container::Style {
-    |_theme| {
-        container::Style::default()
-            .background(panel_background())
-            .color(primary_text())
-            .border(Border {
-                color: panel_border(),
-                width: 1.0,
-                radius: PANEL_RADIUS.into(),
-            })
-    }
-}
-
-fn status_panel_style(has_warning: bool) -> impl Fn(&Theme) -> container::Style {
-    move |_theme| {
-        container::Style::default()
-            .background(secondary_panel_background())
-            .color(primary_text())
-            .border(Border {
-                color: if has_warning {
-                    primary_text()
-                } else {
-                    panel_border()
-                },
-                width: 1.0,
-                radius: PANEL_RADIUS.into(),
-            })
-    }
-}
-
-fn page_style() -> impl Fn(&Theme) -> container::Style {
-    |_theme| {
-        container::Style::default()
-            .background(page_background())
-            .color(primary_text())
-    }
-}
-
-fn primary_button_style(_theme: &Theme, status: button::Status) -> button::Style {
-    let base = button::Style {
-        background: Some(Background::Color(primary_text())),
-        text_color: page_background(),
-        border: Border {
-            color: primary_text(),
-            width: 1.0,
-            radius: PANEL_RADIUS.into(),
-        },
-        ..Default::default()
-    };
-
-    match status {
-        button::Status::Hovered => button::Style {
-            background: Some(Background::Color(Color::from_rgb8(0xE7, 0xE7, 0xEA))),
-            ..base
-        },
-        button::Status::Pressed => button::Style {
-            background: Some(Background::Color(Color::from_rgb8(0xD7, 0xD7, 0xDB))),
-            ..base
-        },
-        button::Status::Disabled => button::Style {
-            background: Some(Background::Color(Color::from_rgb8(0x66, 0x66, 0x6C))),
-            text_color: Color::from_rgb8(0x1B, 0x1B, 0x1E),
-            border: Border {
-                color: Color::from_rgb8(0x66, 0x66, 0x6C),
-                ..base.border
-            },
-            ..base
-        },
-        _ => base,
-    }
-}
-
-fn secondary_button_style(_theme: &Theme, status: button::Status) -> button::Style {
-    let base = button::Style {
-        background: Some(Background::Color(panel_background())),
-        text_color: primary_text(),
-        border: Border {
-            color: panel_border(),
-            width: 1.0,
-            radius: PANEL_RADIUS.into(),
-        },
-        ..Default::default()
-    };
-
-    match status {
-        button::Status::Hovered => button::Style {
-            background: Some(Background::Color(Color::from_rgb8(0x1B, 0x1B, 0x1E))),
-            border: Border {
-                color: primary_text(),
-                ..base.border
-            },
-            ..base
-        },
-        button::Status::Pressed => button::Style {
-            background: Some(Background::Color(Color::from_rgb8(0x20, 0x20, 0x24))),
-            ..base
-        },
-        button::Status::Disabled => button::Style {
-            text_color: muted_text(),
-            ..base
-        },
-        _ => base,
-    }
-}
-
-fn input_style(_theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let active = text_input::Style {
-        background: Background::Color(secondary_panel_background()),
-        border: Border {
-            color: panel_border(),
-            width: 1.0,
-            radius: PANEL_RADIUS.into(),
-        },
-        icon: secondary_text(),
-        placeholder: muted_text(),
-        value: primary_text(),
-        selection: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0.18),
-    };
-
-    match status {
-        text_input::Status::Hovered => text_input::Style {
-            border: Border {
-                color: secondary_text(),
-                ..active.border
-            },
-            ..active
-        },
-        text_input::Status::Focused { .. } => text_input::Style {
-            border: Border {
-                color: primary_text(),
-                ..active.border
-            },
-            ..active
-        },
-        text_input::Status::Disabled => text_input::Style {
-            background: Background::Color(panel_background()),
-            value: muted_text(),
-            ..active
-        },
-        _ => active,
-    }
-}
-
-fn pick_list_style(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
-    let active = pick_list::Style {
-        text_color: primary_text(),
-        placeholder_color: muted_text(),
-        handle_color: secondary_text(),
-        background: Background::Color(secondary_panel_background()),
-        border: Border {
-            color: panel_border(),
-            width: 1.0,
-            radius: PANEL_RADIUS.into(),
-        },
-    };
-
-    match status {
-        pick_list::Status::Hovered | pick_list::Status::Opened { .. } => pick_list::Style {
-            border: Border {
-                color: primary_text(),
-                ..active.border
-            },
-            ..active
-        },
-        _ => active,
-    }
-}
-
-fn pick_list_menu_style(_theme: &Theme) -> menu::Style {
-    menu::Style {
-        background: panel_background().into(),
-        border: Border {
-            color: panel_border(),
-            width: 1.0,
-            radius: PANEL_RADIUS.into(),
-        },
-        text_color: primary_text(),
-        selected_text_color: page_background(),
-        selected_background: primary_text().into(),
-        shadow: Shadow::default(),
-    }
-}
-
-fn checkbox_style(_theme: &Theme, status: checkbox::Status) -> checkbox::Style {
-    let (is_checked, hovered) = match status {
-        checkbox::Status::Active { is_checked } => (is_checked, false),
-        checkbox::Status::Hovered { is_checked } => (is_checked, true),
-        checkbox::Status::Disabled { is_checked } => (is_checked, false),
-    };
-
-    checkbox::Style {
-        background: if is_checked {
-            Background::Color(primary_text())
-        } else if hovered {
-            Background::Color(Color::from_rgb8(0x1A, 0x1A, 0x1D))
-        } else {
-            Background::Color(secondary_panel_background())
-        },
-        icon_color: page_background(),
-        border: Border {
-            color: if hovered {
-                primary_text()
-            } else {
-                panel_border()
-            },
-            width: 1.0,
-            radius: PANEL_RADIUS.into(),
-        },
-        text_color: Some(primary_text()),
-    }
-}
-
-fn meter_style(_theme: &Theme) -> progress_bar::Style {
-    progress_bar::Style {
-        background: Background::Color(secondary_panel_background()),
-        bar: Background::Color(primary_text()),
-        border: Border {
-            color: panel_border(),
-            width: 1.0,
-            radius: PANEL_RADIUS.into(),
-        },
-    }
-}
-
-struct SettingsWindow {
+struct SettingsView {
     launch_mode: LaunchMode,
-    current_window: Option<window::Id>,
-    command_rx: mpsc::Receiver<UiCommand>,
     app: Option<Arc<state::AppState>>,
-    completion: Option<mpsc::Sender<Option<String>>>,
+    completion: Option<CompletionHandle>,
+    api_key_input: Entity<InputState>,
+    model_select: Entity<SelectState<Vec<String>>>,
+    language_select: Entity<SelectState<Vec<String>>>,
+    key_terms_input: Entity<InputState>,
+    push_to_talk_input: Entity<InputState>,
+    keep_talking_input: Entity<InputState>,
+    streaming_input: Entity<InputState>,
+    resend_selected_input: Entity<InputState>,
+    audio_input_select: Entity<SelectState<Vec<String>>>,
+    history_limit_input: Entity<InputState>,
+    output_mode_select: Entity<SelectState<Vec<String>>>,
     api_key: String,
     model: String,
     language: String,
@@ -450,26 +234,105 @@ struct SettingsWindow {
     history_limit: String,
     output_mode: String,
     append_newline: bool,
+    audio_inputs: Vec<String>,
+    language_options: Vec<String>,
     meter: Option<AudioMeter>,
     meter_level: u8,
     meter_label: String,
-    audio_inputs: Vec<String>,
-    language_options: Vec<String>,
     status: String,
     config_changed_externally: bool,
     last_loaded_config_write_time: Option<SystemTime>,
     last_config_change_check: Instant,
-    window_visible: bool,
+    _subscriptions: Vec<Subscription>,
 }
 
-impl SettingsWindow {
-    fn new(command_rx: mpsc::Receiver<UiCommand>) -> (Self, Task<Message>) {
-        let mut state = Self {
-            launch_mode: LaunchMode::Settings,
-            current_window: None,
-            command_rx,
-            app: None,
-            completion: None,
+impl SettingsView {
+    fn new(
+        launch_mode: LaunchMode,
+        app: Option<Arc<state::AppState>>,
+        completion: Option<CompletionHandle>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        window.set_window_title(launch_mode.title());
+
+        let model_items = model_options();
+        let language_items = vec![deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string()];
+        let audio_inputs = vec![DEFAULT_AUDIO_INPUT_LABEL.to_string()];
+        let output_modes = output_mode_options();
+
+        let api_key_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder("Deepgram API key")
+        });
+        let key_terms_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Recognition key terms, comma-separated")
+        });
+        let push_to_talk_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Push to talk"));
+        let keep_talking_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Keep talking"));
+        let streaming_input = cx.new(|cx| InputState::new(window, cx).placeholder("Streaming"));
+        let resend_selected_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Resend selected transcript"));
+        let history_limit_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Recent history limit"));
+
+        let model_select = cx.new(|cx| {
+            SelectState::new(
+                model_items.clone(),
+                index_path_for(&deepgram::DEFAULT_MODEL.to_string(), &model_items),
+                window,
+                cx,
+            )
+        });
+        let language_select = cx.new(|cx| {
+            SelectState::new(
+                language_items.clone(),
+                index_path_for(
+                    &deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string(),
+                    &language_items,
+                ),
+                window,
+                cx,
+            )
+        });
+        let audio_input_select = cx.new(|cx| {
+            SelectState::new(
+                audio_inputs.clone(),
+                index_path_for(&DEFAULT_AUDIO_INPUT_LABEL.to_string(), &audio_inputs),
+                window,
+                cx,
+            )
+        });
+        let output_mode_select = cx.new(|cx| {
+            SelectState::new(
+                output_modes.clone(),
+                index_path_for(
+                    &OutputMode::DirectInput.as_label().to_string(),
+                    &output_modes,
+                ),
+                window,
+                cx,
+            )
+        });
+
+        let mut view = Self {
+            launch_mode,
+            app,
+            completion,
+            api_key_input,
+            model_select,
+            language_select,
+            key_terms_input,
+            push_to_talk_input,
+            keep_talking_input,
+            streaming_input,
+            resend_selected_input,
+            audio_input_select,
+            history_limit_input,
+            output_mode_select,
             api_key: String::new(),
             model: deepgram::DEFAULT_MODEL.to_string(),
             language: deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string(),
@@ -483,25 +346,142 @@ impl SettingsWindow {
             history_limit: config::DEFAULT_HISTORY_LIMIT.to_string(),
             output_mode: OutputMode::DirectInput.as_label().to_string(),
             append_newline: false,
+            audio_inputs,
+            language_options: language_items,
             meter: None,
             meter_level: 0,
             meter_label: "Mic activity: unavailable".to_string(),
-            audio_inputs: vec![DEFAULT_AUDIO_INPUT_LABEL.to_string()],
-            language_options: vec![deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string()],
             status: String::new(),
             config_changed_externally: false,
             last_loaded_config_write_time: None,
             last_config_change_check: Instant::now(),
-            window_visible: false,
+            _subscriptions: Vec::new(),
         };
 
-        state.refresh_audio_inputs();
-        state.reload_from_disk();
-        (state, Task::none())
+        view.install_subscriptions(window, cx);
+        view.reload_from_disk(window, cx);
+        view.start_tick_loop(cx);
+        view
     }
 
-    fn window_title(&self) -> String {
-        self.launch_mode.title().to_string()
+    fn install_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._subscriptions = vec![
+            subscribe_input_string(cx, window, &self.api_key_input, |this, value, _, cx| {
+                this.api_key = value;
+                cx.notify();
+            }),
+            subscribe_input_string(cx, window, &self.key_terms_input, |this, value, _, cx| {
+                this.key_terms = value;
+                cx.notify();
+            }),
+            subscribe_input_string(
+                cx,
+                window,
+                &self.push_to_talk_input,
+                |this, value, _, cx| {
+                    this.push_to_talk = value;
+                    cx.notify();
+                },
+            ),
+            subscribe_input_string(
+                cx,
+                window,
+                &self.keep_talking_input,
+                |this, value, _, cx| {
+                    this.keep_talking = value;
+                    cx.notify();
+                },
+            ),
+            subscribe_input_string(cx, window, &self.streaming_input, |this, value, _, cx| {
+                this.streaming = value;
+                cx.notify();
+            }),
+            subscribe_input_string(
+                cx,
+                window,
+                &self.resend_selected_input,
+                |this, value, _, cx| {
+                    this.resend_selected = value;
+                    cx.notify();
+                },
+            ),
+            subscribe_input_string(
+                cx,
+                window,
+                &self.history_limit_input,
+                |this, value, _, cx| {
+                    this.history_limit = value;
+                    cx.notify();
+                },
+            ),
+            subscribe_select_string(cx, window, &self.model_select, |this, value, window, cx| {
+                this.model = value;
+                this.refresh_language_options(window, cx);
+                cx.notify();
+            }),
+            subscribe_select_string(cx, window, &self.language_select, |this, value, _, cx| {
+                this.language = value;
+                cx.notify();
+            }),
+            subscribe_select_string(
+                cx,
+                window,
+                &self.audio_input_select,
+                |this, value, _, cx| {
+                    this.audio_input = value;
+                    this.restart_meter();
+                    cx.notify();
+                },
+            ),
+            subscribe_select_string(
+                cx,
+                window,
+                &self.output_mode_select,
+                |this, value, _, cx| {
+                    this.output_mode = value;
+                    cx.notify();
+                },
+            ),
+        ];
+    }
+
+    fn start_tick_loop(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(UI_TICK_INTERVAL).await;
+                let result = this.update(cx, |this, cx| {
+                    this.tick(cx);
+                    cx.notify();
+                });
+                if result.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn tick(&mut self, cx: &mut Context<Self>) {
+        self.meter_level = self
+            .meter
+            .as_mut()
+            .map(|meter| meter.sample_level())
+            .unwrap_or(0);
+        self.meter_label = format_meter_text(self.meter_level);
+
+        if self.launch_mode == LaunchMode::Settings
+            && self.last_config_change_check.elapsed() >= CONFIG_CHECK_INTERVAL
+        {
+            let current_write_time = std::fs::metadata(config::config_path())
+                .ok()
+                .and_then(|metadata| metadata.modified().ok());
+
+            self.config_changed_externally = current_write_time.is_some()
+                && current_write_time != self.last_loaded_config_write_time;
+            self.last_config_change_check = Instant::now();
+        }
+
+        let _ = cx;
     }
 
     fn runtime_status(&self) -> String {
@@ -530,7 +510,7 @@ impl SettingsWindow {
         (self.audio_input != DEFAULT_AUDIO_INPUT_LABEL).then_some(self.audio_input.as_str())
     }
 
-    fn refresh_audio_inputs(&mut self) {
+    fn refresh_audio_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut inputs = audio::list_input_devices()
             .into_iter()
             .map(|device| device.name)
@@ -551,29 +531,36 @@ impl SettingsWindow {
             inputs.push(self.audio_input.clone());
         }
 
-        self.audio_inputs = inputs;
+        self.audio_inputs = inputs.clone();
+        self.audio_input_select.update(cx, |select, cx| {
+            select.set_items(inputs, window, cx);
+            let current = self.audio_input.clone();
+            select.set_selected_value(&current, window, cx);
+        });
     }
 
-    fn reload_from_disk(&mut self) {
-        self.refresh_audio_inputs();
-
+    fn reload_from_disk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match config::load_state() {
             Ok(loaded) => {
-                self.apply_config(&loaded.config);
-                self.last_loaded_config_write_time = loaded.modified_at;
-                self.config_changed_externally = false;
+                self.apply_config(&loaded.config, loaded.modified_at, window, cx);
                 self.status = format!("Loaded {}", config::config_path().display());
             }
             Err(error) => {
                 self.status = error;
             }
         }
+        cx.notify();
     }
 
-    fn apply_config(&mut self, config: &Config) {
+    fn apply_config(
+        &mut self,
+        config: &Config,
+        modified_at: Option<SystemTime>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.api_key = config.api_key.clone().unwrap_or_default();
         self.model = config.model.clone();
-        self.language_options = language_options_for_model(&self.model);
         self.language = config
             .language
             .as_deref()
@@ -602,116 +589,100 @@ impl SettingsWindow {
         self.history_limit = config.history_limit.to_string();
         self.output_mode = config.output_mode.as_label().to_string();
         self.append_newline = config.append_newline;
-        self.refresh_audio_inputs();
+        self.last_loaded_config_write_time = modified_at;
+        self.config_changed_externally = false;
+        self.last_config_change_check = Instant::now();
+
+        self.api_key_input.update(cx, |input, cx| {
+            input.set_value(self.api_key.clone(), window, cx)
+        });
+        self.key_terms_input.update(cx, |input, cx| {
+            input.set_value(self.key_terms.clone(), window, cx)
+        });
+        self.push_to_talk_input.update(cx, |input, cx| {
+            input.set_value(self.push_to_talk.clone(), window, cx)
+        });
+        self.keep_talking_input.update(cx, |input, cx| {
+            input.set_value(self.keep_talking.clone(), window, cx)
+        });
+        self.streaming_input.update(cx, |input, cx| {
+            input.set_value(self.streaming.clone(), window, cx)
+        });
+        self.resend_selected_input.update(cx, |input, cx| {
+            input.set_value(self.resend_selected.clone(), window, cx)
+        });
+        self.history_limit_input.update(cx, |input, cx| {
+            input.set_value(self.history_limit.clone(), window, cx)
+        });
+
+        let models = model_options();
+        self.model_select.update(cx, |select, cx| {
+            select.set_items(models, window, cx);
+            let model = self.model.clone();
+            select.set_selected_value(&model, window, cx);
+        });
+
+        self.refresh_language_options(window, cx);
+        self.refresh_audio_inputs(window, cx);
+
+        let output_modes = output_mode_options();
+        self.output_mode_select.update(cx, |select, cx| {
+            select.set_items(output_modes, window, cx);
+            let output_mode = self.output_mode.clone();
+            select.set_selected_value(&output_mode, window, cx);
+        });
+
         self.restart_meter();
+        self.meter_label = format_meter_text(self.meter_level);
+    }
+
+    fn refresh_language_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.language_options = language_options_for_model(&self.model);
+
+        let selected = deepgram::language_code_from_display(&self.model, &self.language);
+        self.language = selected
+            .and_then(|language| {
+                deepgram::languages_for_model(&self.model)
+                    .iter()
+                    .find(|option| option.code.eq_ignore_ascii_case(&language))
+                    .map(deepgram::language_display)
+            })
+            .unwrap_or_else(|| deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string());
+
+        let language_options = self.language_options.clone();
+        self.language_select.update(cx, |select, cx| {
+            select.set_items(language_options, window, cx);
+            let selected_language = self.language.clone();
+            select.set_selected_value(&selected_language, window, cx);
+        });
     }
 
     fn restart_meter(&mut self) {
-        if self.launch_mode == LaunchMode::Settings && self.window_visible {
+        if self.launch_mode == LaunchMode::Settings {
             self.meter = AudioMeter::new(self.selected_audio_input());
         } else {
             self.meter = None;
             self.meter_level = 0;
         }
-        self.update_meter_label();
-    }
-
-    fn update_meter_label(&mut self) {
         self.meter_label = format_meter_text(self.meter_level);
     }
 
-    fn handle_command(&mut self, command: UiCommand) -> Task<Message> {
-        match command {
-            UiCommand::ShowSettings(app) => {
-                self.launch_mode = LaunchMode::Settings;
-                self.app = Some(app);
-                self.completion = None;
-                self.reload_from_disk();
-                self.show_or_open_window()
-            }
-            UiCommand::PromptForApiKey(completion) => {
-                if let Some(previous) = self.completion.replace(completion) {
-                    let _ = previous.send(None);
-                }
-                self.launch_mode = LaunchMode::ApiKey;
-                self.app = None;
-                self.reload_from_disk();
-                self.show_or_open_window()
-            }
-        }
-    }
-
-    fn show_or_open_window(&mut self) -> Task<Message> {
-        self.window_visible = true;
-        self.restart_meter();
-
-        if let Some(id) = self.current_window {
-            return Task::batch([
-                window::set_mode(id, window::Mode::Windowed),
-                window::minimize(id, false),
-                window::gain_focus(id),
-            ]);
-        }
-
-        let settings = window::Settings {
-            size: Size::new(760.0, 920.0),
-            min_size: Some(Size::new(680.0, 780.0)),
-            position: window::Position::Centered,
-            exit_on_close_request: false,
-            ..Default::default()
-        };
-        let (id, open) = window::open(settings);
-        self.current_window = Some(id);
-        open.map(Message::WindowOpened)
-    }
-
-    fn tick(&mut self) -> Task<Message> {
-        let mut tasks = Vec::new();
-
-        loop {
-            match self.command_rx.try_recv() {
-                Ok(command) => tasks.push(self.handle_command(command)),
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => break,
-            }
-        }
-
-        self.meter_level = self
-            .meter
-            .as_mut()
-            .map(|meter| meter.sample_level())
-            .unwrap_or(0);
-        self.update_meter_label();
-
-        if self.window_visible
-            && self.launch_mode == LaunchMode::Settings
-            && self.last_config_change_check.elapsed() >= CONFIG_CHECK_INTERVAL
-        {
-            let current_write_time = std::fs::metadata(config::config_path())
-                .ok()
-                .and_then(|metadata| metadata.modified().ok());
-
-            self.config_changed_externally = current_write_time.is_some()
-                && current_write_time != self.last_loaded_config_write_time;
-            self.last_config_change_check = Instant::now();
-        }
-
-        Task::batch(tasks)
-    }
-
-    fn save(&mut self) -> Task<Message> {
+    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(mut updated) = self.build_config() else {
-            return Task::none();
+            cx.notify();
+            return;
         };
 
         if let Err(error) = updated.normalize() {
             self.status = error;
-            return Task::none();
+            cx.notify();
+            return;
         }
 
         if let Err(error) = validate_hotkeys(&updated) {
             self.status = error;
-            return Task::none();
+            cx.notify();
+            return;
         }
 
         if self.launch_mode == LaunchMode::ApiKey
@@ -721,7 +692,8 @@ impl SettingsWindow {
                 .is_none_or(|value| value.trim().is_empty())
         {
             self.status = "API key is required to continue".to_string();
-            return Task::none();
+            cx.notify();
+            return;
         }
 
         if let Some(app) = &self.app {
@@ -732,17 +704,20 @@ impl SettingsWindow {
                 }
                 Err(error) => {
                     self.status = error;
-                    return Task::none();
+                    cx.notify();
+                    return;
                 }
             }
         } else {
             if let Err(error) = config::save(&updated) {
                 self.status = error;
-                return Task::none();
+                cx.notify();
+                return;
             }
             if let Err(error) = config::ensure_backup(&updated) {
                 self.status = error;
-                return Task::none();
+                cx.notify();
+                return;
             }
 
             self.last_loaded_config_write_time = std::fs::metadata(config::config_path())
@@ -752,17 +727,13 @@ impl SettingsWindow {
         }
 
         self.status = "Settings saved".to_string();
-
         if self.launch_mode == LaunchMode::ApiKey {
-            if let Some(tx) = self.completion.take() {
-                let _ = tx.send(updated.api_key.clone());
+            if let Some(completion) = &self.completion {
+                completion.send(updated.api_key.clone());
             }
-            if let Some(id) = self.current_window {
-                return window::close(id);
-            }
+            window.remove_window();
         }
-
-        Task::none()
+        cx.notify();
     }
 
     fn build_config(&mut self) -> Option<Config> {
@@ -803,316 +774,337 @@ impl SettingsWindow {
                 .unwrap_or_else(|| config::Config::default().vad_silence_ms),
         })
     }
-}
 
-fn update(state: &mut SettingsWindow, message: Message) -> Task<Message> {
-    match message {
-        Message::ApiKeyChanged(value) => state.api_key = value,
-        Message::ModelSelected(value) => {
-            state.model = value;
-            state.language_options = language_options_for_model(&state.model);
-            let selected = deepgram::language_code_from_display(&state.model, &state.language);
-            state.language = selected
-                .and_then(|language| {
-                    deepgram::languages_for_model(&state.model)
-                        .iter()
-                        .find(|option| option.code.eq_ignore_ascii_case(&language))
-                        .map(deepgram::language_display)
-                })
-                .unwrap_or_else(|| deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string());
-        }
-        Message::LanguageSelected(value) => state.language = value,
-        Message::SmartFormatToggled(value) => state.smart_format = value,
-        Message::KeyTermsChanged(value) => state.key_terms = value,
-        Message::PushToTalkChanged(value) => state.push_to_talk = value,
-        Message::KeepTalkingChanged(value) => state.keep_talking = value,
-        Message::StreamingChanged(value) => state.streaming = value,
-        Message::ResendChanged(value) => state.resend_selected = value,
-        Message::AudioInputSelected(value) => {
-            state.audio_input = value;
-            state.restart_meter();
-        }
-        Message::HistoryLimitChanged(value) => state.history_limit = value,
-        Message::OutputModeSelected(value) => state.output_mode = value,
-        Message::AppendNewlineToggled(value) => state.append_newline = value,
-        Message::ReloadPressed => state.reload_from_disk(),
-        Message::SavePressed => return state.save(),
-        Message::KeyboardEvent(event) => {
-            if is_save_shortcut(&event) {
-                return state.save();
-            }
-        }
-        Message::CloseRequested(id) => {
-            if state.launch_mode == LaunchMode::ApiKey {
-                if let Some(tx) = state.completion.take() {
-                    let _ = tx.send(None);
-                }
-                state.window_visible = false;
-                state.restart_meter();
-                state.current_window = None;
-                return window::close(id);
-            }
-
-            state.window_visible = false;
-            state.restart_meter();
-            return Task::batch([
-                window::set_mode(id, window::Mode::Hidden),
-                window::minimize(id, true),
-            ]);
-        }
-        Message::WindowOpened(id) => {
-            state.current_window = Some(id);
-            state.window_visible = true;
-            state.restart_meter();
-            return Task::batch([
-                window::set_mode(id, window::Mode::Windowed),
-                window::minimize(id, false),
-                window::gain_focus(id),
-            ]);
-        }
-        Message::WindowClosed(id) => {
-            if state.current_window == Some(id) {
-                state.current_window = None;
-            }
-            state.window_visible = false;
-            state.restart_meter();
-        }
-        Message::Tick => return state.tick(),
+    fn on_save_action(&mut self, _: &SaveSettings, window: &mut Window, cx: &mut Context<Self>) {
+        self.save(window, cx);
     }
 
-    Task::none()
-}
+    fn on_reload_click(
+        &mut self,
+        _: &gpui::ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.reload_from_disk(window, cx);
+    }
 
-fn subscription(_state: &SettingsWindow) -> Subscription<Message> {
-    Subscription::batch([
-        iced::time::every(UI_TICK_INTERVAL).map(|_| Message::Tick),
-        keyboard::listen().map(Message::KeyboardEvent),
-        window::close_requests().map(Message::CloseRequested),
-        window::close_events().map(Message::WindowClosed),
-    ])
-}
+    fn on_save_click(&mut self, _: &gpui::ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.save(window, cx);
+    }
 
-fn view(state: &SettingsWindow, _window: window::Id) -> Element<'_, Message> {
-    let transcription = section(
-        "Transcription",
-        column![
-            text_input("Deepgram API key", &state.api_key)
-                .on_input(Message::ApiKeyChanged)
-                .secure(true)
-                .font(body_font())
-                .padding(14)
-                .size(15)
-                .style(input_style),
-            pick_list(
-                model_options(),
-                Some(state.model.clone()),
-                Message::ModelSelected
+    fn on_smart_format_click(&mut self, checked: &bool, _: &mut Window, cx: &mut Context<Self>) {
+        self.smart_format = *checked;
+        cx.notify();
+    }
+
+    fn on_append_newline_click(&mut self, checked: &bool, _: &mut Window, cx: &mut Context<Self>) {
+        self.append_newline = *checked;
+        cx.notify();
+    }
+
+    fn render_api_key_prompt(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        v_flex()
+            .gap_4()
+            .w_full()
+            .child(
+                GroupBox::new().outline().title("Configuration").child(
+                    v_form().with_size(Size::Large).child(
+                        field()
+                            .label("Deepgram API key")
+                            .child(Input::new(&self.api_key_input).w_full()),
+                    ),
+                ),
             )
-            .font(body_font())
-            .padding(14)
-            .text_size(15)
-            .style(pick_list_style)
-            .menu_style(pick_list_menu_style),
-            pick_list(
-                state.language_options.clone(),
-                Some(state.language.clone()),
-                Message::LanguageSelected
+            .child(self.render_status_box(cx))
+            .child(
+                h_flex().justify_end().gap_3().child(
+                    Button::new("save-api-key")
+                        .primary()
+                        .label("Save")
+                        .on_click(cx.listener(Self::on_save_click)),
+                ),
             )
-            .font(body_font())
-            .padding(14)
-            .text_size(15)
-            .style(pick_list_style)
-            .menu_style(pick_list_menu_style),
-            checkbox(state.smart_format)
-                .label("Enable smart formatting")
-                .on_toggle(Message::SmartFormatToggled)
-                .spacing(12)
-                .size(20)
-                .text_size(15)
-                .font(body_font())
-                .style(checkbox_style),
-            text_input("Recognition key terms, comma-separated", &state.key_terms)
-                .on_input(Message::KeyTermsChanged)
-                .font(body_font())
-                .padding(14)
-                .size(15)
-                .style(input_style),
-        ]
-        .spacing(SECTION_SPACING),
-    );
+            .map(move |this| {
+                this.on_action(cx.listener(Self::on_save_action))
+                    .key_context(KEY_CONTEXT)
+                    .size_full()
+                    .p_6()
+                    .bg(cx.theme().background)
+                    .text_color(cx.theme().foreground)
+            })
+    }
 
-    let hotkeys = section(
-        "Hotkeys",
-        column![
-            text_input("Push to talk", &state.push_to_talk)
-                .on_input(Message::PushToTalkChanged)
-                .font(body_font())
-                .padding(14)
-                .size(15)
-                .style(input_style),
-            text_input("Keep talking", &state.keep_talking)
-                .on_input(Message::KeepTalkingChanged)
-                .font(body_font())
-                .padding(14)
-                .size(15)
-                .style(input_style),
-            text_input("Streaming", &state.streaming)
-                .on_input(Message::StreamingChanged)
-                .font(body_font())
-                .padding(14)
-                .size(15)
-                .style(input_style),
-            text_input("Resend selected transcript", &state.resend_selected)
-                .on_input(Message::ResendChanged)
-                .font(body_font())
-                .padding(14)
-                .size(15)
-                .style(input_style),
-        ]
-        .spacing(SECTION_SPACING),
-    );
-
-    let audio_output = section(
-        "Audio And Output",
-        column![
-            pick_list(
-                state.audio_inputs.clone(),
-                Some(state.audio_input.clone()),
-                Message::AudioInputSelected
-            )
-            .font(body_font())
-            .padding(14)
-            .text_size(15)
-            .style(pick_list_style)
-            .menu_style(pick_list_menu_style),
-            progress_bar(0.0..=100.0, state.meter_level as f32).style(meter_style),
-            text(&state.meter_label)
-                .size(14)
-                .font(body_font())
-                .color(secondary_text()),
-            pick_list(
-                output_mode_options(),
-                Some(state.output_mode.clone()),
-                Message::OutputModeSelected
-            )
-            .font(body_font())
-            .padding(14)
-            .text_size(15)
-            .style(pick_list_style)
-            .menu_style(pick_list_menu_style),
-            text_input("Recent history limit", &state.history_limit)
-                .on_input(Message::HistoryLimitChanged)
-                .font(body_font())
-                .padding(14)
-                .size(15)
-                .style(input_style),
-            checkbox(state.append_newline)
-                .label("Append newline after transcript")
-                .on_toggle(Message::AppendNewlineToggled)
-                .spacing(12)
-                .size(20)
-                .text_size(15)
-                .font(body_font())
-                .style(checkbox_style),
-        ]
-        .spacing(SECTION_SPACING),
-    );
-
-    let mut status_column = column![
-        text(state.launch_mode.subtitle())
-            .size(13)
-            .font(label_font())
-            .color(muted_text()),
-        text(state.runtime_status())
-            .size(15)
-            .font(body_font())
-            .color(secondary_text()),
-    ]
-    .spacing(10);
-
-    if state.config_changed_externally {
-        status_column = status_column.push(
-            text(
-                "The configuration file changed on disk. Reload before saving to avoid overwriting newer values."
-            )
-            .size(14)
-            .font(body_font())
-            .color(primary_text()),
+    fn render_settings(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let transcription = GroupBox::new().outline().title("Transcription").child(
+            v_form()
+                .with_size(Size::Large)
+                .child(
+                    field()
+                        .label("Deepgram API key")
+                        .child(Input::new(&self.api_key_input).w_full()),
+                )
+                .child(
+                    field()
+                        .label("Model")
+                        .child(Select::new(&self.model_select).w_full()),
+                )
+                .child(
+                    field()
+                        .label("Language")
+                        .child(Select::new(&self.language_select).w_full()),
+                )
+                .child(
+                    field().label("Smart format").child(
+                        Switch::new("smart-format")
+                            .checked(self.smart_format)
+                            .label("Enable smart formatting")
+                            .on_click(cx.listener(Self::on_smart_format_click)),
+                    ),
+                )
+                .child(
+                    field()
+                        .label("Key terms")
+                        .child(Input::new(&self.key_terms_input).w_full()),
+                ),
         );
-    }
 
-    if !state.status.is_empty() {
-        status_column = status_column.push(
-            text(&state.status)
-                .size(14)
-                .font(body_font())
-                .color(subtle_status_color(&state.status)),
+        let hotkeys = GroupBox::new().outline().title("Hotkeys").child(
+            v_form()
+                .with_size(Size::Large)
+                .child(
+                    field()
+                        .label("Push to talk")
+                        .child(Input::new(&self.push_to_talk_input).w_full()),
+                )
+                .child(
+                    field()
+                        .label("Keep talking")
+                        .child(Input::new(&self.keep_talking_input).w_full()),
+                )
+                .child(
+                    field()
+                        .label("Streaming")
+                        .child(Input::new(&self.streaming_input).w_full()),
+                )
+                .child(
+                    field()
+                        .label("Resend selected")
+                        .child(Input::new(&self.resend_selected_input).w_full()),
+                ),
         );
+
+        let audio_output = GroupBox::new().outline().title("Audio and output").child(
+            v_form()
+                .with_size(Size::Large)
+                .child(
+                    field()
+                        .label("Microphone")
+                        .child(Select::new(&self.audio_input_select).w_full()),
+                )
+                .child(
+                    field().label("Mic activity").child(
+                        v_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(Progress::new("mic-meter").value(self.meter_level as f32))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(self.meter_label.clone()),
+                            ),
+                    ),
+                )
+                .child(
+                    field()
+                        .label("Output mode")
+                        .child(Select::new(&self.output_mode_select).w_full()),
+                )
+                .child(
+                    field()
+                        .label("History limit")
+                        .child(Input::new(&self.history_limit_input).w_full()),
+                )
+                .child(
+                    field().label("Append newline").child(
+                        Switch::new("append-newline")
+                            .checked(self.append_newline)
+                            .label("Append newline after transcript")
+                            .on_click(cx.listener(Self::on_append_newline_click)),
+                    ),
+                ),
+        );
+
+        let actions = h_flex()
+            .justify_end()
+            .gap_3()
+            .child(
+                Button::new("reload")
+                    .outline()
+                    .label("Reload")
+                    .on_click(cx.listener(Self::on_reload_click)),
+            )
+            .child(
+                Button::new("save")
+                    .primary()
+                    .label("Save")
+                    .on_click(cx.listener(Self::on_save_click)),
+            );
+
+        div()
+            .on_action(cx.listener(Self::on_save_action))
+            .key_context(KEY_CONTEXT)
+            .size_full()
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
+            .overflow_y_scrollbar()
+            .child(
+                v_flex()
+                    .gap_6()
+                    .p_6()
+                    .w_full()
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("DEEPGRAM // VELOCITY"),
+                            )
+                            .child(
+                                div()
+                                    .text_3xl()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .child(self.launch_mode.title()),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(self.launch_mode.subtitle()),
+                            ),
+                    )
+                    .child(transcription)
+                    .child(hotkeys)
+                    .child(audio_output)
+                    .child(self.render_status_box(cx))
+                    .child(actions),
+            )
     }
 
-    let status = container(status_column.spacing(10))
-        .padding(18)
-        .style(status_panel_style(state.config_changed_externally));
+    fn render_status_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut status = v_flex()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(self.launch_mode.subtitle()),
+            )
+            .child(div().text_sm().child(self.runtime_status()));
 
-    let actions = row![
-        button(text("Reload").font(label_font()).size(15))
-            .padding(14)
-            .style(secondary_button_style)
-            .on_press(Message::ReloadPressed),
-        button(text("Save").font(label_font()).size(15))
-            .padding(14)
-            .style(primary_button_style)
-            .on_press(Message::SavePressed),
-    ]
-    .spacing(12);
+        if self.config_changed_externally {
+            status = status.child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().warning)
+                    .child(
+                        "The configuration file changed on disk. Reload before saving to avoid overwriting newer values.",
+                    ),
+            );
+        }
 
-    let content = column![
-        text("DEEPGRAM // VELOCITY")
-            .size(12)
-            .font(label_font())
-            .color(muted_text()),
-        text(state.window_title())
-            .size(40)
-            .font(heading_font())
-            .color(primary_text()),
-        text(state.launch_mode.subtitle())
-            .size(16)
-            .font(body_font())
-            .color(secondary_text()),
-        transcription,
-        hotkeys,
-        audio_output,
-        section("Status", status),
-        actions,
-    ]
-    .spacing(24)
-    .padding(28)
-    .max_width(720);
+        if !self.status.is_empty() {
+            status = status.child(
+                div()
+                    .text_sm()
+                    .text_color(status_color(&self.status, cx))
+                    .child(self.status.clone()),
+            );
+        }
 
-    container(
-        container(scrollable(content))
-            .max_width(760)
-            .style(panel_style()),
-    )
-    .padding(18)
-    .style(page_style())
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+        GroupBox::new().outline().title("Status").child(status)
+    }
 }
 
-fn section<'a>(title: &'a str, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
-    container(
-        column![
-            text(title).size(13).font(label_font()).color(muted_text()),
-            content.into()
-        ]
-        .spacing(16),
+impl Render for SettingsView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.launch_mode == LaunchMode::ApiKey {
+            self.render_api_key_prompt(window, cx).into_any_element()
+        } else {
+            self.render_settings(window, cx).into_any_element()
+        }
+    }
+}
+
+fn subscribe_input_string(
+    cx: &mut Context<SettingsView>,
+    window: &mut Window,
+    input: &Entity<InputState>,
+    on_change: impl Fn(&mut SettingsView, String, &mut Window, &mut Context<SettingsView>) + 'static,
+) -> Subscription {
+    let input = input.clone();
+    let observed_input = input.clone();
+    cx.subscribe_in(
+        &input,
+        window,
+        move |this, _, event: &InputEvent, window, cx| {
+            if matches!(event, InputEvent::Change) {
+                on_change(this, observed_input.read(cx).value().to_string(), window, cx);
+            }
+        },
     )
-    .padding(20)
-    .style(panel_style())
-    .width(Length::Fill)
-    .into()
+}
+
+fn subscribe_select_string(
+    cx: &mut Context<SettingsView>,
+    window: &mut Window,
+    select: &Entity<SelectState<Vec<String>>>,
+    on_change: impl Fn(&mut SettingsView, String, &mut Window, &mut Context<SettingsView>) + 'static,
+) -> Subscription {
+    let select = select.clone();
+    cx.subscribe_in(
+        &select,
+        window,
+        move |this, _, event: &SelectEvent<Vec<String>>, window, cx| {
+            let SelectEvent::Confirm(Some(value)) = event else {
+                return;
+            };
+            on_change(this, value.to_string(), window, cx);
+        },
+    )
+}
+
+fn status_color(status: &str, cx: &App) -> gpui::Hsla {
+    let lower = status.to_ascii_lowercase();
+    if lower.contains("fail")
+        || lower.contains("error")
+        || lower.contains("required")
+        || lower.contains("reject")
+        || lower.contains("invalid")
+    {
+        cx.theme().danger
+    } else if lower.contains("saved") || lower.contains("loaded") {
+        cx.theme().success
+    } else {
+        cx.theme().muted_foreground
+    }
+}
+
+fn index_path_for(value: &String, items: &[String]) -> Option<gpui_component::IndexPath> {
+    items
+        .iter()
+        .position(|candidate| candidate == value)
+        .map(|row| gpui_component::IndexPath::default().row(row))
 }
 
 fn validate_hotkeys(config: &Config) -> Result<(), String> {
@@ -1121,15 +1113,6 @@ fn validate_hotkeys(config: &Config) -> Result<(), String> {
     hotkey::parse_hotkey(&config.hotkeys.streaming)?;
     hotkey::parse_hotkey(&config.hotkeys.resend_selected)?;
     Ok(())
-}
-
-fn is_save_shortcut(event: &keyboard::Event) -> bool {
-    match event {
-        keyboard::Event::KeyPressed { key, modifiers, .. } if modifiers.command() => {
-            matches!(key.as_ref(), keyboard::Key::Character("s" | "S"))
-        }
-        _ => false,
-    }
 }
 
 fn format_meter_text(level: u8) -> String {

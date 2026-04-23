@@ -10,6 +10,3 @@ members = [
   "velocity",
 ]
 resolver = "3"
-
-[patch.crates-io]
-iced_winit = { path = "velocity/vendor/iced_winit" }
