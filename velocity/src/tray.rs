@@ -53,7 +53,7 @@ pub fn create_tray_window() -> HWND {
     }
 }
 
-unsafe fn load_icon() -> HICON {
+pub(crate) unsafe fn load_icon() -> HICON {
     // Decode the embedded PNG into BGRA pixels.
     let decoder = Decoder::new(std::io::Cursor::new(ICON_PNG));
     let mut reader = match decoder.read_info() {

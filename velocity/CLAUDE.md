@@ -4,7 +4,7 @@
 
 Velocity is a Windows 11 speech-to-text tray application written entirely in Rust.
 
-There is no C# or .NET settings sidecar. The API key onboarding flow and the full settings window are implemented in Rust with `iced` and ship as part of `velocity.exe`.
+There is no C# or .NET settings sidecar. The API key onboarding flow and the full settings window are implemented in Rust with GPUI and ship as part of `velocity.exe`.
 
 ## Current UI Architecture
 
@@ -15,11 +15,9 @@ There is no C# or .NET settings sidecar. The API key onboarding flow and the ful
 
 ## Windowing Constraint
 
-The `iced` window currently runs on a spawned thread, not on the main tray thread.
+The GPUI settings window currently runs on a spawned thread, not on the main tray thread.
 
-Because `winit 0.30` rejects off-main-thread event loops by default on Windows, the repo vendors `iced_winit` under `vendor/iced_winit/` and patches it via the workspace root `Cargo.toml` to enable `EventLoopBuilderExtWindows::with_any_thread(true)`.
-
-If the vendored patch is removed or bypassed, opening the settings window will panic.
+The settings entry points live in [src/settings.rs](C:/git/deepgram-demos-rust/velocity/src/settings.rs). Keep the GPUI application/window lifecycle contained there unless the tray architecture is changed deliberately.
 
 ## Single-Instance Requirements
 
@@ -47,7 +45,7 @@ The relevant flow is:
 - [src/tray.rs](C:/git/deepgram-demos-rust/velocity/src/tray.rs) handles `WM_APP_SAVE_CONFIG`
 - [src/state.rs](C:/git/deepgram-demos-rust/velocity/src/state.rs) applies hotkeys, saves the config file, updates runtime state, and reports the result back
 
-Do not move hotkey registration back into the `iced` settings thread. That causes `RegisterHotKey` failures such as "Invalid window; it belongs to other thread."
+Do not move hotkey registration back into the GPUI settings thread. That causes `RegisterHotKey` failures such as "Invalid window; it belongs to other thread."
 
 ## Functional Requirements
 
@@ -68,10 +66,25 @@ The Rust settings UI must retain all current configuration functionality:
 - config-changed-on-disk warning
 - validation and status/error text
 
+Failures must be visible in the settings window, not only in logs. Plain text fields should validate as close to real time as GPUI allows; current examples are the hotkey fields and transcript History limit field.
+
 ## Keyboard UX
 
 - `Ctrl+S` in the settings UI should trigger the same save path as the Save button.
 - The Save button and `Ctrl+S` must use identical validation and persistence behavior.
+
+## Settings UI Color Rules
+
+- The `Velocity Settings` heading uses a per-character text gradient:
+  - left: RGB `#12B8D8`
+  - middle: RGB `#20D6B7`
+  - right: HSV `155 92 85`, RGB `#11D986`
+- Reuse the same HSV `155 92 85` / RGB `#11D986` green for non-gradient success accents, including Status success text and the unsaved-changes banner background.
+- Immediate validation borders use a 2px left-to-right linear gradient overlay clipped to the text box radius:
+  - left: HSV `324 99 92`, RGB `#EB028E`
+  - right: HSV `278 84 99`, RGB `#AF28FC`
+- When the validation gradient is active on a text field, set the text field's own border to the window background and disable its focus border so only the gradient border is visible.
+- Use the validation gradient frame for invalid History limit and hotkey inputs. Do not show inline unsupported-hotkey helper text under hotkey fields.
 
 ## Configuration Rules
 
@@ -80,6 +93,7 @@ The Rust settings UI must retain all current configuration functionality:
 - Continue using `%USERPROFILE%\.config\deepgram\velocity-history.yml`.
 - Preserve compatibility with the current config schema.
 - Reject invalid values without corrupting the last known good runtime state.
+- The transcript History limit setting must validate as a number from `1` through `100`.
 
 ## Error Handling Expectations
 

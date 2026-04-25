@@ -32,7 +32,9 @@ Pressing **Ctrl+Win+[** activates streaming mode using the Deepgram WebSocket AP
 
 ### Settings
 
-The settings window is available from the tray menu and is implemented directly in Rust with `iced`. Only one settings window can exist at a time. It lets you configure:
+The settings window is available from the tray menu and is implemented directly in Rust with GPUI. It ships inside `velocity.exe`, so there is no separate settings sidecar to install or launch. Only one settings window can exist at a time; choosing `Settings` again focuses the existing window.
+
+It lets you configure:
 
 - Deepgram API key
 - transcription model
@@ -45,7 +47,9 @@ The settings window is available from the tray menu and is implemented directly 
 - append newline after transcript
 - transcript history retention
 
-When the settings window is open, the selected microphone shows a live activity indicator.
+The current settings UI uses a compact dark layout with a Deepgram gradient heading, hover feedback on each settings section, and an unsaved-changes banner when edited values differ from the last saved configuration. Plain text fields validate as you type: invalid hotkeys and out-of-range history limits are framed with a bright validation border before save. Save failures, runtime errors, and config reload warnings are shown in the settings status area and reflected through the tray status.
+
+When the settings window is open, the selected microphone shows a live activity indicator and the Status section shows recording, keep-talking, and streaming state.
 
 ### Transcript History
 

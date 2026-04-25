@@ -22,6 +22,12 @@
 
 ## User Interface Design
 
+For graphical or desktop settings interfaces:
+
+- Surface failures visibly in the UI instead of only logging them.
+- Validate plain text fields as close to real time as the toolkit allows, and use visible styling to show invalid values before a save or submit action.
+- Preserve keyboard access for common commands such as Save when the interface supports it.
+
 For Terminal User Interface (TUI) applications, keep the following items in mind regarding the user interface design:
 
 - **Colors**: Use colors, and shades of colors, creatively to indicate what is currently selected or in focus

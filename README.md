@@ -50,7 +50,7 @@ Use these ideas to inspire business and application ideas you could build with D
 | [Flux Turn-Taking](flux-turn-taking/) | Real-time audio streaming to Deepgram Flux API for speech recognition | STT |
 | [TTS TUI](tts-tui/) | Terminal UI for interacting with Deepgram TTS | TTS |
 | [Audio Recorder](audio-recorder/) | An audio recording application, from local input devices | --- |
-| [Velocity](velocity/) | Windows 11 tray dictation app with configurable hotkeys, microphone selection, transcript history, and WinUI settings | STT |
+| [Velocity](velocity/) | Windows 11 tray dictation app with configurable hotkeys, microphone selection, transcript history, and built-in Rust/GPUI settings | STT |
 
 ## License
 

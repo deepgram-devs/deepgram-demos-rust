@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 - 2026-04-25
+
+- Replaced the Rust settings prototype with the current GPUI settings and onboarding window.
+- Added a compact dark settings layout with Deepgram heading gradients, section hover feedback, app icon integration, and a visible unsaved-changes banner.
+- Added immediate visual validation for invalid hotkeys and transcript history limits.
+- Added richer runtime status feedback in the settings window, including mode tiles, visible failure states, and active microphone display.
+- Kept settings persistence on the tray thread so hotkey updates roll back safely when registration fails.
+- Removed the legacy WinUI/.NET settings sidecar from the release path; Velocity now ships as a single Windows executable.
+
 ## 0.3.5 - 2026-04-21
 
 - Replaced the legacy settings implementations with a single Rust `iced` settings and onboarding UI.

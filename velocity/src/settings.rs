@@ -5,14 +5,15 @@ use std::{panic, sync::mpsc};
 
 use anyhow::Result;
 use gpui::{
-    App, Bounds, Context, Entity, IntoElement, KeyBinding, ParentElement as _, Render,
-    Subscription, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, size,
+    Animation, AnimationExt as _, App, Bounds, Context, Entity, InteractiveElement as _,
+    IntoElement, KeyBinding, ParentElement as _, Render, StatefulInteractiveElement as _,
+    StyledText, Subscription, Window, WindowBounds, WindowOptions, actions, div, ease_in_out,
+    prelude::*, px, size,
 };
 use gpui_component::{
-    ActiveTheme, Root, Sizable, Size,
+    ActiveTheme, Colorize as _, Root, Sizable, Size, Theme, ThemeMode,
     button::{Button, ButtonVariants as _},
     form::{field, v_form},
-    group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
     progress::Progress,
@@ -21,8 +22,12 @@ use gpui_component::{
     switch::Switch,
     v_flex,
 };
-use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, SW_RESTORE, SetForegroundWindow, ShowWindow,
+use windows::Win32::{
+    Foundation::{LPARAM, WPARAM},
+    UI::WindowsAndMessaging::{
+        FindWindowW, ICON_BIG, ICON_SMALL, SW_RESTORE, SendMessageW, SetForegroundWindow,
+        ShowWindow, WM_SETICON,
+    },
 };
 use windows::core::PCWSTR;
 
@@ -32,6 +37,7 @@ use crate::deepgram;
 use crate::hotkey;
 use crate::logger;
 use crate::state;
+use crate::tray;
 
 actions!(velocity_settings, [SaveSettings]);
 
@@ -41,14 +47,72 @@ const API_KEY_TITLE: &str = "Velocity API Key";
 const UI_TICK_INTERVAL: Duration = Duration::from_millis(50);
 const CONFIG_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const KEY_CONTEXT: &str = "VelocitySettings";
+const DEEPGRAM_GRADIENT_LEFT_RGB: u32 = 0x12B8D8;
+const DEEPGRAM_GRADIENT_MID_RGB: u32 = 0x20D6B7;
+const DEEPGRAM_GRADIENT_RIGHT_RGB: u32 = 0x11D986;
+const VALIDATION_GRADIENT_LEFT_RGB: u32 = 0xEB028E;
+const VALIDATION_GRADIENT_RIGHT_RGB: u32 = 0xAF28FC;
+const MAX_HISTORY_LIMIT: usize = 100;
+const SECTION_HOVER_ANIMATION: Duration = Duration::from_millis(150);
 
 static SETTINGS_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 static API_KEY_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SettingsSnapshot {
+    api_key: String,
+    model: String,
+    language: String,
+    smart_format: bool,
+    key_terms: String,
+    push_to_talk: String,
+    keep_talking: String,
+    streaming: String,
+    resend_selected: String,
+    audio_input: String,
+    history_limit: String,
+    output_mode: String,
+    append_newline: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LaunchMode {
     Settings,
     ApiKey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsSection {
+    Configuration,
+    Transcription,
+    Hotkeys,
+    AudioOutput,
+    Status,
+}
+
+impl SettingsSection {
+    fn id(self) -> &'static str {
+        match self {
+            SettingsSection::Configuration => "settings-section-configuration",
+            SettingsSection::Transcription => "settings-section-transcription",
+            SettingsSection::Hotkeys => "settings-section-hotkeys",
+            SettingsSection::AudioOutput => "settings-section-audio-output",
+            SettingsSection::Status => "settings-section-status",
+        }
+    }
+
+    fn animation_id(self, hovered: bool) -> String {
+        let section = match self {
+            SettingsSection::Configuration => "configuration",
+            SettingsSection::Transcription => "transcription",
+            SettingsSection::Hotkeys => "hotkeys",
+            SettingsSection::AudioOutput => "audio-output",
+            SettingsSection::Status => "status",
+        };
+        let state = if hovered { "hovered" } else { "idle" };
+
+        format!("settings-section-{section}-{state}")
+    }
 }
 
 impl LaunchMode {
@@ -126,7 +190,8 @@ fn run_window(
         let app_instance = gpui_platform::application();
         app_instance.run(move |cx| {
             gpui_component::init(cx);
-            cx.bind_keys([KeyBinding::new("ctrl-s", SaveSettings, Some(KEY_CONTEXT))]);
+            Theme::change(ThemeMode::Dark, None, cx);
+            cx.bind_keys([KeyBinding::new("ctrl-s", SaveSettings, None)]);
             cx.on_window_closed(|cx, _window_id| {
                 if cx.windows().is_empty() {
                     cx.quit();
@@ -138,14 +203,14 @@ fn run_window(
                 None,
                 size(
                     px(if launch_mode == LaunchMode::Settings {
-                        920.
+                        515.
                     } else {
-                        760.
+                        426.
                     }),
                     px(if launch_mode == LaunchMode::Settings {
-                        980.
+                        686.
                     } else {
-                        380.
+                        266.
                     }),
                 ),
                 cx,
@@ -202,6 +267,33 @@ fn focus_existing_window(title: &str) {
     }
 }
 
+fn set_window_icon(title: &str) {
+    let title = to_wide(title);
+    unsafe {
+        let Ok(hwnd) = FindWindowW(None, PCWSTR(title.as_ptr())) else {
+            return;
+        };
+        let small_icon = tray::load_icon();
+        let big_icon = tray::load_icon();
+        if !small_icon.is_invalid() {
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(ICON_SMALL as usize)),
+                Some(LPARAM(small_icon.0 as isize)),
+            );
+        }
+        if !big_icon.is_invalid() {
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(ICON_BIG as usize)),
+                Some(LPARAM(big_icon.0 as isize)),
+            );
+        }
+    }
+}
+
 fn to_wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -241,6 +333,9 @@ struct SettingsView {
     meter_label: String,
     status: String,
     config_changed_externally: bool,
+    hovered_section: Option<SettingsSection>,
+    section_hover_transitions: Vec<(SettingsSection, bool)>,
+    saved_snapshot: Option<SettingsSnapshot>,
     last_loaded_config_write_time: Option<SystemTime>,
     last_config_change_check: Instant,
     _subscriptions: Vec<Subscription>,
@@ -255,6 +350,7 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) -> Self {
         window.set_window_title(launch_mode.title());
+        set_window_icon(launch_mode.title());
 
         let model_items = model_options();
         let language_items = vec![deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string()];
@@ -353,6 +449,9 @@ impl SettingsView {
             meter_label: "Mic activity: unavailable".to_string(),
             status: String::new(),
             config_changed_externally: false,
+            hovered_section: None,
+            section_hover_transitions: Vec::new(),
+            saved_snapshot: None,
             last_loaded_config_write_time: None,
             last_config_change_check: Instant::now(),
             _subscriptions: Vec::new(),
@@ -484,30 +583,16 @@ impl SettingsView {
         let _ = cx;
     }
 
-    fn runtime_status(&self) -> String {
-        if let Some(app) = &self.app {
-            if let Some(error) = app.last_error() {
-                return error;
-            }
-
-            let config = app.config();
-            return format!(
-                "Current mode: recording={} keep-talking={} streaming={} selected mic={}",
-                app.is_recording(),
-                app.is_keep_talking(),
-                app.is_streaming(),
-                config
-                    .audio_input
-                    .as_deref()
-                    .unwrap_or(DEFAULT_AUDIO_INPUT_LABEL),
-            );
-        }
-
-        "Configuration required before Velocity can start recording".to_string()
-    }
-
     fn selected_audio_input(&self) -> Option<&str> {
         (self.audio_input != DEFAULT_AUDIO_INPUT_LABEL).then_some(self.audio_input.as_str())
+    }
+
+    fn runtime_audio_input(&self) -> String {
+        self.app
+            .as_ref()
+            .map(|app| app.config())
+            .and_then(|config| config.audio_input)
+            .unwrap_or_else(|| DEFAULT_AUDIO_INPUT_LABEL.to_string())
     }
 
     fn refresh_audio_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -634,6 +719,7 @@ impl SettingsView {
 
         self.restart_meter();
         self.meter_label = format_meter_text(self.meter_level);
+        self.saved_snapshot = Some(self.current_snapshot());
     }
 
     fn refresh_language_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -701,6 +787,7 @@ impl SettingsView {
                 Ok(modified_at) => {
                     self.last_loaded_config_write_time = modified_at;
                     self.config_changed_externally = false;
+                    self.saved_snapshot = Some(self.current_snapshot());
                 }
                 Err(error) => {
                     self.status = error;
@@ -724,6 +811,7 @@ impl SettingsView {
                 .ok()
                 .and_then(|meta| meta.modified().ok());
             self.config_changed_externally = false;
+            self.saved_snapshot = Some(self.current_snapshot());
         }
 
         self.status = "Settings saved".to_string();
@@ -740,7 +828,9 @@ impl SettingsView {
         let history_limit = match self.history_limit.trim().parse::<usize>() {
             Ok(value) if value > 0 => value,
             _ => {
-                self.status = "History limit must be a positive number".to_string();
+                self.status = history_limit_error(&self.history_limit)
+                    .unwrap_or_default()
+                    .to_string();
                 return None;
             }
         };
@@ -773,6 +863,30 @@ impl SettingsView {
                 .map(|app| app.config().vad_silence_ms)
                 .unwrap_or_else(|| config::Config::default().vad_silence_ms),
         })
+    }
+
+    fn current_snapshot(&self) -> SettingsSnapshot {
+        SettingsSnapshot {
+            api_key: self.api_key.clone(),
+            model: self.model.clone(),
+            language: self.language.clone(),
+            smart_format: self.smart_format,
+            key_terms: self.key_terms.clone(),
+            push_to_talk: self.push_to_talk.clone(),
+            keep_talking: self.keep_talking.clone(),
+            streaming: self.streaming.clone(),
+            resend_selected: self.resend_selected.clone(),
+            audio_input: self.audio_input.clone(),
+            history_limit: self.history_limit.clone(),
+            output_mode: self.output_mode.clone(),
+            append_newline: self.append_newline,
+        }
+    }
+
+    fn has_unsaved_changes(&self) -> bool {
+        self.saved_snapshot
+            .as_ref()
+            .is_some_and(|saved| *saved != self.current_snapshot())
     }
 
     fn on_save_action(&mut self, _: &SaveSettings, window: &mut Window, cx: &mut Context<Self>) {
@@ -811,12 +925,15 @@ impl SettingsView {
             .gap_4()
             .w_full()
             .child(
-                GroupBox::new().outline().title("Configuration").child(
+                self.render_settings_section(
+                    SettingsSection::Configuration,
+                    "Configuration",
                     v_form().with_size(Size::Large).child(
                         field()
                             .label("Deepgram API key")
                             .child(Input::new(&self.api_key_input).w_full()),
                     ),
+                    cx,
                 ),
             )
             .child(self.render_status_box(cx))
@@ -843,7 +960,9 @@ impl SettingsView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let transcription = GroupBox::new().outline().title("Transcription").child(
+        let transcription = self.render_settings_section(
+            SettingsSection::Transcription,
+            "Transcription",
             v_form()
                 .with_size(Size::Large)
                 .child(
@@ -874,34 +993,52 @@ impl SettingsView {
                         .label("Key terms")
                         .child(Input::new(&self.key_terms_input).w_full()),
                 ),
+            cx,
         );
 
-        let hotkeys = GroupBox::new().outline().title("Hotkeys").child(
+        let hotkeys = self.render_settings_section(
+            SettingsSection::Hotkeys,
+            "Hotkeys",
             v_form()
                 .with_size(Size::Large)
                 .child(
                     field()
                         .label("Push to talk")
-                        .child(Input::new(&self.push_to_talk_input).w_full()),
+                        .child(self.render_hotkey_input(
+                            &self.push_to_talk_input,
+                            &self.push_to_talk,
+                            cx,
+                        )),
                 )
                 .child(
                     field()
                         .label("Keep talking")
-                        .child(Input::new(&self.keep_talking_input).w_full()),
+                        .child(self.render_hotkey_input(
+                            &self.keep_talking_input,
+                            &self.keep_talking,
+                            cx,
+                        )),
                 )
-                .child(
-                    field()
-                        .label("Streaming")
-                        .child(Input::new(&self.streaming_input).w_full()),
-                )
+                .child(field().label("Streaming").child(self.render_hotkey_input(
+                    &self.streaming_input,
+                    &self.streaming,
+                    cx,
+                )))
                 .child(
                     field()
                         .label("Resend selected")
-                        .child(Input::new(&self.resend_selected_input).w_full()),
+                        .child(self.render_hotkey_input(
+                            &self.resend_selected_input,
+                            &self.resend_selected,
+                            cx,
+                        )),
                 ),
+            cx,
         );
 
-        let audio_output = GroupBox::new().outline().title("Audio and output").child(
+        let audio_output = self.render_settings_section(
+            SettingsSection::AudioOutput,
+            "Audio and output",
             v_form()
                 .with_size(Size::Large)
                 .child(
@@ -931,7 +1068,7 @@ impl SettingsView {
                 .child(
                     field()
                         .label("History limit")
-                        .child(Input::new(&self.history_limit_input).w_full()),
+                        .child(self.render_history_limit_input(cx)),
                 )
                 .child(
                     field().label("Append newline").child(
@@ -941,6 +1078,7 @@ impl SettingsView {
                             .on_click(cx.listener(Self::on_append_newline_click)),
                     ),
                 ),
+            cx,
         );
 
         let actions = h_flex()
@@ -963,42 +1101,184 @@ impl SettingsView {
             .on_action(cx.listener(Self::on_save_action))
             .key_context(KEY_CONTEXT)
             .size_full()
+            .relative()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .overflow_y_scrollbar()
             .child(
-                v_flex()
-                    .gap_6()
-                    .p_6()
-                    .w_full()
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("DEEPGRAM // VELOCITY"),
-                            )
-                            .child(
-                                div()
-                                    .text_3xl()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .child(self.launch_mode.title()),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(self.launch_mode.subtitle()),
-                            ),
-                    )
-                    .child(transcription)
-                    .child(hotkeys)
-                    .child(audio_output)
-                    .child(self.render_status_box(cx))
-                    .child(actions),
+                div().size_full().overflow_y_scrollbar().child(
+                    v_flex()
+                        .gap_6()
+                        .p_6()
+                        .w_full()
+                        .child(
+                            v_flex()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("DEEPGRAM // VELOCITY"),
+                                )
+                                .child(self.render_gradient_heading()),
+                        )
+                        .child(transcription)
+                        .child(hotkeys)
+                        .child(audio_output)
+                        .child(self.render_status_box(cx))
+                        .child(actions),
+                ),
             )
+            .when(self.has_unsaved_changes(), |this| {
+                this.child(self.render_unsaved_banner(cx))
+            })
+    }
+
+    fn render_gradient_heading(&self) -> impl IntoElement {
+        let title = self.launch_mode.title();
+        let highlights = gradient_text_highlights(title);
+
+        div()
+            .text_3xl()
+            .font_weight(gpui::FontWeight::BOLD)
+            .child(StyledText::new(title).with_highlights(highlights))
+    }
+
+    fn render_unsaved_banner(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .w_full()
+            .h(px(26.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::rgb(DEEPGRAM_GRADIENT_RIGHT_RGB))
+            .text_color(gpui::black())
+            .text_sm()
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .child("Unsaved Changes [Ctrl+S]")
+    }
+
+    fn render_settings_section<T: IntoElement>(
+        &self,
+        section: SettingsSection,
+        title: &'static str,
+        child: T,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<T> {
+        let hovered = self.hovered_section == Some(section);
+        let base_border = cx.theme().border;
+        let hover_border = base_border.darken(0.3);
+        let target_border = if hovered { hover_border } else { base_border };
+        let should_animate = self
+            .section_hover_transitions
+            .iter()
+            .any(|transition| *transition == (section, hovered));
+
+        let content = v_flex()
+            .id(section.id())
+            .border_1()
+            .border_color(target_border)
+            .text_color(cx.theme().group_box_foreground)
+            .p_4()
+            .gap_4()
+            .rounded(cx.theme().radius)
+            .on_hover(cx.listener(move |this, hovered, _, cx| {
+                let was_hovered = this.hovered_section == Some(section);
+                if *hovered {
+                    if !was_hovered {
+                        this.hovered_section = Some(section);
+                        this.remember_section_hover_transition(section, true);
+                        cx.notify();
+                    }
+                } else if was_hovered {
+                    this.hovered_section = None;
+                    this.remember_section_hover_transition(section, false);
+                    cx.notify();
+                }
+            }))
+            .child(child);
+
+        let content = if should_animate {
+            content
+                .with_animation(
+                    section.animation_id(hovered),
+                    Animation::new(SECTION_HOVER_ANIMATION).with_easing(ease_in_out),
+                    move |this, delta| {
+                        let border = if hovered {
+                            base_border.mix(hover_border, 1.0 - delta)
+                        } else {
+                            hover_border.mix(base_border, 1.0 - delta)
+                        };
+
+                        this.border_color(border)
+                    },
+                )
+                .into_any_element()
+        } else {
+            content.into_any_element()
+        };
+
+        div().child(
+            v_flex()
+                .w_full()
+                .gap_3()
+                .child(
+                    div()
+                        .text_color(cx.theme().muted_foreground)
+                        .line_height(gpui::relative(1.))
+                        .child(title),
+                )
+                .child(content),
+        )
+    }
+
+    fn remember_section_hover_transition(&mut self, section: SettingsSection, hovered: bool) {
+        self.section_hover_transitions
+            .retain(|transition| transition.0 != section);
+        self.section_hover_transitions.push((section, hovered));
+    }
+
+    fn render_hotkey_input(
+        &self,
+        input: &Entity<InputState>,
+        value: &str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let input = Input::new(input).w_full();
+        if hotkey::parse_hotkey(value).is_ok() {
+            return input.into_any_element();
+        }
+
+        let input = input
+            .border_color(cx.theme().background)
+            .focus_bordered(false);
+
+        div()
+            .w_full()
+            .relative()
+            .child(input)
+            .child(validation_gradient_border())
+            .into_any_element()
+    }
+
+    fn render_history_limit_input(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let input = Input::new(&self.history_limit_input).w_full();
+        if history_limit_error(&self.history_limit).is_none() {
+            return input.into_any_element();
+        }
+
+        let input = input
+            .border_color(cx.theme().background)
+            .focus_bordered(false);
+
+        div()
+            .w_full()
+            .relative()
+            .child(input)
+            .child(validation_gradient_border())
+            .into_any_element()
     }
 
     fn render_status_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1010,7 +1290,7 @@ impl SettingsView {
                     .text_color(cx.theme().muted_foreground)
                     .child(self.launch_mode.subtitle()),
             )
-            .child(div().text_sm().child(self.runtime_status()));
+            .child(self.render_runtime_status(cx));
 
         if self.config_changed_externally {
             status = status.child(
@@ -1032,7 +1312,203 @@ impl SettingsView {
             );
         }
 
-        GroupBox::new().outline().title("Status").child(status)
+        self.render_settings_section(SettingsSection::Status, "Status", status, cx)
+    }
+
+    fn render_runtime_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(app) = &self.app else {
+            return div()
+                .text_sm()
+                .text_color(cx.theme().danger)
+                .child("Configuration required before Velocity can start recording")
+                .into_any_element();
+        };
+
+        if let Some(error) = app.last_error() {
+            return div()
+                .rounded_md()
+                .border_1()
+                .border_color(cx.theme().danger)
+                .bg(cx.theme().danger.opacity(0.12))
+                .p_3()
+                .text_sm()
+                .text_color(cx.theme().danger)
+                .child(error)
+                .into_any_element();
+        }
+
+        let recording = app.is_recording();
+        let keep_talking = app.is_keep_talking();
+        let streaming = app.is_streaming();
+        let selected = if streaming {
+            "streaming"
+        } else if keep_talking {
+            "keep-talking"
+        } else if recording {
+            "recording"
+        } else {
+            ""
+        };
+
+        v_flex()
+            .gap_2()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(self.render_status_tile(
+                        "PTT",
+                        "Push to talk",
+                        recording,
+                        selected == "recording",
+                        cx,
+                    ))
+                    .child(self.render_status_tile(
+                        "KT",
+                        "Keep talking",
+                        keep_talking,
+                        selected == "keep-talking",
+                        cx,
+                    ))
+                    .child(self.render_status_tile(
+                        "STR",
+                        "Streaming",
+                        streaming,
+                        selected == "streaming",
+                        cx,
+                    )),
+            )
+            .child(self.render_active_microphone_indicator(&self.runtime_audio_input(), cx))
+            .into_any_element()
+    }
+
+    fn render_status_tile(
+        &self,
+        icon: &'static str,
+        label: &'static str,
+        active: bool,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let accent = gpui::rgb(DEEPGRAM_GRADIENT_RIGHT_RGB);
+        let selected_accent = gpui::rgb(DEEPGRAM_GRADIENT_LEFT_RGB);
+        let border = if active {
+            if selected {
+                selected_accent.into()
+            } else {
+                accent.into()
+            }
+        } else {
+            cx.theme().border
+        };
+        let foreground = if active {
+            gpui::black()
+        } else {
+            cx.theme().muted_foreground
+        };
+
+        v_flex()
+            .flex_1()
+            .gap_1()
+            .rounded_md()
+            .border_1()
+            .border_color(border)
+            .bg(if active {
+                accent.into()
+            } else {
+                cx.theme().background
+            })
+            .p_3()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(foreground)
+                            .child(icon),
+                    )
+                    .child(if selected {
+                        self.render_microphone_badge(foreground).into_any_element()
+                    } else {
+                        self.render_status_pill(active, foreground)
+                            .into_any_element()
+                    }),
+            )
+            .child(div().text_xs().text_color(foreground).child(label))
+    }
+
+    fn render_status_pill(&self, active: bool, foreground: gpui::Hsla) -> impl IntoElement {
+        div()
+            .rounded_md()
+            .border_1()
+            .border_color(foreground.opacity(0.35))
+            .px_2()
+            .py_1()
+            .text_xs()
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(foreground)
+            .child(if active { "ON" } else { "OFF" })
+    }
+
+    fn render_active_microphone_indicator(
+        &self,
+        audio_input: &str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let foreground = gpui::rgb(DEEPGRAM_GRADIENT_LEFT_RGB).into();
+
+        h_flex()
+            .gap_3()
+            .items_center()
+            .rounded_md()
+            .border_1()
+            .border_color(gpui::rgb(DEEPGRAM_GRADIENT_LEFT_RGB))
+            .bg(cx.theme().background)
+            .p_3()
+            .child(self.render_microphone_badge(foreground))
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Microphone"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().foreground)
+                            .child(audio_input.to_string()),
+                    ),
+            )
+    }
+
+    fn render_microphone_badge(&self, foreground: gpui::Hsla) -> impl IntoElement {
+        h_flex()
+            .w(px(26.))
+            .h(px(22.))
+            .rounded_md()
+            .border_1()
+            .border_color(foreground.opacity(0.4))
+            .items_center()
+            .justify_center()
+            .child(
+                v_flex()
+                    .items_center()
+                    .child(div().w(px(8.)).h(px(11.)).rounded_md().bg(foreground))
+                    .child(div().w(px(2.)).h(px(4.)).bg(foreground.opacity(0.85)))
+                    .child(
+                        div()
+                            .w(px(12.))
+                            .h(px(2.))
+                            .rounded_md()
+                            .bg(foreground.opacity(0.85)),
+                    ),
+            )
     }
 }
 
@@ -1059,7 +1535,12 @@ fn subscribe_input_string(
         window,
         move |this, _, event: &InputEvent, window, cx| {
             if matches!(event, InputEvent::Change) {
-                on_change(this, observed_input.read(cx).value().to_string(), window, cx);
+                on_change(
+                    this,
+                    observed_input.read(cx).value().to_string(),
+                    window,
+                    cx,
+                );
             }
         },
     )
@@ -1091,13 +1572,76 @@ fn status_color(status: &str, cx: &App) -> gpui::Hsla {
         || lower.contains("required")
         || lower.contains("reject")
         || lower.contains("invalid")
+        || lower.contains("unsupported")
     {
         cx.theme().danger
     } else if lower.contains("saved") || lower.contains("loaded") {
-        cx.theme().success
+        gpui::rgb(DEEPGRAM_GRADIENT_RIGHT_RGB).into()
     } else {
         cx.theme().muted_foreground
     }
+}
+
+fn history_limit_error(value: &str) -> Option<&'static str> {
+    match value.trim().parse::<usize>() {
+        Ok(value) if (1..=MAX_HISTORY_LIMIT).contains(&value) => None,
+        _ => Some("History limit must be a number between 1 and 100"),
+    }
+}
+
+fn validation_gradient_border() -> impl IntoElement {
+    let border_width = px(2.);
+    let horizontal_gradient = || {
+        gpui::linear_gradient(
+            90.,
+            gpui::linear_color_stop(gpui::rgb(VALIDATION_GRADIENT_LEFT_RGB), 0.),
+            gpui::linear_color_stop(gpui::rgb(VALIDATION_GRADIENT_RIGHT_RGB), 1.),
+        )
+    };
+
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .rounded_md()
+        .overflow_hidden()
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .h(border_width)
+                .bg(horizontal_gradient()),
+        )
+        .child(
+            div()
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .right_0()
+                .h(border_width)
+                .bg(horizontal_gradient()),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .w(border_width)
+                .bg(gpui::rgb(VALIDATION_GRADIENT_LEFT_RGB)),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .right_0()
+                .bottom_0()
+                .w(border_width)
+                .bg(gpui::rgb(VALIDATION_GRADIENT_RIGHT_RGB)),
+        )
 }
 
 fn index_path_for(value: &String, items: &[String]) -> Option<gpui_component::IndexPath> {
@@ -1108,10 +1652,15 @@ fn index_path_for(value: &String, items: &[String]) -> Option<gpui_component::In
 }
 
 fn validate_hotkeys(config: &Config) -> Result<(), String> {
-    hotkey::parse_hotkey(&config.hotkeys.push_to_talk)?;
-    hotkey::parse_hotkey(&config.hotkeys.keep_talking)?;
-    hotkey::parse_hotkey(&config.hotkeys.streaming)?;
-    hotkey::parse_hotkey(&config.hotkeys.resend_selected)?;
+    for (label, value) in [
+        ("Push to talk", &config.hotkeys.push_to_talk),
+        ("Keep talking", &config.hotkeys.keep_talking),
+        ("Streaming", &config.hotkeys.streaming),
+        ("Resend selected", &config.hotkeys.resend_selected),
+    ] {
+        hotkey::parse_hotkey(value).map_err(|error| format!("{label}: {error}"))?;
+    }
+
     Ok(())
 }
 
@@ -1168,6 +1717,62 @@ fn model_options() -> Vec<String> {
         .collect()
 }
 
+fn gradient_text_highlights(text: &str) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
+    let char_count = text.chars().count();
+    if char_count == 0 {
+        return Vec::new();
+    }
+
+    text.char_indices()
+        .enumerate()
+        .map(|(index, (start, character))| {
+            let end = start + character.len_utf8();
+            let color = deepgram_gradient_color(index, char_count);
+            (start..end, color.into())
+        })
+        .collect()
+}
+
+fn deepgram_gradient_color(index: usize, char_count: usize) -> gpui::Hsla {
+    const LEFT: (f32, f32, f32) = (
+        ((DEEPGRAM_GRADIENT_LEFT_RGB >> 16) & 0xFF) as f32,
+        ((DEEPGRAM_GRADIENT_LEFT_RGB >> 8) & 0xFF) as f32,
+        (DEEPGRAM_GRADIENT_LEFT_RGB & 0xFF) as f32,
+    );
+    const MID: (f32, f32, f32) = (
+        ((DEEPGRAM_GRADIENT_MID_RGB >> 16) & 0xFF) as f32,
+        ((DEEPGRAM_GRADIENT_MID_RGB >> 8) & 0xFF) as f32,
+        (DEEPGRAM_GRADIENT_MID_RGB & 0xFF) as f32,
+    );
+    const RIGHT: (f32, f32, f32) = (
+        ((DEEPGRAM_GRADIENT_RIGHT_RGB >> 16) & 0xFF) as f32,
+        ((DEEPGRAM_GRADIENT_RIGHT_RGB >> 8) & 0xFF) as f32,
+        (DEEPGRAM_GRADIENT_RIGHT_RGB & 0xFF) as f32,
+    );
+
+    let progress = if char_count <= 1 {
+        0.0
+    } else {
+        index as f32 / (char_count - 1) as f32
+    };
+
+    let (from, to, local_progress) = if progress <= 0.5 {
+        (LEFT, MID, progress / 0.5)
+    } else {
+        (MID, RIGHT, (progress - 0.5) / 0.5)
+    };
+
+    let r = lerp_channel(from.0, to.0, local_progress);
+    let g = lerp_channel(from.1, to.1, local_progress);
+    let b = lerp_channel(from.2, to.2, local_progress);
+
+    gpui::rgb(((r as u32) << 16) | ((g as u32) << 8) | b as u32).into()
+}
+
+fn lerp_channel(from: f32, to: f32, progress: f32) -> u8 {
+    (from + (to - from) * progress).round().clamp(0.0, 255.0) as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1188,5 +1793,44 @@ mod tests {
         let parsed = parse_key_terms_text("PowerShell, Deepgram , Kubernetes,,");
 
         assert_eq!(parsed, vec!["PowerShell", "Deepgram", "Kubernetes"]);
+    }
+
+    #[test]
+    fn validate_hotkeys_names_invalid_field() {
+        let mut config = Config::default();
+        config.hotkeys.streaming = "Win+Hyper+P".to_string();
+
+        let error = validate_hotkeys(&config).unwrap_err();
+
+        assert!(error.contains("Streaming"));
+        assert!(error.contains("Unsupported modifier"));
+    }
+
+    #[test]
+    fn history_limit_error_rejects_non_positive_numbers() {
+        assert_eq!(
+            history_limit_error("0"),
+            Some("History limit must be a number between 1 and 100")
+        );
+        assert_eq!(
+            history_limit_error("not a number"),
+            Some("History limit must be a number between 1 and 100")
+        );
+        assert_eq!(history_limit_error("12"), None);
+        assert_eq!(history_limit_error("100"), None);
+        assert_eq!(
+            history_limit_error("101"),
+            Some("History limit must be a number between 1 and 100")
+        );
+    }
+
+    #[test]
+    fn gradient_highlights_cover_heading_text() {
+        let text = "Velocity Settings";
+        let highlights = gradient_text_highlights(text);
+
+        assert_eq!(highlights.len(), text.chars().count());
+        assert_eq!(highlights.first().unwrap().0, 0..1);
+        assert_eq!(highlights.last().unwrap().0, 16..17);
     }
 }

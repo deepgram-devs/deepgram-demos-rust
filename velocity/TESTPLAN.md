@@ -28,8 +28,10 @@ Automated coverage currently verifies:
 - Open the tray menu and choose `Settings`.
 - Verify the settings window opens and can be focused again from the tray.
 - Verify launching `velocity.exe` a second time does not start a second process.
-- Verify the window shows fields for API key, model, language, smart formatting, key terms, hotkeys, audio device, history limit, output mode, and append-newline.
+- Verify the GPUI window shows fields for API key, model, language, smart formatting, key terms, hotkeys, audio device, history limit, output mode, and append-newline.
 - Verify only one settings window can exist at a time.
+- Edit a setting and verify the unsaved-changes banner appears, then save and verify it clears.
+- Enter an invalid hotkey and an out-of-range history limit and verify each field shows immediate visual validation before saving.
 
 ### 2. Hotkey Configuration
 
