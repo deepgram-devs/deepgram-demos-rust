@@ -9,6 +9,26 @@ Push-to-talk speech-to-text for Windows 11. Hold **Win+Ctrl+'** to record your v
 
 ## Setup
 
+### Scoop
+
+A Scoop manifest is available at `deploy/scoop/velocity.json`.
+
+From a local checkout:
+
+```powershell
+scoop install .\deploy\scoop\velocity.json
+```
+
+After this file is published on `main`, it can also be installed directly from the repository manifest:
+
+```powershell
+scoop install https://raw.githubusercontent.com/deepgram-devs/deepgram-demos-rust/main/velocity/deploy/scoop/velocity.json
+```
+
+Once accepted into a community Scoop bucket, the install command can move to the bucket-native package name.
+
+### Manual
+
 1. Run `velocity.exe`.
 2. On first launch the built-in settings window will ask for your Deepgram API key. The key is saved to `%USERPROFILE%\.config\deepgram\velocity.yml` and will not be asked for again.
 3. The app runs silently in the system tray.
