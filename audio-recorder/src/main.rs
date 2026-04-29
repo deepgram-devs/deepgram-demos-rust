@@ -50,6 +50,10 @@ enum Commands {
         /// Duration in seconds (default: records until Ctrl+C)
         #[arg(short = 't', long)]
         duration: Option<u64>,
+
+        /// Sample rate in Hz (default: device default, e.g. 44100, 48000)
+        #[arg(short = 'r', long)]
+        sample_rate: Option<u32>,
     },
 }
 
@@ -62,7 +66,8 @@ fn main() -> Result<()> {
             output,
             device,
             duration,
-        } => record_audio(&output, device.as_deref(), duration),
+            sample_rate,
+        } => record_audio(&output, device.as_deref(), duration, sample_rate),
     }
 }
 
@@ -111,9 +116,9 @@ fn list_devices() -> Result<()> {
     Ok(())
 }
 
-fn record_audio(output_path: &str, device_name: Option<&str>, duration: Option<u64>) -> Result<()> {
+fn record_audio(output_path: &str, device_name: Option<&str>, duration: Option<u64>, sample_rate: Option<u32>) -> Result<()> {
     let host = cpal::default_host();
-    
+
     // Select the input device
     let device = if let Some(name) = device_name {
         find_device_by_name(&host, name)?
@@ -121,15 +126,25 @@ fn record_audio(output_path: &str, device_name: Option<&str>, duration: Option<u
         host.default_input_device()
             .context("No default input device available")?
     };
-    
+
     let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
     println!("Recording from device: {}", device_name);
-    
-    // Get the default input config
-    let config = device
-        .default_input_config()
-        .context("Failed to get default input config")?;
-    
+
+    // Get the input config, applying a custom sample rate if requested
+    let config = if let Some(rate) = sample_rate {
+        let requested = cpal::SampleRate(rate);
+        let supported = device
+            .supported_input_configs()
+            .context("Failed to get supported input configs")?
+            .find(|range| range.min_sample_rate() <= requested && requested <= range.max_sample_rate())
+            .ok_or_else(|| anyhow::anyhow!("Sample rate {} Hz is not supported by this device", rate))?;
+        supported.with_sample_rate(requested)
+    } else {
+        device
+            .default_input_config()
+            .context("Failed to get default input config")?
+    };
+
     println!("Using config: {} channels, {} Hz, {:?}",
         config.channels(),
         config.sample_rate().0,
