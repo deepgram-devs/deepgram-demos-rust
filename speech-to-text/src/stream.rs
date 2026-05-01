@@ -17,6 +17,10 @@ pub enum StreamSource {
         #[arg(long)]
         endpoint: Option<String>,
 
+        /// Number of parallel Deepgram streaming connections to open with the same input audio
+        #[arg(long, default_value_t = 1)]
+        connections: usize,
+
         /// Audio encoding format (e.g., linear16, mulaw, flac)
         #[arg(long)]
         encoding: Option<String>,
@@ -110,6 +114,10 @@ pub enum StreamSource {
         /// Override the Deepgram API base URL
         #[arg(long)]
         endpoint: Option<String>,
+
+        /// Number of parallel Deepgram streaming connections to open with the same input audio
+        #[arg(long, default_value_t = 1)]
+        connections: usize,
 
         /// Audio encoding format (e.g., linear16, mulaw, flac)
         #[arg(long)]

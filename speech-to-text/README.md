@@ -16,6 +16,7 @@ A real-time speech-to-text CLI using Rust that connects to the Deepgram API via 
 - Keyword/keyterm boosting for improved recognition of domain-specific terms
 - Configurable endpointing and utterance-end detection
 - WebSocket connection to Deepgram API for live transcription
+- Parallel streaming connections with the same input audio using `--connections`
 - Callback support for webhook integration
 - Displays transcription results in real-time; parse errors written to `dg-stt-debug.log`
 - Deepgram request ID printed on connect (and on connection errors)
@@ -45,7 +46,7 @@ A real-time speech-to-text CLI using Rust that connects to the Deepgram API via 
 
 1. **Rust**: Make sure you have Rust installed. If not, install it from [rustup.rs](https://rustup.rs/)
 
-2. **Deepgram API Key**: You need a Deepgram API key. Sign up at [deepgram.com](https://deepgram.com) to get one.
+2. **Deepgram API Key**: You need a Deepgram API key for hosted Deepgram inference. Self-hosted endpoints supplied with `--endpoint` can run without one.
 
 3. **Audio Input Device**: Ensure you have a working microphone connected to your system (for microphone mode).
 
@@ -53,7 +54,7 @@ A real-time speech-to-text CLI using Rust that connects to the Deepgram API via 
 
 1. Clone this repository or download the source code.
 
-2. Create a `.env` file in the project root and add your Deepgram API key:
+2. For hosted Deepgram inference, create a `.env` file in the project root and add your Deepgram API key:
 
 ```
 DEEPGRAM_API_KEY=your_api_key_here
@@ -150,6 +151,8 @@ cargo run -- transcribe --file path/to/audio.mp3
 | `--language <LANG>` | Language code (e.g., `en`, `es`, `fr`, `de`) |
 | `--redact <TYPES>` | Redact sensitive data (e.g., `pii`, `pci`) |
 | `--multichannel` | Enable multichannel audio processing |
+| `--endpoint <URL>` | Override the Deepgram-compatible endpoint; if this points to a self-hosted endpoint, `DEEPGRAM_API_KEY` is optional |
+| `--connections <N>` | Open N parallel Deepgram streaming WebSocket connections fed by the same microphone or file audio |
 | `--keyterm <TERMS>` | Comma-separated keyterms for nova-3+ (e.g., `"Deepgram,nova-3"`) |
 | `--keywords <TERMS>` | Comma-separated keywords for nova-2 and older, with optional intensifier (e.g., `"Deepgram:2,API"`) |
 | `--endpointing <MS>` | Endpointing sensitivity in ms (file mode; e.g., `300`) |
@@ -190,8 +193,14 @@ cargo run -- stream microphone --detect-entities --redact pii
 # Transcribe from microphone with multichannel processing
 cargo run -- stream microphone --multichannel
 
+# Feed the same microphone audio into three parallel Deepgram streams
+cargo run -- stream microphone --connections 3
+
 # Transcribe a WAV file at real-time rate
 cargo run -- stream file --file recording.wav
+
+# Feed the same file audio into five parallel Deepgram streams
+cargo run -- stream file --file recording.wav --connections 5
 
 # Transcribe an MP3 file as fast as possible
 cargo run -- stream file --file podcast.mp3 --fast
@@ -204,6 +213,9 @@ cargo run -- stream file --file audio.wav --interim-results --vad-events --utter
 
 # Transcribe with custom endpointing
 cargo run -- stream file --file audio.wav --endpointing 300
+
+# Transcribe against a self-hosted streaming endpoint without DEEPGRAM_API_KEY
+cargo run -- stream file --file audio.wav --endpoint ws://localhost:8119
 
 # Microphone with callback
 cargo run -- stream microphone --callback https://example.com/webhook
@@ -247,6 +259,9 @@ cargo run -- transcribe --file sensitive.wav --redact pii,pci
 
 # Output formats: text (default), json, or verbose-json
 cargo run -- transcribe --file audio.mp3 --output json
+
+# Transcribe against a self-hosted HTTP endpoint without DEEPGRAM_API_KEY
+cargo run -- transcribe --file audio.mp3 --endpoint http://localhost:8080
 
 # Full-featured transcription
 cargo run -- transcribe --file meeting.wav \
@@ -342,7 +357,8 @@ Make sure you have a microphone connected and it's set as the default input devi
 
 ### WebSocket Connection Issues
 
-- Verify your Deepgram API key is correct
+- Verify your Deepgram API key is correct when using hosted Deepgram inference
+- If you are using a self-hosted endpoint, verify `--endpoint` points at that deployment; the client omits the authorization header when `DEEPGRAM_API_KEY` is not set
 - Check your internet connection
 - Ensure the API key has sufficient credits
 - The Deepgram request ID is printed on connect — include it when contacting support

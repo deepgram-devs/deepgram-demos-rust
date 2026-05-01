@@ -217,7 +217,7 @@ fn parse_redact_entities(redact_value: &str) -> Vec<String> {
 }
 
 pub async fn run_transcribe_mode(
-    api_key: String,
+    api_key: Option<String>,
     args: TranscribeArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Transcribing audio file: {}", args.file.display());
@@ -227,7 +227,9 @@ pub async fn run_transcribe_mode(
     println!("Read {} bytes from file", audio_data.len());
 
     // Build the API URL with query parameters
-    let base_url = args.endpoint.unwrap_or_else(|| "https://api.deepgram.com".to_string());
+    let base_url = args
+        .endpoint
+        .unwrap_or_else(|| "https://api.deepgram.com".to_string());
     let mut url = format!("{}/v1/listen?", base_url);
     let mut params = Vec::new();
 
@@ -323,13 +325,16 @@ pub async fn run_transcribe_mode(
     let client = reqwest::Client::new();
 
     // Send POST request
-    let response = client
+    let mut request = client
         .post(&url)
-        .header("Authorization", format!("Token {}", api_key))
         .header("Content-Type", "application/octet-stream")
-        .body(audio_data)
-        .send()
-        .await?;
+        .body(audio_data);
+
+    if let Some(api_key) = api_key {
+        request = request.header("Authorization", format!("Token {}", api_key));
+    }
+
+    let response = request.send().await?;
 
     // Check response status
     if !response.status().is_success() {
@@ -382,16 +387,27 @@ pub async fn run_transcribe_mode(
                             if let Some(speaker) = word.speaker {
                                 if current_speaker != Some(speaker) {
                                     if !speaker_text.is_empty() {
-                                        println!("Speaker {}: {}", current_speaker.unwrap(), speaker_text.trim());
+                                        println!(
+                                            "Speaker {}: {}",
+                                            current_speaker.unwrap(),
+                                            speaker_text.trim()
+                                        );
                                         speaker_text.clear();
                                     }
                                     current_speaker = Some(speaker);
                                 }
-                                speaker_text.push_str(&format!("{} ", word.punctuated_word.as_ref().unwrap_or(&word.word)));
+                                speaker_text.push_str(&format!(
+                                    "{} ",
+                                    word.punctuated_word.as_ref().unwrap_or(&word.word)
+                                ));
                             }
                         }
                         if !speaker_text.is_empty() {
-                            println!("Speaker {}: {}", current_speaker.unwrap(), speaker_text.trim());
+                            println!(
+                                "Speaker {}: {}",
+                                current_speaker.unwrap(),
+                                speaker_text.trim()
+                            );
                         }
                     }
 
@@ -399,7 +415,12 @@ pub async fn run_transcribe_mode(
                     if !alternative.entities.is_empty() {
                         println!("\n=== Detected Entities ===");
                         for entity in &alternative.entities {
-                            println!("{}: {} (confidence: {:.1}%)", entity.label, entity.value, entity.confidence * 100.0);
+                            println!(
+                                "{}: {} (confidence: {:.1}%)",
+                                entity.label,
+                                entity.value,
+                                entity.confidence * 100.0
+                            );
                         }
                     }
 
@@ -407,7 +428,11 @@ pub async fn run_transcribe_mode(
                     if !alternative.topics.is_empty() {
                         println!("\n=== Topics ===");
                         for topic in &alternative.topics {
-                            println!("{} (confidence: {:.1}%)", topic.topic, topic.confidence * 100.0);
+                            println!(
+                                "{} (confidence: {:.1}%)",
+                                topic.topic,
+                                topic.confidence * 100.0
+                            );
                         }
                     }
 
@@ -415,7 +440,11 @@ pub async fn run_transcribe_mode(
                     if !alternative.intents.is_empty() {
                         println!("\n=== Intents ===");
                         for intent in &alternative.intents {
-                            println!("{} (confidence: {:.1}%)", intent.intent, intent.confidence * 100.0);
+                            println!(
+                                "{} (confidence: {:.1}%)",
+                                intent.intent,
+                                intent.confidence * 100.0
+                            );
                         }
                     }
 
@@ -433,7 +462,11 @@ pub async fn run_transcribe_mode(
                     if !alternative.sentiments.is_empty() {
                         println!("\n=== Sentiment Analysis ===");
                         for sentiment in &alternative.sentiments {
-                            println!("{} (confidence: {:.1}%)", sentiment.sentiment, sentiment.confidence * 100.0);
+                            println!(
+                                "{} (confidence: {:.1}%)",
+                                sentiment.sentiment,
+                                sentiment.confidence * 100.0
+                            );
                         }
                     }
                 }

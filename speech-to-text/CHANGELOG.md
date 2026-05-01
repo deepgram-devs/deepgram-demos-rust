@@ -1,5 +1,10 @@
 # Changelog for Deepgram Rust Speech-to-Text (STT) CLI
 
+## 2026-05-01
+
+* Added `--connections <N>` to `stream microphone` and `stream file` so the same input audio can be fanned out to multiple parallel Deepgram streaming WebSocket connections.
+* Allowed `--endpoint` self-hosted speech-to-text deployments to run without `DEEPGRAM_API_KEY`; hosted Deepgram endpoints still require the key, and custom endpoints use it when present.
+
 ## 2026-04-06
 
 Version: `0.3.0`
