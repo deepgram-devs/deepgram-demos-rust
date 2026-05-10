@@ -14,7 +14,6 @@ pub struct HistoryEntry {
 pub struct TranscriptHistory {
     #[serde(default)]
     pub entries: Vec<HistoryEntry>,
-    pub selected_index: Option<usize>,
 }
 
 impl TranscriptHistory {
@@ -54,34 +53,10 @@ impl TranscriptHistory {
             },
         );
         self.entries.truncate(limit);
-        self.selected_index = Some(0);
-    }
-
-    pub fn selected_text(&self) -> Option<&str> {
-        self.selected_index
-            .and_then(|index| self.entries.get(index))
-            .map(|entry| entry.text.as_str())
-    }
-
-    pub fn select(&mut self, index: usize) -> Option<&HistoryEntry> {
-        if index < self.entries.len() {
-            self.selected_index = Some(index);
-            self.entries.get(index)
-        } else {
-            None
-        }
     }
 
     pub fn trim_to(&mut self, limit: usize) {
         self.entries.truncate(limit);
-        if self.entries.is_empty() {
-            self.selected_index = None;
-        } else if self
-            .selected_index
-            .is_some_and(|index| index >= self.entries.len())
-        {
-            self.selected_index = Some(0);
-        }
     }
 }
 
@@ -103,7 +78,6 @@ mod tests {
         history.push("second".into(), 20);
 
         assert_eq!(history.entries[0].text, "second");
-        assert_eq!(history.selected_text(), Some("second"));
     }
 
     #[test]
@@ -115,12 +89,5 @@ mod tests {
 
         assert_eq!(history.entries.len(), 2);
         assert_eq!(history.entries[0].text, "one");
-    }
-
-    #[test]
-    fn select_rejects_out_of_bounds_index() {
-        let mut history = TranscriptHistory::default();
-        history.push("one".into(), 5);
-        assert!(history.select(3).is_none());
     }
 }

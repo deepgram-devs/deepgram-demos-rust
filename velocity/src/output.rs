@@ -1,20 +1,30 @@
 use crate::clipboard;
 use crate::config::OutputMode;
+use crate::focus_target::FocusTarget;
 use crate::typer;
 
 pub fn deliver_text(
     text: &str,
     output_mode: OutputMode,
     append_newline: bool,
+    target: Option<FocusTarget>,
 ) -> Result<String, String> {
     let final_text = format_text(text, append_newline);
 
     match output_mode {
-        OutputMode::DirectInput => typer::type_text(&final_text),
+        OutputMode::DirectInput => {
+            if let Some(target) = target {
+                target.focus()?;
+            }
+            typer::type_text(&final_text)?;
+        }
         OutputMode::Clipboard => clipboard::copy_text(&final_text)?,
         OutputMode::Paste => {
             clipboard::copy_text(&final_text)?;
-            typer::paste_clipboard();
+            if let Some(target) = target {
+                target.focus()?;
+            }
+            typer::paste_clipboard()?;
         }
     }
 

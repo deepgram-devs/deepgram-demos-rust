@@ -42,7 +42,6 @@ Once accepted into a community Scoop bucket, the install command can move to the
 | Release **Win+Ctrl+'** | Stops recording, transcribes, and types the result |
 | Press **Shift+Ctrl+Win+'** | Toggles keep-talking mode — recording stays active until you press the shortcut again |
 | Press **Ctrl+Win+[** | Toggles streaming mode — text is typed continuously as you speak |
-| Press **Ctrl+Win+]** | Re-send the currently selected recent transcript |
 
 The settings window allows you to change these hotkeys. The values above are the defaults.
 
@@ -65,20 +64,24 @@ It lets you configure:
 - microphone input device
 - output mode: type directly, copy to clipboard, or paste clipboard into the active app
 - append newline after transcript
+- focused-app delivery behavior
 - transcript history retention
+- launch at Windows sign-in
 
 The current settings UI uses a compact dark layout with a Deepgram gradient heading, hover feedback on each settings section, and an unsaved-changes banner when edited values differ from the last saved configuration. Plain text fields validate as you type: invalid hotkeys and out-of-range history limits are framed with a bright validation border before save. Save failures, runtime errors, and config reload warnings are shown in the settings status area and reflected through the tray status.
 
 When the settings window is open, the selected microphone shows a live activity indicator and the Status section shows recording, keep-talking, and streaming state.
+
+By default, completed transcripts are sent to the app focused at delivery time. If `Send transcript to the app focused at delivery` is disabled, Velocity returns focus to the app that was active when recording started before typing or pasting the transcript.
+
+The Windows sign-in setting creates a per-user Startup folder shortcut named `Deepgram Velocity.lnk`, starts Velocity with `--start-minimized`, and uses the Deepgram icon in Windows Startup Apps.
 
 ### Transcript History
 
 Velocity stores a recent transcript history locally in `%USERPROFILE%\.config\deepgram\velocity-history.yml`.
 
 - The default history size is `20`.
-- The tray menu shows recent transcript items.
-- Choosing a recent transcript from the tray immediately re-sends it using the active output mode.
-- The resend hotkey re-sends the most recently selected tray history item.
+- The history limit controls how many transcripts are retained locally.
 
 ## Options
 
@@ -86,6 +89,7 @@ Velocity stores a recent transcript history locally in `%USERPROFILE%\.config\de
 |---|---|
 | `--model <name>` | Deepgram model to use (default: `nova-3`) |
 | `--smart-format` | Enable Deepgram Smart Formatting (punctuation, numbers, etc.) |
+| `--start-minimized` | Start tray-first without opening onboarding when launched by Windows sign-in |
 | `--verbose` | Log Deepgram responses and errors to the console |
 
 Options can also be set in the configuration file:
@@ -102,11 +106,11 @@ audio_input: Your microphone name
 history_limit: 20
 output_mode: direct-input
 append_newline: false
+deliver_to_focused_app: true
 hotkeys:
   push_to_talk: Win+Ctrl+'
   keep_talking: Win+Ctrl+Shift+'
   streaming: Win+Ctrl+[
-  resend_selected: Win+Ctrl+]
 ```
 
 The configuration file is watched for changes. Valid edits take effect without restarting. Invalid edits are rejected and the app keeps the last known good configuration. A backup copy is saved to `%USERPROFILE%\.config\deepgram\velocity.backup.yml` when the app runs.

@@ -14,7 +14,6 @@ const IDM_SETTINGS: usize = 1001;
 const IDM_KEEP_TALKING: usize = 1002;
 const IDM_STREAMING: usize = 1003;
 const IDM_QUIT: usize = 1004;
-const IDM_RECENT_BASE: usize = 2000;
 const TRAY_ID: u32 = 1;
 
 /// Creates a message-only window and registers the system tray icon.
@@ -227,13 +226,6 @@ unsafe extern "system" fn tray_wnd_proc(
                     remove_tray_icon(hwnd);
                     PostQuitMessage(0);
                 }
-                x if x >= IDM_RECENT_BASE => {
-                    let index = x - IDM_RECENT_BASE;
-                    let app = crate::state::global();
-                    if app.select_history(index).is_some() {
-                        app.resend_selected();
-                    }
-                }
                 _ => {}
             }
             LRESULT(0)
@@ -292,38 +284,6 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
     let _ = AppendMenuW(hmenu, MF_STRING, IDM_SETTINGS, w!("Settings"));
 
-    let recent_menu = CreatePopupMenu().unwrap();
-    let selected_recent = app.selected_history_index();
-    let recent_entries = app.recent_entries();
-    for (index, entry) in recent_entries.iter().enumerate() {
-        let label = format_recent_label(index, &entry.text);
-        let flags = if Some(index) == selected_recent {
-            MF_STRING | MF_CHECKED
-        } else {
-            MF_STRING
-        };
-        let _ = AppendMenuW(
-            recent_menu,
-            flags,
-            IDM_RECENT_BASE + index,
-            PCWSTR(to_wide(&label).as_ptr()),
-        );
-    }
-    if recent_entries.is_empty() {
-        let _ = AppendMenuW(
-            recent_menu,
-            MF_STRING | MF_DISABLED,
-            0,
-            w!("No recent transcripts"),
-        );
-    }
-    let _ = AppendMenuW(
-        hmenu,
-        MF_POPUP,
-        recent_menu.0 as usize,
-        w!("Recent transcripts"),
-    );
-
     let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(hmenu, MF_STRING, IDM_QUIT, w!("Quit Velocity"));
 
@@ -355,10 +315,6 @@ fn tray_tooltip() -> String {
     } else {
         "Velocity - Idle".to_string()
     }
-}
-
-fn format_recent_label(index: usize, text: &str) -> String {
-    format!("{}: {}", index + 1, truncate_menu_text(text, 48))
 }
 
 fn truncate_menu_text(text: &str, limit: usize) -> String {

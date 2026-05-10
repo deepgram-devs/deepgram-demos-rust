@@ -8,12 +8,14 @@ mod beep;
 mod clipboard;
 mod config;
 mod deepgram;
+mod focus_target;
 mod history;
 mod hotkey;
 mod logger;
 mod output;
 mod settings;
 mod single_instance;
+mod startup;
 mod state;
 mod streaming;
 mod transcribe;
@@ -47,6 +49,8 @@ fn setup_ctrl_c() {
 }
 
 fn main() {
+    let _ = startup::set_current_process_app_user_model_id();
+
     let _single_instance = match single_instance::acquire("Velocity.SingleInstance") {
         Ok(Some(guard)) => guard,
         Ok(None) => return,
@@ -61,6 +65,7 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
     let verbose = args.iter().any(|a| a == "--verbose");
+    let start_minimized = args.iter().any(|a| a == startup::START_MINIMIZED_ARG);
     let smart_format_flag = args.iter().any(|a| a == "--smart-format");
     let model_flag = args
         .windows(2)
@@ -83,24 +88,41 @@ fn main() {
         cfg.model = model;
     }
 
-    let _api_key = loop {
-        match cfg.api_key.clone().filter(|k| !k.trim().is_empty()) {
-            Some(key) => break key,
-            None => match settings::prompt_for_api_key() {
+    if cfg
+        .api_key
+        .as_deref()
+        .is_none_or(|key| key.trim().is_empty())
+    {
+        if start_minimized {
+            logger::verbose(
+                "Deepgram API key is not configured; startup launch will remain in the tray",
+            );
+        } else {
+            match settings::prompt_for_api_key() {
                 Some(key) => {
-                    cfg.api_key = Some(key.clone());
+                    cfg.api_key = Some(key);
                     let _ = config::save(&cfg);
-                    break key;
                 }
                 None => return,
-            },
+            }
         }
-    };
+    }
+
+    if let Err(error) = startup::repair_if_enabled() {
+        logger::verbose(&error);
+    }
 
     let _ = config::ensure_backup(&cfg);
 
     let app = Arc::new(state::AppState::new(cfg.clone(), loaded_state.modified_at));
     state::install_global(Arc::clone(&app));
+    if cfg
+        .api_key
+        .as_deref()
+        .is_none_or(|key| key.trim().is_empty())
+    {
+        app.set_error("Deepgram API key is not configured".to_string());
+    }
 
     let tray_hwnd = tray::create_tray_window();
     app.set_tray_hwnd(tray_hwnd);
@@ -186,6 +208,7 @@ fn main() {
     let on_start_app = Arc::clone(&app);
     let on_start: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         logger::verbose("Recording started");
+        on_start_app.capture_transcript_target();
         on_start_app.set_recording(true);
         std::thread::spawn(|| beep::play_start());
         audio_thread_handle.unpark();
@@ -206,6 +229,7 @@ fn main() {
     let on_stream_app = Arc::clone(&app);
     let on_stream_start: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         logger::verbose("Streaming mode started");
+        on_stream_app.capture_transcript_target();
         on_stream_app.set_streaming(true);
         let stream_app = Arc::clone(&on_stream_app);
         std::thread::spawn(move || {
@@ -240,10 +264,6 @@ fn main() {
         });
     });
 
-    let on_resend_app = Arc::clone(&app);
-    let on_resend_selected: Arc<dyn Fn() + Send + Sync> =
-        Arc::new(move || on_resend_app.resend_selected());
-
     let mut hotkeys = hotkey::HotkeyManager::new(
         tray_hwnd,
         cfg.hotkeys.clone(),
@@ -253,7 +273,6 @@ fn main() {
         on_stop,
         Arc::clone(&streaming_active),
         on_stream_start,
-        on_resend_selected,
     );
     if let Err(error) = hotkeys.register() {
         app.set_error(error);

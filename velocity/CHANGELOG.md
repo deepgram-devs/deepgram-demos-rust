@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0 - 2026-05-10
+
+- Added a Windows sign-in startup toggle to the built-in GPUI settings window, backed by a branded Startup-folder shortcut with Deepgram icon metadata.
+- Added cleanup for legacy `Deepgram Velocity` and `Velocity` Run registry startup values.
+- Added `--start-minimized` startup launch handling so automatic Windows sign-in launches stay in the tray instead of prompting on screen.
+- Added startup-entry repair so existing Windows startup configuration follows the current `velocity.exe` path after upgrades.
+- Added a focused-app delivery setting so transcripts can either go to the app focused at delivery time or return to the app that was focused when recording started.
+- Added embedded Windows executable resources, version metadata, and the Deepgram `.ico` asset for the application executable and Scoop shortcut.
+- Added Scoop deployment support with a manifest, local install instructions, and community bucket publishing notes.
+- Removed the recent-transcript tray menu and resend-selected hotkey from configuration, hotkey registration, state, and tests.
+- Updated README and manual test coverage to match the retained local transcript history behavior.
+
 ## 0.4.0 - 2026-04-25
 
 - Replaced the Rust settings prototype with the current GPUI settings and onboarding window.

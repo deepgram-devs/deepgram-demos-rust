@@ -9,9 +9,10 @@ There is no C# or .NET settings sidecar. The API key onboarding flow and the ful
 ## Current UI Architecture
 
 - The settings UI lives in [src/settings.rs](C:/git/deepgram-demos-rust/velocity/src/settings.rs).
-- The settings and onboarding windows share the same `SettingsWindow` state model.
+- The settings and onboarding windows share the same GPUI `SettingsView` state model.
 - The tray window and Win32 message loop live in [src/tray.rs](C:/git/deepgram-demos-rust/velocity/src/tray.rs).
 - Global application state and cross-thread coordination live in [src/state.rs](C:/git/deepgram-demos-rust/velocity/src/state.rs).
+- Windows sign-in startup integration lives in [src/startup.rs](C:/git/deepgram-demos-rust/velocity/src/startup.rs).
 
 ## Windowing Constraint
 
@@ -56,17 +57,45 @@ The Rust settings UI must retain all current configuration functionality:
 - language selection constrained by the selected model
 - smart formatting toggle
 - key terms editing
-- all hotkey fields
+- hotkey fields for push-to-talk, keep talking, and streaming
 - microphone input selection
 - live microphone activity meter
 - transcript history limit
 - output mode selection
 - append-newline toggle
+- focused-app delivery toggle
+- Windows sign-in launch toggle
 - reload from disk
 - config-changed-on-disk warning
 - validation and status/error text
 
 Failures must be visible in the settings window, not only in logs. Plain text fields should validate as close to real time as GPUI allows; current examples are the hotkey fields and transcript History limit field.
+
+When the focused-app delivery toggle is enabled, Velocity must deliver completed transcripts to the application focused at the end of the transcription connection. When it is disabled, Velocity must deliver completed transcripts to the application that was focused when recording started.
+
+## Windows Sign-In Startup
+
+The `Launch Velocity when I sign in to Windows` setting is not part of `velocity.yml`.
+
+It is an immediate Windows setting backed by a per-user Startup folder shortcut:
+
+- shortcut path: `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Deepgram Velocity.lnk`
+- shortcut target: current `velocity.exe`
+- shortcut arguments: `--start-minimized`
+- shortcut icon: exported Deepgram icon at `%APPDATA%\Deepgram\Velocity\deepgram-velocity-<version>.ico`, icon index `0`
+- shortcut AppUserModelID: `Deepgram.Velocity`
+
+The older Run registry values named `Deepgram Velocity` and `Velocity` are legacy. Enabling or disabling startup should remove them, along with stale `StartupApproved\Run` bookkeeping values for those names and stale `StartupApproved\StartupFolder` bookkeeping for `Deepgram Velocity.lnk`, so Windows Startup Apps uses the branded shortcut entry with the correct icon.
+
+Changing this switch must update the Startup shortcut immediately and must not set the settings UI unsaved-changes banner. The shortcut plus Windows `StartupApproved` enabled/disabled state is the source of truth. Enabling startup must delete and recreate the shortcut rather than overwriting it in place so Windows does not retain stale shortcut icon metadata.
+
+If enabling or disabling startup fails, the settings UI must roll the switch back to its previous value and show visible failure text in the Status section.
+
+On normal startup, if the shortcut or legacy Run value exists and is not disabled in `StartupApproved`, Velocity may repair the shortcut to the current executable path. This supports ZIP extraction and personally compiled binaries that move between folders.
+
+`--start-minimized` means the app should start tray-first. If the API key is missing during a startup launch, keep the app in the tray and surface the missing-key error through runtime status instead of opening onboarding automatically.
+
+Velocity should call `SetCurrentProcessExplicitAppUserModelID` with `Deepgram.Velocity` early during process startup so Windows 11 associates windows, notifications, shell entries, and startup registrations with the same formal app identity.
 
 ## Keyboard UX
 
@@ -91,9 +120,20 @@ Failures must be visible in the settings window, not only in logs. Plain text fi
 - Continue using `%USERPROFILE%\.config\deepgram\velocity.yml`.
 - Continue saving `%USERPROFILE%\.config\deepgram\velocity.backup.yml`.
 - Continue using `%USERPROFILE%\.config\deepgram\velocity-history.yml`.
+- Do not store Windows sign-in startup state in the YAML config; read and write the Startup shortcut instead.
 - Preserve compatibility with the current config schema.
 - Reject invalid values without corrupting the last known good runtime state.
 - The transcript History limit setting must validate as a number from `1` through `100`.
+
+## Dependency License Requirements
+
+Velocity must only use dependencies with licenses that are compatible with open source distribution.
+
+- Do not add dependencies with proprietary, source-available-only, non-commercial, no-redistribution, or otherwise open-source-incompatible licenses.
+- Before adding a new dependency, verify its license metadata and prefer widely used OSI-approved licenses such as MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0, or Unicode-compatible license terms.
+- If a dependency has multiple licenses, ensure at least one usable license path is compatible with Velocity's open source distribution.
+- If license compatibility is unclear, do not add the dependency until the ambiguity is resolved and documented.
+- Keep transitive dependency license risk in mind for release work; avoid dependency changes that introduce unresolved license obligations.
 
 ## Error Handling Expectations
 

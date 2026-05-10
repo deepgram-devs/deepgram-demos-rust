@@ -7,7 +7,8 @@ use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
 use crate::config::{self, Config};
-use crate::history::{HistoryEntry, TranscriptHistory};
+use crate::focus_target::FocusTarget;
+use crate::history::TranscriptHistory;
 use crate::hotkey::HotkeyManager;
 use crate::logger;
 use crate::output;
@@ -28,6 +29,7 @@ pub struct AppState {
     keep_talking: Arc<AtomicBool>,
     streaming_active: Arc<AtomicBool>,
     tray_hwnd: AtomicIsize,
+    transcript_target_hwnd: AtomicIsize,
     meter_level: AtomicUsize,
     last_error: Mutex<Option<String>>,
     hotkeys: Mutex<Option<HotkeyManager>>,
@@ -45,6 +47,7 @@ impl AppState {
             keep_talking: Arc::new(AtomicBool::new(false)),
             streaming_active: Arc::new(AtomicBool::new(false)),
             tray_hwnd: AtomicIsize::new(0),
+            transcript_target_hwnd: AtomicIsize::new(0),
             meter_level: AtomicUsize::new(0),
             last_error: Mutex::new(None),
             hotkeys: Mutex::new(None),
@@ -79,6 +82,15 @@ impl AppState {
     pub fn tray_hwnd(&self) -> Option<HWND> {
         let raw = self.tray_hwnd.load(Ordering::Relaxed);
         (raw != 0).then_some(HWND(raw as *mut _))
+    }
+
+    pub fn capture_transcript_target(&self) {
+        let raw = FocusTarget::current().map_or(0, |target| target.raw());
+        self.transcript_target_hwnd.store(raw, Ordering::Relaxed);
+    }
+
+    fn transcript_target(&self) -> Option<FocusTarget> {
+        FocusTarget::from_raw(self.transcript_target_hwnd.load(Ordering::Relaxed))
     }
 
     pub fn set_meter_level(&self, level: u8) {
@@ -142,7 +154,10 @@ impl AppState {
 
     pub fn push_history_and_deliver(&self, text: String) {
         let config = self.config();
-        match output::deliver_text(&text, config.output_mode, config.append_newline) {
+        let target = (!config.deliver_to_focused_app)
+            .then(|| self.transcript_target())
+            .flatten();
+        match output::deliver_text(&text, config.output_mode, config.append_newline, target) {
             Ok(_) => {
                 let mut history = self.history.lock().unwrap();
                 history.push(text, config.history_limit);
@@ -152,41 +167,6 @@ impl AppState {
                 self.notify_ui();
             }
             Err(error) => self.set_error(error),
-        }
-    }
-
-    pub fn recent_entries(&self) -> Vec<HistoryEntry> {
-        self.history.lock().unwrap().entries.clone()
-    }
-
-    pub fn selected_history_index(&self) -> Option<usize> {
-        self.history.lock().unwrap().selected_index
-    }
-
-    pub fn select_history(&self, index: usize) -> Option<String> {
-        let mut history = self.history.lock().unwrap();
-        let selected = history.select(index)?.text.clone();
-        let _ = history.save(&config::history_path());
-        self.notify_ui();
-        Some(selected)
-    }
-
-    pub fn resend_selected(&self) {
-        if let Some(text) = self
-            .history
-            .lock()
-            .unwrap()
-            .selected_text()
-            .map(|text| text.to_string())
-        {
-            let config = self.config();
-            if let Err(error) =
-                output::deliver_text(&text, config.output_mode, config.append_newline)
-            {
-                self.set_error(error);
-            }
-        } else {
-            self.set_error("No recent transcript is selected".to_string());
         }
     }
 

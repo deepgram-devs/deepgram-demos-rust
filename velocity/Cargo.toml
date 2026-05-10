@@ -1,6 +1,6 @@
 [package]
 name = "velocity"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "Windows 11 voice dictation using Deepgram Voice AI."
 
@@ -18,9 +18,11 @@ windows = { version = "0.62", features = [
     "Win32_System_Com_StructuredStorage",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
+    "Win32_System_Registry",
     "Win32_System_Variant",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_Media_Audio",
     "Win32_Devices_FunctionDiscovery",
@@ -40,6 +42,9 @@ hound = "3"
 minimp3 = "0.6"
 png = "0.18"
 webrtc-vad = "0.4"
+
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
 
 [profile.release]
 lto = true

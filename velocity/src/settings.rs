@@ -36,6 +36,7 @@ use crate::config::{self, Config, OutputMode};
 use crate::deepgram;
 use crate::hotkey;
 use crate::logger;
+use crate::startup;
 use crate::state;
 use crate::tray;
 
@@ -68,11 +69,11 @@ struct SettingsSnapshot {
     push_to_talk: String,
     keep_talking: String,
     streaming: String,
-    resend_selected: String,
     audio_input: String,
     history_limit: String,
     output_mode: String,
     append_newline: bool,
+    deliver_to_focused_app: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +88,7 @@ enum SettingsSection {
     Transcription,
     Hotkeys,
     AudioOutput,
+    System,
     Status,
 }
 
@@ -97,6 +99,7 @@ impl SettingsSection {
             SettingsSection::Transcription => "settings-section-transcription",
             SettingsSection::Hotkeys => "settings-section-hotkeys",
             SettingsSection::AudioOutput => "settings-section-audio-output",
+            SettingsSection::System => "settings-section-system",
             SettingsSection::Status => "settings-section-status",
         }
     }
@@ -107,6 +110,7 @@ impl SettingsSection {
             SettingsSection::Transcription => "transcription",
             SettingsSection::Hotkeys => "hotkeys",
             SettingsSection::AudioOutput => "audio-output",
+            SettingsSection::System => "system",
             SettingsSection::Status => "status",
         };
         let state = if hovered { "hovered" } else { "idle" };
@@ -309,7 +313,6 @@ struct SettingsView {
     push_to_talk_input: Entity<InputState>,
     keep_talking_input: Entity<InputState>,
     streaming_input: Entity<InputState>,
-    resend_selected_input: Entity<InputState>,
     audio_input_select: Entity<SelectState<Vec<String>>>,
     history_limit_input: Entity<InputState>,
     output_mode_select: Entity<SelectState<Vec<String>>>,
@@ -321,11 +324,12 @@ struct SettingsView {
     push_to_talk: String,
     keep_talking: String,
     streaming: String,
-    resend_selected: String,
     audio_input: String,
     history_limit: String,
     output_mode: String,
     append_newline: bool,
+    deliver_to_focused_app: bool,
+    launch_at_startup: bool,
     audio_inputs: Vec<String>,
     language_options: Vec<String>,
     meter: Option<AudioMeter>,
@@ -370,8 +374,6 @@ impl SettingsView {
         let keep_talking_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Keep talking"));
         let streaming_input = cx.new(|cx| InputState::new(window, cx).placeholder("Streaming"));
-        let resend_selected_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Resend selected transcript"));
         let history_limit_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Recent history limit"));
 
@@ -425,7 +427,6 @@ impl SettingsView {
             push_to_talk_input,
             keep_talking_input,
             streaming_input,
-            resend_selected_input,
             audio_input_select,
             history_limit_input,
             output_mode_select,
@@ -437,11 +438,12 @@ impl SettingsView {
             push_to_talk: Config::default().hotkeys.push_to_talk,
             keep_talking: Config::default().hotkeys.keep_talking,
             streaming: Config::default().hotkeys.streaming,
-            resend_selected: Config::default().hotkeys.resend_selected,
             audio_input: DEFAULT_AUDIO_INPUT_LABEL.to_string(),
             history_limit: config::DEFAULT_HISTORY_LIMIT.to_string(),
             output_mode: OutputMode::DirectInput.as_label().to_string(),
             append_newline: false,
+            deliver_to_focused_app: true,
+            launch_at_startup: startup::is_enabled().unwrap_or(false),
             audio_inputs,
             language_options: language_items,
             meter: None,
@@ -495,15 +497,6 @@ impl SettingsView {
                 this.streaming = value;
                 cx.notify();
             }),
-            subscribe_input_string(
-                cx,
-                window,
-                &self.resend_selected_input,
-                |this, value, _, cx| {
-                    this.resend_selected = value;
-                    cx.notify();
-                },
-            ),
             subscribe_input_string(
                 cx,
                 window,
@@ -666,7 +659,6 @@ impl SettingsView {
         self.push_to_talk = config.hotkeys.push_to_talk.clone();
         self.keep_talking = config.hotkeys.keep_talking.clone();
         self.streaming = config.hotkeys.streaming.clone();
-        self.resend_selected = config.hotkeys.resend_selected.clone();
         self.audio_input = config
             .audio_input
             .clone()
@@ -674,6 +666,7 @@ impl SettingsView {
         self.history_limit = config.history_limit.to_string();
         self.output_mode = config.output_mode.as_label().to_string();
         self.append_newline = config.append_newline;
+        self.deliver_to_focused_app = config.deliver_to_focused_app;
         self.last_loaded_config_write_time = modified_at;
         self.config_changed_externally = false;
         self.last_config_change_check = Instant::now();
@@ -692,9 +685,6 @@ impl SettingsView {
         });
         self.streaming_input.update(cx, |input, cx| {
             input.set_value(self.streaming.clone(), window, cx)
-        });
-        self.resend_selected_input.update(cx, |input, cx| {
-            input.set_value(self.resend_selected.clone(), window, cx)
         });
         self.history_limit_input.update(cx, |input, cx| {
             input.set_value(self.history_limit.clone(), window, cx)
@@ -720,6 +710,7 @@ impl SettingsView {
         self.restart_meter();
         self.meter_label = format_meter_text(self.meter_level);
         self.saved_snapshot = Some(self.current_snapshot());
+        self.refresh_startup_state();
     }
 
     fn refresh_language_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -851,12 +842,12 @@ impl SettingsView {
                 push_to_talk: self.push_to_talk.trim().to_string(),
                 keep_talking: self.keep_talking.trim().to_string(),
                 streaming: self.streaming.trim().to_string(),
-                resend_selected: self.resend_selected.trim().to_string(),
             },
             audio_input: self.selected_audio_input().map(str::to_string),
             history_limit,
             output_mode,
             append_newline: self.append_newline,
+            deliver_to_focused_app: self.deliver_to_focused_app,
             vad_silence_ms: self
                 .app
                 .as_ref()
@@ -875,11 +866,11 @@ impl SettingsView {
             push_to_talk: self.push_to_talk.clone(),
             keep_talking: self.keep_talking.clone(),
             streaming: self.streaming.clone(),
-            resend_selected: self.resend_selected.clone(),
             audio_input: self.audio_input.clone(),
             history_limit: self.history_limit.clone(),
             output_mode: self.output_mode.clone(),
             append_newline: self.append_newline,
+            deliver_to_focused_app: self.deliver_to_focused_app,
         }
     }
 
@@ -914,6 +905,59 @@ impl SettingsView {
     fn on_append_newline_click(&mut self, checked: &bool, _: &mut Window, cx: &mut Context<Self>) {
         self.append_newline = *checked;
         cx.notify();
+    }
+
+    fn on_deliver_to_focused_app_click(
+        &mut self,
+        checked: &bool,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.deliver_to_focused_app = *checked;
+        cx.notify();
+    }
+
+    fn on_launch_at_startup_click(
+        &mut self,
+        checked: &bool,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let previous = self.launch_at_startup;
+        self.launch_at_startup = *checked;
+
+        let result = if *checked {
+            startup::enable()
+        } else {
+            startup::disable()
+        };
+
+        match result {
+            Ok(()) => {
+                self.launch_at_startup = startup::is_enabled().unwrap_or(*checked);
+                self.status = if self.launch_at_startup {
+                    "Velocity will launch when you sign in to Windows".to_string()
+                } else {
+                    "Velocity will not launch when you sign in to Windows".to_string()
+                };
+            }
+            Err(error) => {
+                self.launch_at_startup = previous;
+                self.status = format!("Failed to update Windows startup setting: {error}");
+            }
+        }
+
+        cx.notify();
+    }
+
+    fn refresh_startup_state(&mut self) {
+        match startup::is_enabled() {
+            Ok(enabled) => self.launch_at_startup = enabled,
+            Err(error) => {
+                self.launch_at_startup = false;
+                self.status = format!("Failed to read Windows startup setting: {error}");
+            }
+        }
     }
 
     fn render_api_key_prompt(
@@ -1023,16 +1067,7 @@ impl SettingsView {
                     &self.streaming_input,
                     &self.streaming,
                     cx,
-                )))
-                .child(
-                    field()
-                        .label("Resend selected")
-                        .child(self.render_hotkey_input(
-                            &self.resend_selected_input,
-                            &self.resend_selected,
-                            cx,
-                        )),
-                ),
+                ))),
             cx,
         );
 
@@ -1077,7 +1112,29 @@ impl SettingsView {
                             .label("Append newline after transcript")
                             .on_click(cx.listener(Self::on_append_newline_click)),
                     ),
+                )
+                .child(
+                    field().label("Focused app").child(
+                        Switch::new("deliver-to-focused-app")
+                            .checked(self.deliver_to_focused_app)
+                            .label("Send transcript to the app focused at delivery")
+                            .on_click(cx.listener(Self::on_deliver_to_focused_app_click)),
+                    ),
                 ),
+            cx,
+        );
+
+        let system = self.render_settings_section(
+            SettingsSection::System,
+            "System",
+            v_form().with_size(Size::Large).child(
+                field().label("Windows sign-in").child(
+                    Switch::new("launch-at-startup")
+                        .checked(self.launch_at_startup)
+                        .label("Launch Velocity when I sign in to Windows")
+                        .on_click(cx.listener(Self::on_launch_at_startup_click)),
+                ),
+            ),
             cx,
         );
 
@@ -1124,6 +1181,7 @@ impl SettingsView {
                         .child(transcription)
                         .child(hotkeys)
                         .child(audio_output)
+                        .child(system)
                         .child(self.render_status_box(cx))
                         .child(actions),
                 ),
@@ -1656,7 +1714,6 @@ fn validate_hotkeys(config: &Config) -> Result<(), String> {
         ("Push to talk", &config.hotkeys.push_to_talk),
         ("Keep talking", &config.hotkeys.keep_talking),
         ("Streaming", &config.hotkeys.streaming),
-        ("Resend selected", &config.hotkeys.resend_selected),
     ] {
         hotkey::parse_hotkey(value).map_err(|error| format!("{label}: {error}"))?;
     }

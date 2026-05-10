@@ -2,7 +2,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 /// Types the given text into whatever window currently has focus,
 /// using Unicode SendInput so all characters work regardless of layout.
-pub fn type_text(text: &str) {
+pub fn type_text(text: &str) -> Result<(), String> {
     let mut inputs = Vec::new();
     for ch in text.chars() {
         match ch {
@@ -22,12 +22,15 @@ pub fn type_text(text: &str) {
     }
 
     if inputs.is_empty() {
-        return;
+        return Ok(());
     }
 
-    unsafe {
-        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    if sent != inputs.len() as u32 {
+        return Err("Failed to send transcript keyboard input".to_string());
     }
+
+    Ok(())
 }
 
 fn make_unicode_input(ch: u16, flags: u32) -> INPUT {
@@ -60,7 +63,7 @@ fn make_key_input(vk: VIRTUAL_KEY, flags: u32) -> INPUT {
     }
 }
 
-pub fn paste_clipboard() {
+pub fn paste_clipboard() -> Result<(), String> {
     let inputs = vec![
         make_key_input(VK_CONTROL, 0),
         make_key_input(VIRTUAL_KEY('V' as u16), 0),
@@ -68,7 +71,10 @@ pub fn paste_clipboard() {
         make_key_input(VK_CONTROL, KEYEVENTF_KEYUP.0),
     ];
 
-    unsafe {
-        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    if sent != inputs.len() as u32 {
+        return Err("Failed to send paste keyboard input".to_string());
     }
+
+    Ok(())
 }

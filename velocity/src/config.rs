@@ -42,7 +42,6 @@ pub struct HotkeyConfig {
     pub push_to_talk: String,
     pub keep_talking: String,
     pub streaming: String,
-    pub resend_selected: String,
 }
 
 impl Default for HotkeyConfig {
@@ -51,7 +50,6 @@ impl Default for HotkeyConfig {
             push_to_talk: "Win+Ctrl+'".to_string(),
             keep_talking: "Win+Ctrl+Shift+'".to_string(),
             streaming: "Win+Ctrl+[".to_string(),
-            resend_selected: "Win+Ctrl+]".to_string(),
         }
     }
 }
@@ -76,6 +74,8 @@ pub struct Config {
     pub output_mode: OutputMode,
     #[serde(default)]
     pub append_newline: bool,
+    #[serde(default = "default_deliver_to_focused_app")]
+    pub deliver_to_focused_app: bool,
     /// Automatically stop push-to-talk recording after this many ms of silence.
     /// Set to 0 to disable VAD auto-stop (default).
     #[serde(default)]
@@ -95,6 +95,7 @@ impl Default for Config {
             history_limit: default_history_limit(),
             output_mode: OutputMode::default(),
             append_newline: false,
+            deliver_to_focused_app: true,
             vad_silence_ms: 0,
         }
     }
@@ -112,6 +113,10 @@ fn default_model() -> String {
 
 fn default_history_limit() -> usize {
     DEFAULT_HISTORY_LIMIT
+}
+
+fn default_deliver_to_focused_app() -> bool {
+    true
 }
 
 pub fn app_data_dir() -> PathBuf {
@@ -218,7 +223,6 @@ impl Config {
         self.hotkeys.push_to_talk = normalize_hotkey_text(&self.hotkeys.push_to_talk)?;
         self.hotkeys.keep_talking = normalize_hotkey_text(&self.hotkeys.keep_talking)?;
         self.hotkeys.streaming = normalize_hotkey_text(&self.hotkeys.streaming)?;
-        self.hotkeys.resend_selected = normalize_hotkey_text(&self.hotkeys.resend_selected)?;
         Ok(())
     }
 }
@@ -248,8 +252,8 @@ mod tests {
         assert_eq!(config.language, None);
         assert_eq!(config.history_limit, DEFAULT_HISTORY_LIMIT);
         assert_eq!(config.hotkeys.push_to_talk, "Win+Ctrl+'");
-        assert_eq!(config.hotkeys.resend_selected, "Win+Ctrl+]");
         assert_eq!(config.output_mode, OutputMode::DirectInput);
+        assert!(config.deliver_to_focused_app);
     }
 
     #[test]

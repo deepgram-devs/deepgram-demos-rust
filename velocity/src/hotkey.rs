@@ -9,7 +9,6 @@ use crate::config::HotkeyConfig;
 pub const HOTKEY_PTT: i32 = 1;
 pub const HOTKEY_KT: i32 = 2;
 pub const HOTKEY_STREAM: i32 = 3;
-pub const HOTKEY_RESEND: i32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HotkeyBinding {
@@ -26,7 +25,6 @@ pub struct HotkeyManager {
     keep_talking: Arc<AtomicBool>,
     streaming_active: Arc<AtomicBool>,
     on_stream_start: Arc<dyn Fn() + Send + Sync>,
-    on_resend_selected: Arc<dyn Fn() + Send + Sync>,
     active_config: HotkeyConfig,
 }
 
@@ -42,7 +40,6 @@ impl HotkeyManager {
         on_stop: Arc<dyn Fn() + Send + Sync>,
         streaming_active: Arc<AtomicBool>,
         on_stream_start: Arc<dyn Fn() + Send + Sync>,
-        on_resend_selected: Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
         Self {
             hwnd,
@@ -52,7 +49,6 @@ impl HotkeyManager {
             on_stop,
             streaming_active,
             on_stream_start,
-            on_resend_selected,
             active_config: config,
         }
     }
@@ -66,7 +62,6 @@ impl HotkeyManager {
             (HOTKEY_PTT, parse_hotkey(&config.push_to_talk)?),
             (HOTKEY_KT, parse_hotkey(&config.keep_talking)?),
             (HOTKEY_STREAM, parse_hotkey(&config.streaming)?),
-            (HOTKEY_RESEND, parse_hotkey(&config.resend_selected)?),
         ];
 
         unsafe {
@@ -130,7 +125,6 @@ impl HotkeyManager {
                     self.spawn_release_watcher();
                 }
             }
-            HOTKEY_RESEND => (self.on_resend_selected)(),
             _ => {}
         }
     }
@@ -169,7 +163,6 @@ impl HotkeyManager {
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_PTT);
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_KT);
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_STREAM);
-            let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_RESEND);
         }
     }
 }
@@ -314,9 +307,6 @@ mod tests {
         assert!(ptt.modifiers.contains(MOD_WIN));
         assert!(ptt.modifiers.contains(MOD_CONTROL));
         assert_eq!(ptt.vk, VK_OEM_7.0 as u32);
-
-        let resend = parse_hotkey("Win+Ctrl+]").unwrap();
-        assert_eq!(resend.vk, VK_OEM_6.0 as u32);
     }
 
     #[test]
