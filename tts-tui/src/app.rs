@@ -1,18 +1,18 @@
-use ratatui::widgets::TableState;
-use ratatui::widgets::ListState;
-use ratatui::layout::Rect;
-use directories::ProjectDirs;
+use crate::config::{self, AppConfig, ExperimentalFlags};
+use crate::persistence;
+use crate::theme::{Theme, DEFAULT_THEME_INDEX, THEMES};
 use anyhow::Result;
+use directories::ProjectDirs;
 use lazy_static::lazy_static;
-use std::collections::{HashMap, HashSet, VecDeque};
+use ratatui::layout::Rect;
+use ratatui::widgets::ListState;
+use ratatui::widgets::TableState;
+use rodio::OutputStream;
 use rust_decimal::Decimal;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::str::FromStr;
 use std::sync::Arc;
-use rodio::OutputStream;
 use tokio::sync::mpsc;
-use crate::config::{self, AppConfig, ExperimentalFlags};
-use crate::theme::{Theme, THEMES, DEFAULT_THEME_INDEX};
-use crate::persistence;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Gender {
@@ -80,53 +80,177 @@ pub struct AppCommand {
 }
 
 pub static ALL_COMMANDS: &[AppCommand] = &[
-    AppCommand { name: "Play Selected Text",       shortcut: Some("Enter"),      action: CommandAction::PlaySelected },
-    AppCommand { name: "Enqueue Selected Text",    shortcut: Some("Space"),      action: CommandAction::EnqueueSelected },
-    AppCommand { name: "Clear Playback Queue",     shortcut: None,               action: CommandAction::ClearQueue },
-    AppCommand { name: "Stop Playback",            shortcut: Some("Esc"),        action: CommandAction::StopPlayback },
-    AppCommand { name: "Add New Text",             shortcut: Some("n"),          action: CommandAction::AddText },
-    AppCommand { name: "Edit Selected Text",       shortcut: Some("e"),          action: CommandAction::EditText },
-    AppCommand { name: "Delete Selected Text",     shortcut: Some("d"),          action: CommandAction::DeleteText },
-    AppCommand { name: "Move Text Up",             shortcut: Some("Ctrl+Up"),    action: CommandAction::MoveTextUp },
-    AppCommand { name: "Move Text Down",           shortcut: Some("Ctrl+Down"),  action: CommandAction::MoveTextDown },
-    AppCommand { name: "Toggle Favorite Voice",    shortcut: Some("*"),          action: CommandAction::ToggleFavoriteVoice },
-    AppCommand { name: "Filter Voices",            shortcut: Some("/ (voices)"), action: CommandAction::FilterVoices },
-    AppCommand { name: "Filter Texts",             shortcut: Some("/ (texts)"),  action: CommandAction::FilterTexts },
-    AppCommand { name: "Set API Key",              shortcut: Some("k"),          action: CommandAction::SetApiKey },
-    AppCommand { name: "Open Cache Folder",        shortcut: Some("o"),          action: CommandAction::OpenCacheFolder },
-    AppCommand { name: "Select Theme",             shortcut: Some("t"),          action: CommandAction::SelectTheme },
-    AppCommand { name: "Select Audio Format",      shortcut: Some("f"),          action: CommandAction::SelectAudioFormat },
-    AppCommand { name: "Select Sample Rate",       shortcut: Some("s"),          action: CommandAction::SelectSampleRate },
-    AppCommand { name: "Show Help",                shortcut: Some("?"),          action: CommandAction::ShowHelp },
-    AppCommand { name: "Increase Playback Speed",  shortcut: Some("+/="),        action: CommandAction::IncreaseSpeed },
-    AppCommand { name: "Decrease Playback Speed",  shortcut: Some("-"),          action: CommandAction::DecreaseSpeed },
-    AppCommand { name: "Reset Playback Speed",     shortcut: Some("0"),          action: CommandAction::ResetSpeed },
-    AppCommand { name: "Quit Application",         shortcut: Some("q/Ctrl+Q"),   action: CommandAction::Quit },
+    AppCommand {
+        name: "Play Selected Text",
+        shortcut: Some("Enter"),
+        action: CommandAction::PlaySelected,
+    },
+    AppCommand {
+        name: "Enqueue Selected Text",
+        shortcut: Some("Space"),
+        action: CommandAction::EnqueueSelected,
+    },
+    AppCommand {
+        name: "Clear Playback Queue",
+        shortcut: None,
+        action: CommandAction::ClearQueue,
+    },
+    AppCommand {
+        name: "Stop Playback",
+        shortcut: Some("Esc"),
+        action: CommandAction::StopPlayback,
+    },
+    AppCommand {
+        name: "Add New Text",
+        shortcut: Some("n"),
+        action: CommandAction::AddText,
+    },
+    AppCommand {
+        name: "Edit Selected Text",
+        shortcut: Some("e"),
+        action: CommandAction::EditText,
+    },
+    AppCommand {
+        name: "Delete Selected Text",
+        shortcut: Some("d"),
+        action: CommandAction::DeleteText,
+    },
+    AppCommand {
+        name: "Move Text Up",
+        shortcut: Some("Ctrl+Up"),
+        action: CommandAction::MoveTextUp,
+    },
+    AppCommand {
+        name: "Move Text Down",
+        shortcut: Some("Ctrl+Down"),
+        action: CommandAction::MoveTextDown,
+    },
+    AppCommand {
+        name: "Toggle Favorite Voice",
+        shortcut: Some("*"),
+        action: CommandAction::ToggleFavoriteVoice,
+    },
+    AppCommand {
+        name: "Filter Voices",
+        shortcut: Some("/ (voices)"),
+        action: CommandAction::FilterVoices,
+    },
+    AppCommand {
+        name: "Filter Texts",
+        shortcut: Some("/ (texts)"),
+        action: CommandAction::FilterTexts,
+    },
+    AppCommand {
+        name: "Set API Key",
+        shortcut: Some("k"),
+        action: CommandAction::SetApiKey,
+    },
+    AppCommand {
+        name: "Open Cache Folder",
+        shortcut: Some("o"),
+        action: CommandAction::OpenCacheFolder,
+    },
+    AppCommand {
+        name: "Select Theme",
+        shortcut: Some("t"),
+        action: CommandAction::SelectTheme,
+    },
+    AppCommand {
+        name: "Select Audio Format",
+        shortcut: Some("f"),
+        action: CommandAction::SelectAudioFormat,
+    },
+    AppCommand {
+        name: "Select Sample Rate",
+        shortcut: Some("s"),
+        action: CommandAction::SelectSampleRate,
+    },
+    AppCommand {
+        name: "Show Help",
+        shortcut: Some("?"),
+        action: CommandAction::ShowHelp,
+    },
+    AppCommand {
+        name: "Increase Playback Speed",
+        shortcut: Some("+/="),
+        action: CommandAction::IncreaseSpeed,
+    },
+    AppCommand {
+        name: "Decrease Playback Speed",
+        shortcut: Some("-"),
+        action: CommandAction::DecreaseSpeed,
+    },
+    AppCommand {
+        name: "Reset Playback Speed",
+        shortcut: Some("0"),
+        action: CommandAction::ResetSpeed,
+    },
+    AppCommand {
+        name: "Quit Application",
+        shortcut: Some("q/Ctrl+Q"),
+        action: CommandAction::Quit,
+    },
 ];
 
 /// Describes a Deepgram TTS audio encoding format with its constraints.
 pub struct AudioFormat {
-    pub encoding: &'static str,          // Deepgram API `encoding` parameter value
-    pub display_name: &'static str,      // Human-readable name shown in the UI
-    pub extension: &'static str,         // Cache file extension
+    pub encoding: &'static str,     // Deepgram API `encoding` parameter value
+    pub display_name: &'static str, // Human-readable name shown in the UI
+    pub extension: &'static str,    // Cache file extension
     pub valid_sample_rates: &'static [u32],
     pub default_sample_rate: u32,
 }
 
-static MP3_RATES: [u32; 1]      = [22050];
+static MP3_RATES: [u32; 1] = [22050];
 static LINEAR16_RATES: [u32; 5] = [8000, 16000, 24000, 32000, 48000];
-static MULAW_RATES: [u32; 2]    = [8000, 16000];
-static ALAW_RATES: [u32; 2]     = [8000, 16000];
-static FLAC_RATES: [u32; 5]     = [8000, 16000, 22050, 32000, 48000];
-static AAC_RATES: [u32; 1]      = [22050];
+static MULAW_RATES: [u32; 2] = [8000, 16000];
+static ALAW_RATES: [u32; 2] = [8000, 16000];
+static FLAC_RATES: [u32; 5] = [8000, 16000, 22050, 32000, 48000];
+static AAC_RATES: [u32; 1] = [22050];
 
 pub static AUDIO_FORMATS: [AudioFormat; 6] = [
-    AudioFormat { encoding: "mp3",      display_name: "MP3",           extension: "mp3",   valid_sample_rates: &MP3_RATES,      default_sample_rate: 22050 },
-    AudioFormat { encoding: "linear16", display_name: "Linear16 (WAV)",extension: "wav",   valid_sample_rates: &LINEAR16_RATES, default_sample_rate: 24000 },
-    AudioFormat { encoding: "mulaw",    display_name: "μ-law",         extension: "mulaw", valid_sample_rates: &MULAW_RATES,    default_sample_rate: 8000  },
-    AudioFormat { encoding: "alaw",     display_name: "A-law",         extension: "alaw",  valid_sample_rates: &ALAW_RATES,     default_sample_rate: 8000  },
-    AudioFormat { encoding: "flac",     display_name: "FLAC",          extension: "flac",  valid_sample_rates: &FLAC_RATES,     default_sample_rate: 8000  },
-    AudioFormat { encoding: "aac",      display_name: "AAC",           extension: "aac",   valid_sample_rates: &AAC_RATES,      default_sample_rate: 22050 },
+    AudioFormat {
+        encoding: "mp3",
+        display_name: "MP3",
+        extension: "mp3",
+        valid_sample_rates: &MP3_RATES,
+        default_sample_rate: 22050,
+    },
+    AudioFormat {
+        encoding: "linear16",
+        display_name: "Linear16 (WAV)",
+        extension: "wav",
+        valid_sample_rates: &LINEAR16_RATES,
+        default_sample_rate: 24000,
+    },
+    AudioFormat {
+        encoding: "mulaw",
+        display_name: "μ-law",
+        extension: "mulaw",
+        valid_sample_rates: &MULAW_RATES,
+        default_sample_rate: 8000,
+    },
+    AudioFormat {
+        encoding: "alaw",
+        display_name: "A-law",
+        extension: "alaw",
+        valid_sample_rates: &ALAW_RATES,
+        default_sample_rate: 8000,
+    },
+    AudioFormat {
+        encoding: "flac",
+        display_name: "FLAC",
+        extension: "flac",
+        valid_sample_rates: &FLAC_RATES,
+        default_sample_rate: 8000,
+    },
+    AudioFormat {
+        encoding: "aac",
+        display_name: "AAC",
+        extension: "aac",
+        valid_sample_rates: &AAC_RATES,
+        default_sample_rate: 22050,
+    },
 ];
 
 pub const DEFAULT_FORMAT_INDEX: usize = 0; // MP3
@@ -180,7 +304,7 @@ pub struct App {
     pub audio_format_menu_state: ListState,
     pub sample_rate: u32,
     pub sample_rate_menu_state: ListState,
-    pub playback_speed: Decimal,  // Range: 0.7 to 1.5
+    pub playback_speed: Decimal, // Range: 0.7 to 1.5
     pub is_loading: bool,
     pub loading_text: String,
     pub spinner_index: usize,
@@ -334,9 +458,13 @@ lazy_static! {
     };
 }
 
-
 impl App {
-    pub fn new(deepgram_endpoint: String, format_index: usize, sample_rate: u32, config: AppConfig) -> App {
+    pub fn new(
+        deepgram_endpoint: String,
+        format_index: usize,
+        sample_rate: u32,
+        config: AppConfig,
+    ) -> App {
         let mut text_table_state = TableState::default();
         text_table_state.select(Some(0)); // Select the first item by default
 
@@ -347,7 +475,8 @@ impl App {
 
         // Resolve API key: env var > config file key
         dotenvy::dotenv().ok();
-        let resolved_api_key = std::env::var("DEEPGRAM_API_KEY").ok()
+        let resolved_api_key = std::env::var("DEEPGRAM_API_KEY")
+            .ok()
             .or_else(|| config.api.key.clone().filter(|k| !k.is_empty()));
 
         let mut initial_logs: Vec<LogEntry> = Vec::new();
@@ -357,21 +486,72 @@ impl App {
             timestamp: chrono::Local::now(),
         };
 
-        initial_logs.push(make_entry(LogLevel::Info, format!("Config: {}", config::config_path_display())));
+        initial_logs.push(make_entry(
+            LogLevel::Info,
+            format!("Config: {}", config::config_path_display()),
+        ));
 
-        if resolved_api_key.is_none() {
+        let provider = config
+            .api
+            .provider
+            .as_deref()
+            .unwrap_or("deepgram")
+            .to_lowercase();
+        initial_logs.push(make_entry(
+            LogLevel::Info,
+            format!("TTS provider: {}", provider),
+        ));
+
+        if provider == "deepgram" && resolved_api_key.is_none() {
             initial_logs.push(make_entry(
                 LogLevel::Warning,
-                "No DEEPGRAM_API_KEY set. Press 'k' to enter your API key interactively.".to_string(),
+                "No DEEPGRAM_API_KEY set. Requests will be sent without an Authorization header; press 'k' to enter an API key if your endpoint requires one.".to_string(),
+            ));
+        } else if provider == "sagemaker" {
+            let endpoint = config
+                .sagemaker
+                .endpoint_name
+                .as_deref()
+                .unwrap_or("<not configured>");
+            let region = config.sagemaker.region.as_deref().unwrap_or("us-east-2");
+            initial_logs.push(make_entry(
+                LogLevel::Info,
+                format!("SageMaker endpoint: {} | region: {}", endpoint, region),
+            ));
+            if config
+                .sagemaker
+                .endpoint_name
+                .as_ref()
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true)
+            {
+                initial_logs.push(make_entry(
+                    LogLevel::Warning,
+                    "SageMaker provider selected but no endpoint name is configured.".to_string(),
+                ));
+            }
+        } else {
+            initial_logs.push(make_entry(
+                LogLevel::Warning,
+                format!(
+                    "Unknown TTS provider '{}'. Supported values: deepgram, sagemaker.",
+                    provider
+                ),
             ));
         }
 
         let flags = &config.experimental;
         if flags.streaming_playback {
-            initial_logs.push(make_entry(LogLevel::Info, "[experimental] streaming_playback enabled".to_string()));
+            initial_logs.push(make_entry(
+                LogLevel::Info,
+                "[experimental] streaming_playback enabled".to_string(),
+            ));
         }
         if flags.ssml_support {
-            initial_logs.push(make_entry(LogLevel::Info, "[experimental] ssml_support enabled".to_string()));
+            initial_logs.push(make_entry(
+                LogLevel::Info,
+                "[experimental] ssml_support enabled".to_string(),
+            ));
         }
 
         // Validate format index
@@ -386,9 +566,15 @@ impl App {
         };
 
         if format_index != DEFAULT_FORMAT_INDEX {
-            initial_logs.push(make_entry(LogLevel::Info, format!("Audio format: {} | {} Hz", fmt.display_name, sample_rate)));
+            initial_logs.push(make_entry(
+                LogLevel::Info,
+                format!("Audio format: {} | {} Hz", fmt.display_name, sample_rate),
+            ));
         } else if sample_rate != fmt.default_sample_rate {
-            initial_logs.push(make_entry(LogLevel::Info, format!("Sample rate: {} Hz", sample_rate)));
+            initial_logs.push(make_entry(
+                LogLevel::Info,
+                format!("Sample rate: {} Hz", sample_rate),
+            ));
         }
 
         // Pre-select format in format menu
@@ -396,7 +582,11 @@ impl App {
         audio_format_menu_state.select(Some(format_index));
 
         // Pre-select sample rate within the format's valid rates
-        let rate_index = fmt.valid_sample_rates.iter().position(|&r| r == sample_rate).unwrap_or(0);
+        let rate_index = fmt
+            .valid_sample_rates
+            .iter()
+            .position(|&r| r == sample_rate)
+            .unwrap_or(0);
         let mut sample_rate_menu_state = ListState::default();
         sample_rate_menu_state.select(Some(rate_index));
 
@@ -410,9 +600,11 @@ impl App {
             voice_menu_state,
             saved_texts: persisted.texts,
             voices,
-            audio_cache_dir: Self::get_audio_cache_dir().expect("Failed to get audio cache directory"),
+            audio_cache_dir: Self::get_audio_cache_dir()
+                .expect("Failed to get audio cache directory"),
             deepgram_endpoint,
-            status_message: "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string(),
+            status_message: "Press 'n' to add new text, 'd' to delete, 'Enter' to play."
+                .to_string(),
             focused_panel: Panel::TextList,
             logs: initial_logs,
             input_buffer: String::new(),
@@ -467,7 +659,8 @@ impl App {
                 self.input_buffer = self.saved_texts[orig_idx].clone();
                 self.current_screen = CurrentScreen::Editing;
                 self.currently_editing = Some(CurrentlyEditing::Text);
-                self.status_message = "Editing text — Press 'Enter' to save, 'Esc' to cancel.".to_string();
+                self.status_message =
+                    "Editing text — Press 'Enter' to save, 'Esc' to cancel.".to_string();
             }
         }
     }
@@ -477,7 +670,8 @@ impl App {
         self.currently_editing = None;
         self.editing_original_index = None;
         self.input_buffer.clear();
-        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
     #[allow(dead_code)]
@@ -489,14 +683,18 @@ impl App {
         let dir = self.audio_cache_dir.clone();
         match std::process::Command::new("open").arg(&dir).spawn() {
             Ok(_) => self.add_log(format!("Opened cache folder in Finder: {}", dir)),
-            Err(e) => self.add_log_with_level(LogLevel::Error, format!("Failed to open cache folder: {}", e)),
+            Err(e) => self.add_log_with_level(
+                LogLevel::Error,
+                format!("Failed to open cache folder: {}", e),
+            ),
         }
     }
 
     pub fn enter_api_key_mode(&mut self) {
         self.current_screen = CurrentScreen::ApiKeyInput;
         self.api_key_input_buffer.clear();
-        self.status_message = "Enter your Deepgram API key. Press 'Enter' to save, 'Esc' to cancel.".to_string();
+        self.status_message =
+            "Enter your Deepgram API key. Press 'Enter' to save, 'Esc' to cancel.".to_string();
     }
 
     pub fn save_api_key(&mut self) {
@@ -507,13 +705,15 @@ impl App {
         }
         self.api_key_input_buffer.clear();
         self.current_screen = CurrentScreen::Main;
-        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
     pub fn exit_api_key_mode(&mut self) {
         self.api_key_input_buffer.clear();
         self.current_screen = CurrentScreen::Main;
-        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
     pub fn show_help_screen(&mut self) {
@@ -618,7 +818,10 @@ impl App {
             return;
         }
         // Find end of the last word (skip trailing whitespace)
-        let trim_end = self.input_buffer.trim_end_matches(|c: char| c.is_whitespace()).len();
+        let trim_end = self
+            .input_buffer
+            .trim_end_matches(|c: char| c.is_whitespace())
+            .len();
         // Find the start of that word (last whitespace before it)
         let word_start = self.input_buffer[..trim_end]
             .rfind(|c: char| c.is_whitespace())
@@ -629,17 +832,15 @@ impl App {
 
     pub fn paste_from_clipboard(&mut self) {
         match arboard::Clipboard::new() {
-            Ok(mut clipboard) => {
-                match clipboard.get_text() {
-                    Ok(text) => {
-                        self.input_buffer.push_str(&text);
-                        self.add_log("Pasted from clipboard".to_string());
-                    }
-                    Err(e) => {
-                        self.add_log(format!("Failed to paste from clipboard: {}", e));
-                    }
+            Ok(mut clipboard) => match clipboard.get_text() {
+                Ok(text) => {
+                    self.input_buffer.push_str(&text);
+                    self.add_log("Pasted from clipboard".to_string());
                 }
-            }
+                Err(e) => {
+                    self.add_log(format!("Failed to paste from clipboard: {}", e));
+                }
+            },
             Err(e) => {
                 self.add_log(format!("Failed to access clipboard: {}", e));
             }
@@ -648,17 +849,15 @@ impl App {
 
     pub fn paste_from_clipboard_to_api_key(&mut self) {
         match arboard::Clipboard::new() {
-            Ok(mut clipboard) => {
-                match clipboard.get_text() {
-                    Ok(text) => {
-                        self.api_key_input_buffer.push_str(&text);
-                        self.add_log("Pasted API key from clipboard".to_string());
-                    }
-                    Err(e) => {
-                        self.add_log(format!("Failed to paste from clipboard: {}", e));
-                    }
+            Ok(mut clipboard) => match clipboard.get_text() {
+                Ok(text) => {
+                    self.api_key_input_buffer.push_str(&text);
+                    self.add_log("Pasted API key from clipboard".to_string());
                 }
-            }
+                Err(e) => {
+                    self.add_log(format!("Failed to paste from clipboard: {}", e));
+                }
+            },
             Err(e) => {
                 self.add_log(format!("Failed to access clipboard: {}", e));
             }
@@ -687,7 +886,6 @@ impl App {
             }
         }
     }
-
 
     // ── Favorites ────────────────────────────────────────────────────────────
 
@@ -724,7 +922,10 @@ impl App {
             self.playback_queue.push_back((text.clone(), voice_id));
             self.add_log(format!("Queued: \"{}\" with {}", text, voice_name));
             let count = self.playback_queue.len();
-            self.set_status_message(format!("{} item(s) in queue — press Enter to play or queue more", count));
+            self.set_status_message(format!(
+                "{} item(s) in queue — press Enter to play or queue more",
+                count
+            ));
         }
     }
 
@@ -741,7 +942,9 @@ impl App {
     // ── Text Reordering ───────────────────────────────────────────────────────
 
     pub fn move_text_up(&mut self) {
-        if !self.text_filter.is_empty() { return; } // reorder disabled when filtered
+        if !self.text_filter.is_empty() {
+            return;
+        } // reorder disabled when filtered
         if let Some(idx) = self.text_table_state.selected() {
             if idx > 0 {
                 self.saved_texts.swap(idx, idx - 1);
@@ -753,7 +956,9 @@ impl App {
     }
 
     pub fn move_text_down(&mut self) {
-        if !self.text_filter.is_empty() { return; } // reorder disabled when filtered
+        if !self.text_filter.is_empty() {
+            return;
+        } // reorder disabled when filtered
         if let Some(idx) = self.text_table_state.selected() {
             if idx + 1 < self.saved_texts.len() {
                 self.saved_texts.swap(idx, idx + 1);
@@ -770,13 +975,15 @@ impl App {
         self.command_palette_buffer.clear();
         self.command_palette_state.select(Some(0));
         self.current_screen = CurrentScreen::CommandPalette;
-        self.status_message = "Command Palette — type to filter, Enter to run, Esc to cancel".to_string();
+        self.status_message =
+            "Command Palette — type to filter, Enter to run, Esc to cancel".to_string();
     }
 
     pub fn exit_command_palette(&mut self) {
         self.command_palette_buffer.clear();
         self.current_screen = CurrentScreen::Main;
-        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
     pub fn get_filtered_commands(&self) -> Vec<&'static AppCommand> {
@@ -784,17 +991,28 @@ impl App {
             ALL_COMMANDS.iter().collect()
         } else {
             let q = self.command_palette_buffer.to_lowercase();
-            ALL_COMMANDS.iter().filter(|cmd| cmd.name.to_lowercase().contains(&q)).collect()
+            ALL_COMMANDS
+                .iter()
+                .filter(|cmd| cmd.name.to_lowercase().contains(&q))
+                .collect()
         }
     }
 
     pub fn scroll_command_palette(&mut self, direction: i32) {
         let len = self.get_filtered_commands().len();
-        if len == 0 { return; }
+        if len == 0 {
+            return;
+        }
         let i = match self.command_palette_state.selected() {
             Some(i) => {
                 let new = i as i32 + direction;
-                if new < 0 { len - 1 } else if new as usize >= len { 0 } else { new as usize }
+                if new < 0 {
+                    len - 1
+                } else if new as usize >= len {
+                    0
+                } else {
+                    new as usize
+                }
             }
             None => 0,
         };
@@ -806,7 +1024,9 @@ impl App {
     /// directly and returns None.
     pub fn execute_command_palette(&mut self) -> Option<CommandAction> {
         let commands = self.get_filtered_commands();
-        let action = self.command_palette_state.selected()
+        let action = self
+            .command_palette_state
+            .selected()
             .and_then(|i| commands.get(i))
             .map(|cmd| cmd.action.clone());
 
@@ -815,26 +1035,26 @@ impl App {
         if let Some(ref a) = action {
             match a {
                 CommandAction::PlaySelected | CommandAction::Quit => { /* handled by main.rs */ }
-                CommandAction::AddText           => self.enter_input_mode(),
-                CommandAction::EditText          => self.enter_edit_mode(),
-                CommandAction::DeleteText        => self.delete_selected_text(),
-                CommandAction::EnqueueSelected   => self.enqueue_current(),
-                CommandAction::ClearQueue        => self.clear_queue(),
-                CommandAction::MoveTextUp        => self.move_text_up(),
-                CommandAction::MoveTextDown      => self.move_text_down(),
+                CommandAction::AddText => self.enter_input_mode(),
+                CommandAction::EditText => self.enter_edit_mode(),
+                CommandAction::DeleteText => self.delete_selected_text(),
+                CommandAction::EnqueueSelected => self.enqueue_current(),
+                CommandAction::ClearQueue => self.clear_queue(),
+                CommandAction::MoveTextUp => self.move_text_up(),
+                CommandAction::MoveTextDown => self.move_text_down(),
                 CommandAction::ToggleFavoriteVoice => self.toggle_favorite_voice(),
-                CommandAction::FilterVoices      => self.enter_voice_filter_mode(),
-                CommandAction::FilterTexts       => self.enter_text_filter_mode(),
-                CommandAction::SetApiKey         => self.enter_api_key_mode(),
-                CommandAction::OpenCacheFolder   => self.open_audio_cache_in_finder(),
-                CommandAction::SelectTheme       => self.enter_theme_select_mode(),
+                CommandAction::FilterVoices => self.enter_voice_filter_mode(),
+                CommandAction::FilterTexts => self.enter_text_filter_mode(),
+                CommandAction::SetApiKey => self.enter_api_key_mode(),
+                CommandAction::OpenCacheFolder => self.open_audio_cache_in_finder(),
+                CommandAction::SelectTheme => self.enter_theme_select_mode(),
                 CommandAction::SelectAudioFormat => self.enter_audio_format_mode(),
-                CommandAction::SelectSampleRate  => self.enter_sample_rate_mode(),
-                CommandAction::ShowHelp          => self.show_help_screen(),
-                CommandAction::IncreaseSpeed     => self.increase_speed(),
-                CommandAction::DecreaseSpeed     => self.decrease_speed(),
-                CommandAction::ResetSpeed        => self.reset_speed(),
-                CommandAction::StopPlayback      => self.stop_audio_playback(),
+                CommandAction::SelectSampleRate => self.enter_sample_rate_mode(),
+                CommandAction::ShowHelp => self.show_help_screen(),
+                CommandAction::IncreaseSpeed => self.increase_speed(),
+                CommandAction::DecreaseSpeed => self.decrease_speed(),
+                CommandAction::ResetSpeed => self.reset_speed(),
+                CommandAction::StopPlayback => self.stop_audio_playback(),
             }
         }
 
@@ -846,7 +1066,11 @@ impl App {
     }
 
     pub fn add_log_with_level(&mut self, level: LogLevel, message: String) {
-        self.logs.push(LogEntry { level, message, timestamp: chrono::Local::now() });
+        self.logs.push(LogEntry {
+            level,
+            message,
+            timestamp: chrono::Local::now(),
+        });
         if self.logs.len() > 500 {
             self.logs.remove(0);
         }
@@ -914,7 +1138,10 @@ impl App {
                     }
 
                     // Skip separators
-                    while new_index >= 0 && new_index < total_items as i32 && self.is_language_separator_index(new_index as usize) {
+                    while new_index >= 0
+                        && new_index < total_items as i32
+                        && self.is_language_separator_index(new_index as usize)
+                    {
                         new_index += direction;
                     }
                     // Wrap around if needed
@@ -941,6 +1168,10 @@ impl App {
 
     pub fn set_status_message(&mut self, message: String) {
         self.status_message = message;
+    }
+
+    pub fn tts_provider(&self) -> &str {
+        self.config.api.provider.as_deref().unwrap_or("deepgram")
     }
 
     pub fn focus_next_panel(&mut self) {
@@ -1055,7 +1286,8 @@ impl App {
     pub fn enter_voice_filter_mode(&mut self) {
         self.voice_filter_buffer = self.voice_filter.clone();
         self.current_screen = CurrentScreen::VoiceFilter;
-        self.status_message = "Filter voices — Enter to apply, Esc to cancel, Ctrl+U to clear".to_string();
+        self.status_message =
+            "Filter voices — Enter to apply, Esc to cancel, Ctrl+U to clear".to_string();
     }
 
     pub fn apply_voice_filter(&mut self) {
@@ -1064,13 +1296,15 @@ impl App {
         self.voice_menu_state.select(Some(0));
         self.current_screen = CurrentScreen::Main;
         self.focused_panel = Panel::VoiceMenu;
-        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
     pub fn cancel_voice_filter(&mut self) {
         self.voice_filter_buffer.clear();
         self.current_screen = CurrentScreen::Main;
-        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
     pub fn clear_voice_filter_buffer(&mut self) {
@@ -1103,7 +1337,11 @@ impl App {
 
     fn get_filtered_text_original_index(&self, filtered_idx: usize) -> Option<usize> {
         if self.text_filter.is_empty() {
-            if filtered_idx < self.saved_texts.len() { Some(filtered_idx) } else { None }
+            if filtered_idx < self.saved_texts.len() {
+                Some(filtered_idx)
+            } else {
+                None
+            }
         } else {
             let filter_lower = self.text_filter.to_lowercase();
             self.saved_texts
@@ -1118,7 +1356,8 @@ impl App {
     pub fn enter_text_filter_mode(&mut self) {
         self.text_filter_buffer = self.text_filter.clone();
         self.current_screen = CurrentScreen::TextFilter;
-        self.status_message = "Filter texts — Enter to apply, Esc to cancel, Ctrl+U to clear".to_string();
+        self.status_message =
+            "Filter texts — Enter to apply, Esc to cancel, Ctrl+U to clear".to_string();
     }
 
     pub fn apply_text_filter(&mut self) {
@@ -1127,13 +1366,15 @@ impl App {
         self.text_table_state.select(Some(0));
         self.current_screen = CurrentScreen::Main;
         self.focused_panel = Panel::TextList;
-        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
     pub fn cancel_text_filter(&mut self) {
         self.text_filter_buffer.clear();
         self.current_screen = CurrentScreen::Main;
-        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
     pub fn clear_text_filter_buffer(&mut self) {
@@ -1163,12 +1404,14 @@ impl App {
             }
         }
         self.current_screen = CurrentScreen::Main;
-        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
     pub fn cancel_theme_mode(&mut self) {
         self.current_screen = CurrentScreen::Main;
-        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
     pub fn scroll_theme_menu(&mut self, direction: i32) {
@@ -1176,7 +1419,13 @@ impl App {
         let i = match self.theme_menu_state.selected() {
             Some(i) => {
                 let new = i as i32 + direction;
-                if new < 0 { len - 1 } else if new as usize >= len { 0 } else { new as usize }
+                if new < 0 {
+                    len - 1
+                } else if new as usize >= len {
+                    0
+                } else {
+                    new as usize
+                }
             }
             None => 0,
         };
@@ -1188,7 +1437,8 @@ impl App {
     }
 
     pub fn enter_audio_format_mode(&mut self) {
-        self.audio_format_menu_state.select(Some(self.audio_format_index));
+        self.audio_format_menu_state
+            .select(Some(self.audio_format_index));
         self.current_screen = CurrentScreen::AudioFormatSelect;
         self.status_message = "Select audio format — Enter to apply, Esc to cancel".to_string();
     }
@@ -1202,21 +1452,32 @@ impl App {
                 if !fmt.valid_sample_rates.contains(&self.sample_rate) {
                     let old_rate = self.sample_rate;
                     self.sample_rate = fmt.default_sample_rate;
-                    self.add_log_with_level(LogLevel::Info,
-                        format!("Sample rate adjusted from {} to {} Hz for {} encoding",
-                            old_rate, self.sample_rate, fmt.display_name));
+                    self.add_log_with_level(
+                        LogLevel::Info,
+                        format!(
+                            "Sample rate adjusted from {} to {} Hz for {} encoding",
+                            old_rate, self.sample_rate, fmt.display_name
+                        ),
+                    );
                 }
-                self.add_log_with_level(LogLevel::Info,
-                    format!("Audio format: {} | {} Hz", fmt.display_name, self.sample_rate));
+                self.add_log_with_level(
+                    LogLevel::Info,
+                    format!(
+                        "Audio format: {} | {} Hz",
+                        fmt.display_name, self.sample_rate
+                    ),
+                );
             }
         }
         self.current_screen = CurrentScreen::Main;
-        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
     pub fn cancel_audio_format_mode(&mut self) {
         self.current_screen = CurrentScreen::Main;
-        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
     pub fn scroll_audio_format_menu(&mut self, direction: i32) {
@@ -1224,7 +1485,13 @@ impl App {
         let i = match self.audio_format_menu_state.selected() {
             Some(i) => {
                 let new = i as i32 + direction;
-                if new < 0 { len - 1 } else if new as usize >= len { 0 } else { new as usize }
+                if new < 0 {
+                    len - 1
+                } else if new as usize >= len {
+                    0
+                } else {
+                    new as usize
+                }
             }
             None => 0,
         };
@@ -1233,7 +1500,10 @@ impl App {
 
     pub fn enter_sample_rate_mode(&mut self) {
         let rates = self.current_audio_format().valid_sample_rates;
-        let rate_index = rates.iter().position(|&r| r == self.sample_rate).unwrap_or(0);
+        let rate_index = rates
+            .iter()
+            .position(|&r| r == self.sample_rate)
+            .unwrap_or(0);
         self.sample_rate_menu_state.select(Some(rate_index));
         self.current_screen = CurrentScreen::SampleRateSelect;
         self.status_message = "Select sample rate — Enter to apply, Esc to cancel".to_string();
@@ -1244,16 +1514,21 @@ impl App {
             let rates = self.current_audio_format().valid_sample_rates;
             if idx < rates.len() {
                 self.sample_rate = rates[idx];
-                self.add_log_with_level(LogLevel::Info, format!("Sample rate set to {} Hz", self.sample_rate));
+                self.add_log_with_level(
+                    LogLevel::Info,
+                    format!("Sample rate set to {} Hz", self.sample_rate),
+                );
             }
         }
         self.current_screen = CurrentScreen::Main;
-        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
     pub fn cancel_sample_rate_mode(&mut self) {
         self.current_screen = CurrentScreen::Main;
-        self.status_message = "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
     }
 
     pub fn scroll_sample_rate_menu(&mut self, direction: i32) {
@@ -1261,7 +1536,13 @@ impl App {
         let i = match self.sample_rate_menu_state.selected() {
             Some(i) => {
                 let new = i as i32 + direction;
-                if new < 0 { len - 1 } else if new as usize >= len { 0 } else { new as usize }
+                if new < 0 {
+                    len - 1
+                } else if new as usize >= len {
+                    0
+                } else {
+                    new as usize
+                }
             }
             None => 0,
         };
@@ -1317,8 +1598,8 @@ impl App {
                 let done_by_sink = sink.empty();
                 // Also treat elapsed >= duration as done: covers the gap between the
                 // duration expiring and the 250 ms poll interval catching sink.empty().
-                let done_by_time = self.audio_duration_ms > 0
-                    && elapsed_ms >= self.audio_duration_ms;
+                let done_by_time =
+                    self.audio_duration_ms > 0 && elapsed_ms >= self.audio_duration_ms;
                 if done_by_sink || done_by_time {
                     self.stop_loading();
                     self.audio_sink = None;
@@ -1358,8 +1639,16 @@ impl App {
             if let Ok(result) = receiver.try_recv() {
                 self.tts_receiver = None;
                 match result {
-                    TtsResult::Success { message, audio_data, is_cached } => {
-                        let log_level = if is_cached { LogLevel::Success } else { LogLevel::Info };
+                    TtsResult::Success {
+                        message,
+                        audio_data,
+                        is_cached,
+                    } => {
+                        let log_level = if is_cached {
+                            LogLevel::Success
+                        } else {
+                            LogLevel::Info
+                        };
                         self.add_log_with_level(log_level, message.clone());
                         if let Some(text) = self.get_selected_text() {
                             self.audio_cache_info.insert(text, is_cached);

@@ -1,10 +1,11 @@
 # TTS TUI (Text-to-Speech Terminal User Interface)
 
-A terminal user interface (TUI) built with Rust and Ratatui for interacting with the Deepgram Text-to-Speech API. Supports voice selection, text and voice filtering, color themes, multi-format audio output, sample rate control, audio caching, playback speed control, timestamped logs, playback queue, favorite voices, a command palette, and a persistent TOML configuration file.
+A terminal user interface (TUI) built with Rust and Ratatui for interacting with Deepgram Text-to-Speech. Supports hosted Deepgram, self-hosted Deepgram-compatible HTTP endpoints, and self-hosted Deepgram deployed on Amazon SageMaker, plus voice selection, text and voice filtering, color themes, multi-format audio output, sample rate control, audio caching, playback speed control, timestamped logs, playback queue, favorite voices, a command palette, and a persistent TOML configuration file.
 
 ## Features
 
 - Play saved text snippets with any Deepgram Aura or Aura-2 voice
+- Choose the TTS provider: Deepgram-compatible HTTP endpoint or Amazon SageMaker `InvokeEndpoint`
 - Browse and filter voices by name, language, or model via a dedicated popup (`/` with Voices panel focused)
 - Filter saved texts by content via the same `/` key (with Saved Texts panel focused)
 - Add, edit (`e`), delete, and reorder (`Ctrl+Up`/`Ctrl+Down`) text snippets with full persistence
@@ -26,7 +27,8 @@ A terminal user interface (TUI) built with Rust and Ratatui for interacting with
 ## Requirements
 
 - Rust and Cargo (install via [rustup.rs](https://rustup.rs))
-- A [Deepgram API key](https://console.deepgram.com/)
+- For `deepgram` provider mode: a hosted or self-hosted Deepgram-compatible HTTP endpoint and any required API key
+- For `sagemaker` provider mode: AWS credentials with `sagemaker:InvokeEndpoint` permission and a self-hosted Deepgram TTS SageMaker endpoint in service
 
 ## Getting Started
 
@@ -35,7 +37,7 @@ cd tts-tui
 cargo run
 ```
 
-On first launch the app creates `~/.config/deepgram-tts-client.toml` with all options documented inline. If no API key is detected you will see a warning in the log panel — press `k` to enter one interactively.
+On first launch the app creates `~/.config/deepgram-tts-client.toml` with all options documented inline. In `deepgram` mode, if no API key is detected you will see a warning in the log panel, but requests can still be sent without an `Authorization` header for endpoints that do not require one. Press `k` to enter a key interactively if your hosted or self-hosted endpoint requires one. In `sagemaker` mode, the app uses the standard AWS credential chain instead of a Deepgram API key.
 
 ## Configuration
 
@@ -44,6 +46,57 @@ Settings are resolved in this priority order (highest wins):
 ```
 CLI arguments  >  environment variables  >  ~/.config/deepgram-tts-client.toml  >  built-in defaults
 ```
+
+### Provider
+
+Use Deepgram-compatible HTTP mode by default. Without `--endpoint`, this targets hosted Deepgram:
+
+```bash
+cargo run
+```
+
+Use self-hosted Deepgram TTS on Amazon SageMaker through the AWS SageMaker Runtime `InvokeEndpoint` API:
+
+```bash
+cargo run -- \
+  --provider sagemaker \
+  --sagemaker-endpoint-name your-sagemaker-endpoint \
+  --aws-region us-east-2
+```
+
+The same settings can be supplied with environment variables:
+
+```bash
+export TTS_TUI_PROVIDER=sagemaker
+export SAGEMAKER_ENDPOINT_NAME=your-sagemaker-endpoint
+export AWS_REGION=us-east-2
+cargo run
+```
+
+Or in `~/.config/deepgram-tts-client.toml`:
+
+```toml
+[api]
+provider = "sagemaker"
+
+[sagemaker]
+endpoint_name = "your-sagemaker-endpoint"
+region = "us-east-2"
+```
+
+#### SageMaker InvokeEndpoint transport
+
+When `--provider sagemaker` is selected, `tts-tui` does not send an HTTP request to the Deepgram endpoint URL. Instead, it uses the AWS SDK SageMaker Runtime client and calls `InvokeEndpoint` on the configured SageMaker endpoint name.
+
+The `InvokeEndpoint` request uses:
+
+- `EndpointName`: the value from `--sagemaker-endpoint-name`, `SAGEMAKER_ENDPOINT_NAME`, or `[sagemaker].endpoint_name`
+- `ContentType`: `application/json`
+- `Accept`: an audio MIME type based on the selected encoding, such as `audio/mpeg`, `audio/wav`, or `audio/flac`
+- Body: JSON shaped like `{"text":"..."}`
+- `CustomAttributes`: Deepgram-compatible routing and TTS query parameters, such as `v1/speak?model=aura-2-thalia-en&encoding=linear16&sample_rate=24000`
+
+AWS credentials and region are resolved through the standard AWS SDK configuration chain. Deepgram API keys and the `--endpoint` / `DEEPGRAM_TTS_ENDPOINT` HTTP URL setting are only used by the `deepgram` provider, not by the SageMaker transport.
 
 ### API Key
 
@@ -60,13 +113,18 @@ export DEEPGRAM_API_KEY="your-api-key"
 # key = "your-api-key"
 ```
 
+API keys are only used in `deepgram` provider mode, which includes hosted and self-hosted Deepgram-compatible HTTP endpoints. If no key is configured, `tts-tui` sends the request without an `Authorization` header. SageMaker mode authenticates with AWS credentials from the standard AWS SDK chain, such as environment variables, shared AWS config files, SSO, or an IAM role.
+
 ### Custom Endpoint
 
-For self-hosted deployments or non-production environments:
+For self-hosted Deepgram-compatible HTTP deployments, proxies, or non-production hosted environments:
 
 ```bash
+# Hosted regional base URL; the app automatically uses /v1/speak
+cargo run -- --provider deepgram --endpoint https://api.eu.deepgram.com
+
 # CLI flag (highest priority)
-cargo run -- --endpoint https://selfhosted.example.com/v1/speak
+cargo run -- --provider deepgram --endpoint https://selfhosted.example.com/v1/speak
 
 # Environment variable
 export DEEPGRAM_TTS_ENDPOINT=https://selfhosted.example.com/v1/speak
@@ -76,6 +134,10 @@ cargo run
 # [api]
 # endpoint = "https://selfhosted.example.com/v1/speak"
 ```
+
+This setting applies to the `deepgram` provider, which is the direct HTTP path for hosted or self-hosted Deepgram-compatible TTS. SageMaker provider configuration uses `[sagemaker].endpoint_name` and `[sagemaker].region` instead.
+
+Both HTTP and HTTPS endpoint URLs are supported. If the endpoint is only a scheme and host, such as `https://api.eu.deepgram.com`, `tts-tui` sends requests to `/v1/speak` on that host. If the URL already includes a path, that path is preserved.
 
 ### Audio Format and Sample Rate
 

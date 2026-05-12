@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.0 - 2026-05-11
+
+### Features
+
+- **Amazon SageMaker provider** — Added `provider = "sagemaker"` mode for invoking self-hosted Deepgram TTS models deployed on Amazon SageMaker with the AWS SDK `InvokeEndpoint` API.
+- **SageMaker configuration** — Added `--provider`, `--sagemaker-endpoint-name`, and `--aws-region` CLI flags plus `TTS_TUI_PROVIDER`, `SAGEMAKER_ENDPOINT_NAME`, `AWS_REGION`, and TOML config support.
+- **Provider-aware cache keys** — Audio cache entries now include the active provider and endpoint identity, preventing hosted, self-hosted, and SageMaker responses from colliding.
+
+### Documentation
+
+- Updated the TTS TUI README with hosted, self-hosted, and SageMaker provider setup, credential behavior, and the `CustomAttributes` request shape.
+- Updated repository README and AGENTS guidance to reflect the current TTS TUI provider model and startup configuration behavior.
+
+### Bug Fixes
+
+- **Host-only Deepgram endpoints** — `--endpoint https://api.eu.deepgram.com` and other HTTP/HTTPS host-only endpoints now automatically request `/v1/speak` instead of posting to `/`.
+- **Optional Deepgram API key** — Deepgram-compatible HTTP endpoints can now be called without an `Authorization` header when no API key is configured, while the startup warning remains visible.
+
 ## 0.7.0 - 2026-03-19
 
 ### Features

@@ -30,7 +30,8 @@ fn get_default_texts() -> Vec<String> {
     vec![
         "Hello, this is a test of the Deepgram Text-to-Speech API.".to_string(),
         "The quick brown fox jumps over the lazy dog.".to_string(),
-        "Rust is a systems programming language that focuses on safety, speed, and concurrency.".to_string(),
+        "Rust is a systems programming language that focuses on safety, speed, and concurrency."
+            .to_string(),
         "Gemini is a family of multimodal models developed by Google AI.".to_string(),
         "This is a longer text to demonstrate scrolling and playback features.".to_string(),
         "Another example sentence for testing purposes.".to_string(),
@@ -43,34 +44,48 @@ pub fn load() -> AppPersisted {
         Ok(path) => {
             if path.exists() {
                 match fs::read_to_string(&path) {
-                    Ok(contents) => {
-                        match serde_json::from_str::<SavedData>(&contents) {
-                            Ok(data) => AppPersisted {
-                                texts: if data.texts.is_empty() { get_default_texts() } else { data.texts },
-                                favorite_voice_ids: data.favorite_voice_ids,
+                    Ok(contents) => match serde_json::from_str::<SavedData>(&contents) {
+                        Ok(data) => AppPersisted {
+                            texts: if data.texts.is_empty() {
+                                get_default_texts()
+                            } else {
+                                data.texts
                             },
-                            Err(e) => {
-                                eprintln!("Failed to parse saved data (using defaults): {}", e);
-                                let backup_path = path.with_extension("json.backup");
-                                let _ = fs::copy(&path, backup_path);
-                                AppPersisted { texts: get_default_texts(), favorite_voice_ids: vec![] }
+                            favorite_voice_ids: data.favorite_voice_ids,
+                        },
+                        Err(e) => {
+                            eprintln!("Failed to parse saved data (using defaults): {}", e);
+                            let backup_path = path.with_extension("json.backup");
+                            let _ = fs::copy(&path, backup_path);
+                            AppPersisted {
+                                texts: get_default_texts(),
+                                favorite_voice_ids: vec![],
                             }
                         }
-                    }
+                    },
                     Err(e) => {
                         eprintln!("Failed to read saved data file (using defaults): {}", e);
-                        AppPersisted { texts: get_default_texts(), favorite_voice_ids: vec![] }
+                        AppPersisted {
+                            texts: get_default_texts(),
+                            favorite_voice_ids: vec![],
+                        }
                     }
                 }
             } else {
                 let defaults = get_default_texts();
                 let _ = save(&defaults, &[]);
-                AppPersisted { texts: defaults, favorite_voice_ids: vec![] }
+                AppPersisted {
+                    texts: defaults,
+                    favorite_voice_ids: vec![],
+                }
             }
         }
         Err(e) => {
             eprintln!("Failed to get data directory (using defaults): {}", e);
-            AppPersisted { texts: get_default_texts(), favorite_voice_ids: vec![] }
+            AppPersisted {
+                texts: get_default_texts(),
+                favorite_voice_ids: vec![],
+            }
         }
     }
 }

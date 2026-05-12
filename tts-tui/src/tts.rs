@@ -1,24 +1,42 @@
-use anyhow::{Result, anyhow, Context};
-use std::path::{Path, PathBuf};
-use sha2::{Sha256, Digest};
-use reqwest::Client;
-use tokio::io::AsyncWriteExt;
-use rodio::{Decoder, OutputStream, Sink, Source};
+use anyhow::{anyhow, Context, Result};
+use claxon;
+use reqwest::{Client, Url};
 use rodio::buffer::SamplesBuffer;
-use std::io::Cursor;
+use rodio::{Decoder, OutputStream, Sink, Source};
 use rust_decimal::Decimal;
+use sha2::{Digest, Sha256};
+use std::io::Cursor;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use claxon;
+use tokio::io::AsyncWriteExt;
 
-pub fn get_deepgram_api_key() -> Result<String> {
-    dotenvy::dotenv().ok();
-    std::env::var("DEEPGRAM_API_KEY")
-        .map_err(|_| anyhow!("DEEPGRAM_API_KEY not found in .env or environment variables"))
+#[derive(Clone, Debug)]
+pub enum TtsBackend {
+    Deepgram {
+        api_key: Option<String>,
+        endpoint: String,
+    },
+    SageMaker {
+        endpoint_name: String,
+        region: String,
+    },
+}
+
+impl TtsBackend {
+    fn cache_namespace(&self) -> String {
+        match self {
+            Self::Deepgram { endpoint, .. } => format!("deepgram:{}", endpoint),
+            Self::SageMaker {
+                endpoint_name,
+                region,
+            } => format!("sagemaker:{}:{}", region, endpoint_name),
+        }
+    }
 }
 
 pub async fn fetch_audio_for_playback(
-    api_key: &str,
+    backend: &TtsBackend,
     text: &str,
     voice_id: &str,
     speed: Decimal,
@@ -26,10 +44,18 @@ pub async fn fetch_audio_for_playback(
     encoding: &str,
     extension: &str,
     cache_dir: &str,
-    endpoint: &str,
     force_regenerate: bool,
 ) -> Result<(String, Vec<u8>, bool)> {
-    let cache_file_path = get_cache_file_path(cache_dir, text, voice_id, speed, sample_rate, encoding, extension)?;
+    let cache_file_path = get_cache_file_path(
+        cache_dir,
+        &backend.cache_namespace(),
+        text,
+        voice_id,
+        speed,
+        sample_rate,
+        encoding,
+        extension,
+    )?;
     let message;
     let audio_data;
     let is_cached;
@@ -57,7 +83,35 @@ pub async fn fetch_audio_for_playback(
         } else {
             format!("Fetching from Deepgram, caching as: {}", short_name)
         };
-        audio_data = fetch_deepgram_tts(api_key, text, voice_id, speed, sample_rate, encoding, endpoint).await?;
+        audio_data = match backend {
+            TtsBackend::Deepgram { api_key, endpoint } => {
+                fetch_deepgram_tts(
+                    api_key.as_deref(),
+                    text,
+                    voice_id,
+                    speed,
+                    sample_rate,
+                    encoding,
+                    endpoint,
+                )
+                .await?
+            }
+            TtsBackend::SageMaker {
+                endpoint_name,
+                region,
+            } => {
+                crate::sagemaker::fetch_sagemaker_tts(
+                    endpoint_name,
+                    region,
+                    text,
+                    voice_id,
+                    speed,
+                    sample_rate,
+                    encoding,
+                )
+                .await?
+            }
+        };
         save_audio_to_cache(&cache_file_path, &audio_data).await?;
         is_cached = false;
     }
@@ -65,7 +119,11 @@ pub async fn fetch_audio_for_playback(
     Ok((message, audio_data, is_cached))
 }
 
-pub fn play_audio_data_sync(data: &[u8], encoding: &str, sample_rate: u32) -> Result<(Arc<Sink>, Arc<OutputStream>, u64)> {
+pub fn play_audio_data_sync(
+    data: &[u8],
+    encoding: &str,
+    sample_rate: u32,
+) -> Result<(Arc<Sink>, Arc<OutputStream>, u64)> {
     let (stream, stream_handle) = OutputStream::try_default()?;
     let sink = Sink::try_new(&stream_handle)?;
 
@@ -91,7 +149,8 @@ pub fn play_audio_data_sync(data: &[u8], encoding: &str, sample_rate: u32) -> Re
                 wav_duration_ms(data)
                     .unwrap_or_else(|| audio_duration_ms(data, encoding, sample_rate))
             } else {
-                source.total_duration()
+                source
+                    .total_duration()
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or_else(|| audio_duration_ms(data, encoding, sample_rate))
             };
@@ -108,7 +167,11 @@ fn decode_ulaw(byte: u8) -> i16 {
     let byte = !byte;
     let t = (((byte & 0x0F) as i32) << 3) + 0x84;
     let t = t << ((byte & 0x70) >> 4);
-    if byte & 0x80 != 0 { (0x84 - t) as i16 } else { (t - 0x84) as i16 }
+    if byte & 0x80 != 0 {
+        (0x84 - t) as i16
+    } else {
+        (t - 0x84) as i16
+    }
 }
 
 /// Decode a single G.711 A-law byte to a signed 16-bit linear PCM sample.
@@ -121,7 +184,11 @@ fn decode_alaw(byte: u8) -> i16 {
         t += 0x20;
         t <<= exponent - 1;
     }
-    if byte & 0x80 != 0 { t as i16 } else { -(t as i16) }
+    if byte & 0x80 != 0 {
+        t as i16
+    } else {
+        -(t as i16)
+    }
 }
 
 /// Calculate audio duration in milliseconds based on the encoding and raw byte length.
@@ -176,9 +243,7 @@ fn wav_duration_ms(data: &[u8]) -> Option<u64> {
 
     while offset + 8 <= data.len() {
         let chunk_id = &data[offset..offset + 4];
-        let chunk_size = u32::from_le_bytes(
-            data[offset + 4..offset + 8].try_into().ok()?
-        ) as usize;
+        let chunk_size = u32::from_le_bytes(data[offset + 4..offset + 8].try_into().ok()?) as usize;
         offset += 8;
 
         if chunk_id == b"fmt " && chunk_size >= 16 && offset + 16 <= data.len() {
@@ -189,9 +254,15 @@ fn wav_duration_ms(data: &[u8]) -> Option<u64> {
             //  8-11  ByteRate
             // 12-13  BlockAlign
             // 14-15  BitsPerSample
-            num_channels    = Some(u16::from_le_bytes(data[offset + 2..offset + 4].try_into().ok()?));
-            sample_rate     = Some(u32::from_le_bytes(data[offset + 4..offset + 8].try_into().ok()?));
-            bits_per_sample = Some(u16::from_le_bytes(data[offset + 14..offset + 16].try_into().ok()?));
+            num_channels = Some(u16::from_le_bytes(
+                data[offset + 2..offset + 4].try_into().ok()?,
+            ));
+            sample_rate = Some(u32::from_le_bytes(
+                data[offset + 4..offset + 8].try_into().ok()?,
+            ));
+            bits_per_sample = Some(u16::from_le_bytes(
+                data[offset + 14..offset + 16].try_into().ok()?,
+            ));
         } else if chunk_id == b"data" {
             // Deepgram returns WAV in streaming style: the data chunk size field
             // is 0xFFFFFFFF because the length is unknown when the header is
@@ -208,9 +279,9 @@ fn wav_duration_ms(data: &[u8]) -> Option<u64> {
     }
 
     let channels = num_channels? as u64;
-    let sr       = sample_rate? as u64;
-    let bps      = bits_per_sample? as u64;
-    let bytes    = data_bytes?;
+    let sr = sample_rate? as u64;
+    let bps = bits_per_sample? as u64;
+    let bytes = data_bytes?;
 
     if sr == 0 || channels == 0 || bps == 0 {
         return None;
@@ -258,8 +329,18 @@ fn bitrate_estimate_ms(data: &[u8], kbps: u64) -> u64 {
     (data.len() as u64 * 8) / kbps
 }
 
-fn get_cache_file_path(cache_dir: &str, text: &str, voice_id: &str, speed: Decimal, sample_rate: u32, encoding: &str, extension: &str) -> Result<PathBuf> {
+fn get_cache_file_path(
+    cache_dir: &str,
+    backend_namespace: &str,
+    text: &str,
+    voice_id: &str,
+    speed: Decimal,
+    sample_rate: u32,
+    encoding: &str,
+    extension: &str,
+) -> Result<PathBuf> {
     let mut hasher = Sha256::new();
+    hasher.update(backend_namespace);
     hasher.update(text);
     hasher.update(voice_id);
     hasher.update(speed.to_string().as_bytes());
@@ -271,25 +352,28 @@ fn get_cache_file_path(cache_dir: &str, text: &str, voice_id: &str, speed: Decim
     Ok(path)
 }
 
-async fn fetch_deepgram_tts(api_key: &str, text: &str, voice_id: &str, speed: Decimal, sample_rate: u32, encoding: &str, endpoint: &str) -> Result<Vec<u8>> {
+async fn fetch_deepgram_tts(
+    api_key: Option<&str>,
+    text: &str,
+    voice_id: &str,
+    speed: Decimal,
+    sample_rate: u32,
+    encoding: &str,
+    endpoint: &str,
+) -> Result<Vec<u8>> {
     let client = Client::new();
+    let url = build_deepgram_tts_url(endpoint, voice_id, speed, sample_rate, encoding)?;
 
-    // Build URL — omit parameters that match API defaults (speed 1.0, sample_rate = format default)
-    let mut params = format!("model={}&encoding={}", voice_id, encoding);
-    if speed != Decimal::new(10, 1) {
-        params.push_str(&format!("&speed={}", speed));
-    }
-    // MP3 and AAC have fixed sample rates; omit the parameter for those encodings
-    if encoding != "mp3" && encoding != "aac" {
-        params.push_str(&format!("&sample_rate={}", sample_rate));
-    }
-    let url = format!("{}?{}", endpoint, params);
-
-    let res = client
-        .post(&url)
-        .header("Authorization", format!("Token {}", api_key))
+    let mut request = client
+        .post(url.clone())
         .header("Content-Type", "application/json")
-        .json(&serde_json::json!({"text": text}))
+        .json(&serde_json::json!({"text": text}));
+
+    if let Some(api_key) = api_key {
+        request = request.header("Authorization", format!("Token {}", api_key));
+    }
+
+    let res = request
         .send()
         .await
         .context(format!("Failed to send request to Deepgram API at {}", url))?;
@@ -297,7 +381,10 @@ async fn fetch_deepgram_tts(api_key: &str, text: &str, voice_id: &str, speed: De
     // Check status and capture detailed error message if request failed
     if !res.status().is_success() {
         let status = res.status();
-        let error_body = res.text().await.unwrap_or_else(|_| "Unable to read error response".to_string());
+        let error_body = res
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unable to read error response".to_string());
         return Err(anyhow!(
             "HTTP {} - Deepgram API error: {}",
             status,
@@ -305,10 +392,52 @@ async fn fetch_deepgram_tts(api_key: &str, text: &str, voice_id: &str, speed: De
         ));
     }
 
-    let audio_data = res.bytes().await
+    let audio_data = res
+        .bytes()
+        .await
         .context("Failed to read audio data from response")?
         .to_vec();
     Ok(audio_data)
+}
+
+fn build_deepgram_tts_url(
+    endpoint: &str,
+    voice_id: &str,
+    speed: Decimal,
+    sample_rate: u32,
+    encoding: &str,
+) -> Result<Url> {
+    let mut url = Url::parse(endpoint)
+        .with_context(|| format!("Invalid Deepgram TTS endpoint URL: {}", endpoint))?;
+
+    match url.scheme() {
+        "http" | "https" => {}
+        scheme => {
+            return Err(anyhow!(
+                "Unsupported Deepgram TTS endpoint scheme '{}'. Use http or https.",
+                scheme
+            ));
+        }
+    }
+
+    if url.path().is_empty() || url.path() == "/" {
+        url.set_path("/v1/speak");
+    }
+
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("model", voice_id);
+        pairs.append_pair("encoding", encoding);
+        if speed != Decimal::new(10, 1) {
+            pairs.append_pair("speed", &speed.to_string());
+        }
+        // MP3 and AAC have fixed sample rates; omit the parameter for those encodings.
+        if encoding != "mp3" && encoding != "aac" {
+            pairs.append_pair("sample_rate", &sample_rate.to_string());
+        }
+    }
+
+    Ok(url)
 }
 
 async fn save_audio_to_cache(path: &Path, data: &[u8]) -> Result<()> {
@@ -317,3 +446,74 @@ async fn save_audio_to_cache(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deepgram_url_adds_tts_path_for_host_only_https_endpoint() {
+        let url = build_deepgram_tts_url(
+            "https://api.eu.deepgram.com",
+            "aura-2-thalia-en",
+            Decimal::new(10, 1),
+            22050,
+            "mp3",
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "https://api.eu.deepgram.com/v1/speak?model=aura-2-thalia-en&encoding=mp3"
+        );
+    }
+
+    #[test]
+    fn deepgram_url_adds_tts_path_for_host_only_http_endpoint() {
+        let url = build_deepgram_tts_url(
+            "http://localhost:8080/",
+            "aura-2-thalia-en",
+            Decimal::new(10, 1),
+            22050,
+            "mp3",
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "http://localhost:8080/v1/speak?model=aura-2-thalia-en&encoding=mp3"
+        );
+    }
+
+    #[test]
+    fn deepgram_url_preserves_full_tts_endpoint_path() {
+        let url = build_deepgram_tts_url(
+            "https://api.deepgram.com/v1/speak",
+            "aura-2-thalia-en",
+            Decimal::new(12, 1),
+            24000,
+            "linear16",
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "https://api.deepgram.com/v1/speak?model=aura-2-thalia-en&encoding=linear16&speed=1.2&sample_rate=24000"
+        );
+    }
+
+    #[test]
+    fn deepgram_url_rejects_unsupported_schemes() {
+        let err = build_deepgram_tts_url(
+            "ftp://api.deepgram.com",
+            "aura-2-thalia-en",
+            Decimal::new(10, 1),
+            22050,
+            "mp3",
+        )
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("Unsupported Deepgram TTS endpoint scheme"));
+    }
+}

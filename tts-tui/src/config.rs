@@ -10,6 +10,9 @@ pub struct AppConfig {
     pub api: ApiConfig,
 
     #[serde(default)]
+    pub sagemaker: SageMakerConfig,
+
+    #[serde(default)]
     pub audio: AudioConfig,
 
     #[serde(default)]
@@ -19,14 +22,36 @@ pub struct AppConfig {
 /// API connection settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiConfig {
+    /// TTS provider.
+    /// Valid values: deepgram, sagemaker
+    /// Overridden by --provider CLI flag or TTS_TUI_PROVIDER env var.
+    /// Default: deepgram
+    pub provider: Option<String>,
+
     /// Deepgram API key. Overridden by DEEPGRAM_API_KEY env var or the interactive 'k' command.
-    /// Valid values: any valid Deepgram API key string.
+    /// Valid values: any valid Deepgram API key string. Leave unset for endpoints that do not require authentication.
     pub key: Option<String>,
 
     /// Deepgram TTS endpoint URL.
-    /// Valid values: any valid HTTPS URL pointing to a Deepgram-compatible TTS endpoint.
+    /// Valid values: any valid HTTP or HTTPS URL pointing to a hosted or self-hosted Deepgram-compatible TTS endpoint.
+    /// Host-only URLs such as https://api.eu.deepgram.com automatically use /v1/speak.
     /// Default: "https://api.deepgram.com/v1/speak"
     pub endpoint: Option<String>,
+}
+
+/// Amazon SageMaker settings for invoking self-hosted Deepgram TTS through AWS.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SageMakerConfig {
+    /// SageMaker endpoint name running a Deepgram TTS model.
+    /// Valid values: an endpoint in the configured AWS region.
+    /// Overridden by --sagemaker-endpoint-name CLI flag or SAGEMAKER_ENDPOINT_NAME env var.
+    pub endpoint_name: Option<String>,
+
+    /// AWS region for the SageMaker endpoint.
+    /// Valid values: any AWS region identifier, such as us-east-2.
+    /// Overridden by --aws-region CLI flag, AWS_REGION, or AWS_DEFAULT_REGION env vars.
+    /// Default: us-east-2
+    pub region: Option<String>,
 }
 
 /// Audio output settings.
@@ -47,7 +72,10 @@ pub struct AudioConfig {
 
 impl Default for AudioConfig {
     fn default() -> Self {
-        Self { format: None, sample_rate: None }
+        Self {
+            format: None,
+            sample_rate: None,
+        }
     }
 }
 
@@ -72,6 +100,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             api: ApiConfig::default(),
+            sagemaker: SageMakerConfig::default(),
             audio: AudioConfig::default(),
             experimental: ExperimentalFlags::default(),
         }
@@ -81,8 +110,18 @@ impl Default for AppConfig {
 impl Default for ApiConfig {
     fn default() -> Self {
         Self {
+            provider: None,
             key: None,
             endpoint: None,
+        }
+    }
+}
+
+impl Default for SageMakerConfig {
+    fn default() -> Self {
+        Self {
+            endpoint_name: None,
+            region: None,
         }
     }
 }
@@ -106,16 +145,43 @@ const DEFAULT_CONFIG: &str = r#"# tts-tui configuration
 
 # [api] — Deepgram API connection settings
 [api]
+# TTS provider.
+# Valid values: "deepgram", "sagemaker".
+# Use "deepgram" for hosted or self-hosted Deepgram-compatible HTTP endpoints,
+# or "sagemaker" for self-hosted Deepgram deployed as an Amazon SageMaker endpoint.
+# Can also be set via --provider CLI flag or TTS_TUI_PROVIDER env var.
+# Default: "deepgram"
+# provider = "deepgram"
+
 # Your Deepgram API key.
 # Can also be set via the DEEPGRAM_API_KEY environment variable,
 # or entered interactively at runtime with the 'k' key.
+# Leave unset for Deepgram-compatible HTTP endpoints that do not require authentication.
+# SageMaker mode uses AWS credentials instead.
 # key = "your-api-key-here"
 
 # Custom TTS endpoint URL.
-# Useful for self-hosted or proxy deployments.
+# Useful for hosted, self-hosted, proxy, or non-production Deepgram-compatible deployments.
+# Host-only URLs such as "https://api.eu.deepgram.com" automatically use "/v1/speak".
 # Can also be set via --endpoint CLI flag or DEEPGRAM_TTS_ENDPOINT env var.
 # Default: "https://api.deepgram.com/v1/speak"
 # endpoint = "https://api.deepgram.com/v1/speak"
+
+
+# [sagemaker] — AWS SageMaker settings for self-hosted Deepgram TTS.
+[sagemaker]
+# SageMaker endpoint name running a Deepgram TTS model.
+# Valid values: an endpoint name in the configured AWS region.
+# Can also be set via --sagemaker-endpoint-name CLI flag or
+# SAGEMAKER_ENDPOINT_NAME env var.
+# Required when provider = "sagemaker".
+# endpoint_name = "your-sagemaker-endpoint"
+
+# AWS region for the SageMaker endpoint.
+# Valid values: any AWS region identifier, such as "us-east-2".
+# Can also be set via --aws-region CLI flag, AWS_REGION, or AWS_DEFAULT_REGION.
+# Default: "us-east-2"
+# region = "us-east-2"
 
 
 # [audio] — Audio output settings
@@ -149,7 +215,11 @@ ssml_support = false
 
 fn get_config_path() -> Option<PathBuf> {
     // Use the system home directory directly; ~/.config is the conventional XDG location
-    std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config").join("deepgram-tts-client.toml"))
+    std::env::var("HOME").ok().map(|h| {
+        PathBuf::from(h)
+            .join(".config")
+            .join("deepgram-tts-client.toml")
+    })
 }
 
 /// Load the application config from ~/.config/deepgram-tts-client.toml.
@@ -171,11 +241,19 @@ pub fn load() -> AppConfig {
 
     let mut config = match fs::read_to_string(&path) {
         Ok(contents) => toml::from_str::<AppConfig>(&contents).unwrap_or_else(|e| {
-            eprintln!("Warning: failed to parse {}: {}. Using defaults.", path.display(), e);
+            eprintln!(
+                "Warning: failed to parse {}: {}. Using defaults.",
+                path.display(),
+                e
+            );
             AppConfig::default()
         }),
         Err(e) => {
-            eprintln!("Warning: failed to read {}: {}. Using defaults.", path.display(), e);
+            eprintln!(
+                "Warning: failed to read {}: {}. Using defaults.",
+                path.display(),
+                e
+            );
             AppConfig::default()
         }
     };
@@ -185,6 +263,9 @@ pub fn load() -> AppConfig {
 }
 
 fn apply_env_overrides(config: &mut AppConfig) {
+    if let Ok(val) = std::env::var("TTS_TUI_PROVIDER") {
+        config.api.provider = Some(val);
+    }
     if let Ok(val) = std::env::var("DEEPGRAM_AUDIO_FORMAT") {
         config.audio.format = Some(val);
     }
@@ -198,6 +279,14 @@ fn apply_env_overrides(config: &mut AppConfig) {
     }
     if let Ok(val) = std::env::var("TTS_TUI_FEATURE_SSML_SUPPORT") {
         config.experimental.ssml_support = parse_bool_env(&val);
+    }
+    if let Ok(val) = std::env::var("SAGEMAKER_ENDPOINT_NAME") {
+        config.sagemaker.endpoint_name = Some(val);
+    }
+    if let Ok(val) = std::env::var("AWS_REGION") {
+        config.sagemaker.region = Some(val);
+    } else if let Ok(val) = std::env::var("AWS_DEFAULT_REGION") {
+        config.sagemaker.region = Some(val);
     }
 }
 
@@ -238,6 +327,10 @@ mod tests {
     #[test]
     fn default_config_is_valid_toml() {
         let result = toml::from_str::<AppConfig>(DEFAULT_CONFIG);
-        assert!(result.is_ok(), "Default config template must parse cleanly: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Default config template must parse cleanly: {:?}",
+            result.err()
+        );
     }
 }

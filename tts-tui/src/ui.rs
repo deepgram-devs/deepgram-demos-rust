@@ -2,11 +2,16 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Table, Row, Cell, Clear, Wrap, Scrollbar, ScrollbarOrientation},
+    widgets::{
+        Block, BorderType, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Scrollbar,
+        ScrollbarOrientation, Table, Wrap,
+    },
     Frame,
 };
 
-use crate::app::{App, Panel, CurrentScreen, LogLevel, LogEntry, Gender, AUDIO_FORMATS, DEFAULT_FORMAT_INDEX};
+use crate::app::{
+    App, CurrentScreen, Gender, LogEntry, LogLevel, Panel, AUDIO_FORMATS, DEFAULT_FORMAT_INDEX,
+};
 use crate::theme::THEMES;
 
 pub fn render_ui(f: &mut Frame, app: &mut App) {
@@ -33,7 +38,9 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         format!(" Saved Texts — Filter: {} ", app.text_filter)
     };
     let text_block_style = if app.focused_panel == Panel::TextList {
-        Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.secondary)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
@@ -61,10 +68,17 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             let style = if is_selected && app.focused_panel == Panel::TextList {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
-                let dist = app.text_table_state.selected()
+                let dist = app
+                    .text_table_state
+                    .selected()
                     .map(|sel| (i as isize - sel as isize).unsigned_abs())
                     .unwrap_or(0);
-                Style::default().fg(fade_color(theme.text_list_near, theme.text_list_far, dist, 12))
+                Style::default().fg(fade_color(
+                    theme.text_list_near,
+                    theme.text_list_far,
+                    dist,
+                    12,
+                ))
             };
             Row::new(vec![Cell::from(display_text)]).style(style)
         })
@@ -85,7 +99,9 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         format!(" Deepgram Voices — Filter: {} ", app.voice_filter)
     };
     let voice_block_style = if app.focused_panel == Panel::VoiceMenu {
-        Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.secondary)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
@@ -111,20 +127,39 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 item_index += 1;
             }
 
-            let style = if app.voice_menu_state.selected() == Some(item_index) && app.focused_panel == Panel::VoiceMenu {
+            let style = if app.voice_menu_state.selected() == Some(item_index)
+                && app.focused_panel == Panel::VoiceMenu
+            {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
-                let dist = app.voice_menu_state.selected()
+                let dist = app
+                    .voice_menu_state
+                    .selected()
                     .map(|sel| (item_index as isize - sel as isize).unsigned_abs())
                     .unwrap_or(0);
-                Style::default().fg(fade_color(theme.voice_list_near, theme.voice_list_far, dist, 12))
+                Style::default().fg(fade_color(
+                    theme.voice_list_near,
+                    theme.voice_list_far,
+                    dist,
+                    12,
+                ))
             };
             let gender_indicator = match voice.gender {
                 Gender::Male => "♂",
                 Gender::Female => "♀",
             };
-            let fav_indicator = if app.is_voice_favorite(&voice.id) { "★ " } else { "  " };
-            items.push(ListItem::new(format!("{}{} {}", fav_indicator, voice.name, gender_indicator)).style(style));
+            let fav_indicator = if app.is_voice_favorite(&voice.id) {
+                "★ "
+            } else {
+                "  "
+            };
+            items.push(
+                ListItem::new(format!(
+                    "{}{} {}",
+                    fav_indicator, voice.name, gender_indicator
+                ))
+                .style(style),
+            );
             item_index += 1;
         }
         items
@@ -143,28 +178,39 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     app.log_panel_bounds = logs_area;
 
     // Build all rendered lines newest-first
-    let all_log_lines: Vec<Line> = app.logs
+    let all_log_lines: Vec<Line> = app
+        .logs
         .iter()
         .rev()
         .flat_map(|entry: &LogEntry| {
             let (icon, color) = match entry.level {
                 LogLevel::Success => ("✓", theme.success),
-                LogLevel::Error   => ("✗", theme.error),
+                LogLevel::Error => ("✗", theme.error),
                 LogLevel::Warning => ("⚠", theme.warning),
-                LogLevel::Info    => ("ℹ", theme.secondary),
+                LogLevel::Info => ("ℹ", theme.secondary),
             };
             let ts = entry.timestamp.format("%H:%M:%S").to_string();
             let message_lines: Vec<String> = entry.message.lines().map(|s| s.to_string()).collect();
-            message_lines.into_iter().enumerate().map(move |(i, line)| {
-                if i == 0 {
-                    Line::from(vec![
-                        Span::styled(format!("{} {} ", ts, icon), Style::default().fg(Color::DarkGray)),
-                        Span::styled(line, Style::default().fg(color)),
-                    ])
-                } else {
-                    Line::from(Span::styled(format!("         {}", line), Style::default().fg(color)))
-                }
-            }).collect::<Vec<Line>>()
+            message_lines
+                .into_iter()
+                .enumerate()
+                .map(move |(i, line)| {
+                    if i == 0 {
+                        Line::from(vec![
+                            Span::styled(
+                                format!("{} {} ", ts, icon),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                            Span::styled(line, Style::default().fg(color)),
+                        ])
+                    } else {
+                        Line::from(Span::styled(
+                            format!("         {}", line),
+                            Style::default().fg(color),
+                        ))
+                    }
+                })
+                .collect::<Vec<Line>>()
         })
         .collect();
 
@@ -196,8 +242,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         let mut scrollbar_state = ratatui::widgets::ScrollbarState::default()
             .content_length(all_log_lines.len())
             .position(scroll_offset);
-        let scrollbar = Scrollbar::default()
-            .orientation(ScrollbarOrientation::VerticalRight);
+        let scrollbar = Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight);
         f.render_stateful_widget(scrollbar, logs_area, &mut scrollbar_state);
     }
 
@@ -221,36 +266,49 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             let progress = (elapsed as f64 / total as f64).clamp(0.0, 1.0);
             let bar_width = 20;
             let filled = (bar_width as f64 * progress) as usize;
-            let progress_bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(bar_width - filled));
+            let progress_bar =
+                format!("[{}{}]", "█".repeat(filled), "░".repeat(bar_width - filled));
 
             Line::from(vec![
                 Span::styled(
                     format!("{} ", progress_bar),
-                    Style::default().fg(theme.primary)
+                    Style::default().fg(theme.primary),
                 ),
-                Span::raw(format!("Speed: {:.2}x | {} | {} Hz{}| Playing ({:.1}s / {:.1}s) | Esc stop",
-                    app.playback_speed, app.current_audio_format().display_name, app.sample_rate,
+                Span::raw(format!(
+                    "Speed: {:.2}x | {} | {} Hz{}| Playing ({:.1}s / {:.1}s) | Esc stop",
+                    app.playback_speed,
+                    app.current_audio_format().display_name,
+                    app.sample_rate,
                     queue_badge,
-                    elapsed as f64 / 1000.0, total as f64 / 1000.0)),
+                    elapsed as f64 / 1000.0,
+                    total as f64 / 1000.0
+                )),
             ])
         } else {
             // Show spinner when loading but duration not available yet
             Line::from(vec![
                 Span::styled(
                     format!("{} ", app.get_spinner_char()),
-                    Style::default().fg(theme.primary)
+                    Style::default().fg(theme.primary),
                 ),
-                Span::raw(format!("Generating audio... | Speed: {:.2}x | {} | {} Hz{}",
-                    app.playback_speed, app.current_audio_format().display_name, app.sample_rate,
-                    queue_badge)),
+                Span::raw(format!(
+                    "Generating audio... | Speed: {:.2}x | {} | {} Hz{}",
+                    app.playback_speed,
+                    app.current_audio_format().display_name,
+                    app.sample_rate,
+                    queue_badge
+                )),
             ])
         }
     } else {
-        Line::from(vec![
-            Span::raw(format!("Speed: {:.2}x | {} | {} Hz{}| {}",
-                app.playback_speed, app.current_audio_format().display_name,
-                app.sample_rate, queue_badge, app.status_message)),
-        ])
+        Line::from(vec![Span::raw(format!(
+            "Speed: {:.2}x | {} | {} Hz{}| {}",
+            app.playback_speed,
+            app.current_audio_format().display_name,
+            app.sample_rate,
+            queue_badge,
+            app.status_message
+        ))])
     };
 
     let status_text = Paragraph::new(status_line).block(status_block);
@@ -281,16 +339,41 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
 
         f.render_widget(input_paragraph, area);
 
-        let hint_area = Rect { x: area.x, y: area.y + area.height, width: area.width, height: 1 };
+        let hint_area = Rect {
+            x: area.x,
+            y: area.y + area.height,
+            width: area.width,
+            height: 1,
+        };
         if hint_area.y < size.height {
             let shortcuts = Paragraph::new(Line::from(vec![
-                Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " Enter",
+                    Style::default()
+                        .fg(theme.success)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" save  "),
-                Span::styled("Esc", Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Esc",
+                    Style::default()
+                        .fg(theme.warning)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" cancel  "),
-                Span::styled("Ctrl+V", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Ctrl+V",
+                    Style::default()
+                        .fg(theme.secondary)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" paste  "),
-                Span::styled("Ctrl+W", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Ctrl+W",
+                    Style::default()
+                        .fg(theme.secondary)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" del word "),
             ]));
             f.render_widget(shortcuts, hint_area);
@@ -305,7 +388,10 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         let hint = if app.voice_filter_buffer.is_empty() {
             " Filter Voices — Enter to apply, Esc to cancel ".to_string()
         } else {
-            format!(" Filter Voices — {} match(es) ", app.get_filtered_voices_for_buffer().len())
+            format!(
+                " Filter Voices — {} match(es) ",
+                app.get_filtered_voices_for_buffer().len()
+            )
         };
 
         let popup_block = Block::default()
@@ -333,11 +419,26 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         };
         if hint_area.y < size.height {
             let shortcuts = Paragraph::new(Line::from(vec![
-                Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " Enter",
+                    Style::default()
+                        .fg(theme.success)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" apply  "),
-                Span::styled("Esc", Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Esc",
+                    Style::default()
+                        .fg(theme.warning)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" cancel  "),
-                Span::styled("Ctrl+U", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Ctrl+U",
+                    Style::default()
+                        .fg(theme.error)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" clear "),
             ]));
             f.render_widget(shortcuts, hint_area);
@@ -352,7 +453,10 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         let hint = if app.text_filter_buffer.is_empty() {
             " Filter Texts — Enter to apply, Esc to cancel ".to_string()
         } else {
-            format!(" Filter Texts — {} match(es) ", app.get_filtered_texts_for_buffer().len())
+            format!(
+                " Filter Texts — {} match(es) ",
+                app.get_filtered_texts_for_buffer().len()
+            )
         };
 
         let popup_block = Block::default()
@@ -378,11 +482,26 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         };
         if hint_area.y < size.height {
             let shortcuts = Paragraph::new(Line::from(vec![
-                Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " Enter",
+                    Style::default()
+                        .fg(theme.success)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" apply  "),
-                Span::styled("Esc", Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Esc",
+                    Style::default()
+                        .fg(theme.warning)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" cancel  "),
-                Span::styled("Ctrl+U", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Ctrl+U",
+                    Style::default()
+                        .fg(theme.error)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" clear "),
             ]));
             f.render_widget(shortcuts, hint_area);
@@ -392,7 +511,12 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     // Render Popup for API Key Input
     if app.current_screen == CurrentScreen::ApiKeyInput {
         let title = Line::from(vec![
-            Span::styled(" Set Deepgram API Key ", Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Set Deepgram API Key ",
+                Style::default()
+                    .fg(theme.warning)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("(input hidden) ", Style::default().fg(Color::DarkGray)),
         ]);
 
@@ -423,12 +547,27 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         f.render_widget(input_paragraph, area);
 
         // Hint row below popup
-        let hint_area = Rect { x: area.x, y: area.y + area.height, width: area.width, height: 1 };
+        let hint_area = Rect {
+            x: area.x,
+            y: area.y + area.height,
+            width: area.width,
+            height: 1,
+        };
         if hint_area.y < size.height {
             let hints = Paragraph::new(Line::from(vec![
-                Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " Enter",
+                    Style::default()
+                        .fg(theme.success)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" save  "),
-                Span::styled("Esc", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Esc",
+                    Style::default()
+                        .fg(theme.error)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" cancel "),
             ]));
             f.render_widget(hints, hint_area);
@@ -553,8 +692,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
                 .content_length(help_text.len())
                 .position(app.help_scroll_offset);
 
-            let scrollbar = Scrollbar::default()
-                .orientation(ScrollbarOrientation::VerticalRight);
+            let scrollbar = Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight);
 
             f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
         }
@@ -567,21 +705,28 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         let area = centered_rect_fixed(44, popup_height, size);
         f.render_widget(Clear, area);
 
-        let items: Vec<ListItem> = fmt.valid_sample_rates.iter().enumerate().map(|(i, &rate)| {
-            let is_selected = app.sample_rate_menu_state.selected() == Some(i);
-            let is_default = rate == fmt.default_sample_rate;
-            let label = if is_default {
-                format!("{} Hz (default)", rate)
-            } else {
-                format!("{} Hz", rate)
-            };
-            let style = if is_selected {
-                Style::default().fg(theme.quaternary).add_modifier(Modifier::BOLD | Modifier::REVERSED)
-            } else {
-                Style::default().fg(theme.secondary_light)
-            };
-            ListItem::new(label).style(style)
-        }).collect();
+        let items: Vec<ListItem> = fmt
+            .valid_sample_rates
+            .iter()
+            .enumerate()
+            .map(|(i, &rate)| {
+                let is_selected = app.sample_rate_menu_state.selected() == Some(i);
+                let is_default = rate == fmt.default_sample_rate;
+                let label = if is_default {
+                    format!("{} Hz (default)", rate)
+                } else {
+                    format!("{} Hz", rate)
+                };
+                let style = if is_selected {
+                    Style::default()
+                        .fg(theme.quaternary)
+                        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                } else {
+                    Style::default().fg(theme.secondary_light)
+                };
+                ListItem::new(label).style(style)
+            })
+            .collect();
 
         let popup_block = Block::default()
             .title(format!(" Sample Rate — {} ", fmt.display_name))
@@ -602,9 +747,19 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         f.render_stateful_widget(list, chunks[0], &mut app.sample_rate_menu_state);
 
         let hint = Line::from(vec![
-            Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Enter",
+                Style::default()
+                    .fg(theme.success)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" apply  "),
-            Span::styled("Esc", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme.error)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" cancel"),
         ]);
         f.render_widget(Paragraph::new(hint), chunks[1]);
@@ -616,28 +771,34 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         let area = centered_rect_fixed(54, popup_height, size);
         f.render_widget(Clear, area);
 
-        let items: Vec<ListItem> = AUDIO_FORMATS.iter().enumerate().map(|(i, fmt)| {
-            let is_selected = app.audio_format_menu_state.selected() == Some(i);
-            let is_default = i == DEFAULT_FORMAT_INDEX;
-            // Summarise valid sample rates for the format
-            let rates = fmt.valid_sample_rates;
-            let rate_summary = if rates.len() == 1 {
-                format!("{} Hz", rates[0])
-            } else {
-                format!("{}–{} kHz", rates[0] / 1000, rates[rates.len() - 1] / 1000)
-            };
-            let label = if is_default {
-                format!("{:<16} {}  (default)", fmt.display_name, rate_summary)
-            } else {
-                format!("{:<16} {}", fmt.display_name, rate_summary)
-            };
-            let style = if is_selected {
-                Style::default().fg(theme.tertiary).add_modifier(Modifier::BOLD | Modifier::REVERSED)
-            } else {
-                Style::default().fg(theme.primary_light)
-            };
-            ListItem::new(label).style(style)
-        }).collect();
+        let items: Vec<ListItem> = AUDIO_FORMATS
+            .iter()
+            .enumerate()
+            .map(|(i, fmt)| {
+                let is_selected = app.audio_format_menu_state.selected() == Some(i);
+                let is_default = i == DEFAULT_FORMAT_INDEX;
+                // Summarise valid sample rates for the format
+                let rates = fmt.valid_sample_rates;
+                let rate_summary = if rates.len() == 1 {
+                    format!("{} Hz", rates[0])
+                } else {
+                    format!("{}–{} kHz", rates[0] / 1000, rates[rates.len() - 1] / 1000)
+                };
+                let label = if is_default {
+                    format!("{:<16} {}  (default)", fmt.display_name, rate_summary)
+                } else {
+                    format!("{:<16} {}", fmt.display_name, rate_summary)
+                };
+                let style = if is_selected {
+                    Style::default()
+                        .fg(theme.tertiary)
+                        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                } else {
+                    Style::default().fg(theme.primary_light)
+                };
+                ListItem::new(label).style(style)
+            })
+            .collect();
 
         let popup_block = Block::default()
             .title(" Audio Format ")
@@ -657,9 +818,19 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         f.render_stateful_widget(list, chunks[0], &mut app.audio_format_menu_state);
 
         let hint = Line::from(vec![
-            Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Enter",
+                Style::default()
+                    .fg(theme.success)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" apply  "),
-            Span::styled("Esc", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme.error)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" cancel"),
         ]);
         f.render_widget(Paragraph::new(hint), chunks[1]);
@@ -696,7 +867,10 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
 
         // Search input row
         let search_display = if app.command_palette_buffer.is_empty() {
-            Span::styled("  Type to filter commands…", Style::default().fg(Color::DarkGray))
+            Span::styled(
+                "  Type to filter commands…",
+                Style::default().fg(Color::DarkGray),
+            )
         } else {
             Span::styled(
                 format!("  {}_", app.command_palette_buffer),
@@ -713,41 +887,73 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         f.render_widget(divider, inner_chunks[1]);
 
         // Command list
-        let items: Vec<ratatui::widgets::ListItem> = commands.iter().enumerate().map(|(i, cmd)| {
-            let is_selected = app.command_palette_state.selected() == Some(i);
-            let shortcut_str = cmd.shortcut.unwrap_or("");
-            // Pad name to fill available width, put shortcut on right
-            let max_name = inner_chunks[2].width.saturating_sub(shortcut_str.len() as u16 + 3) as usize;
-            let name = if cmd.name.len() > max_name {
-                format!("{}…", &cmd.name[..max_name.saturating_sub(1)])
-            } else {
-                format!("{:<width$}", cmd.name, width = max_name)
-            };
-            let line = Line::from(vec![
-                Span::styled(
-                    format!(" {}", name),
-                    if is_selected { Style::default().fg(theme.primary).add_modifier(Modifier::BOLD | Modifier::REVERSED) }
-                    else { Style::default().fg(theme.primary_light) },
-                ),
-                Span::styled(
-                    format!(" {} ", shortcut_str),
-                    if is_selected { Style::default().fg(theme.secondary).add_modifier(Modifier::REVERSED) }
-                    else { Style::default().fg(Color::DarkGray) },
-                ),
-            ]);
-            ratatui::widgets::ListItem::new(line)
-        }).collect();
+        let items: Vec<ratatui::widgets::ListItem> = commands
+            .iter()
+            .enumerate()
+            .map(|(i, cmd)| {
+                let is_selected = app.command_palette_state.selected() == Some(i);
+                let shortcut_str = cmd.shortcut.unwrap_or("");
+                // Pad name to fill available width, put shortcut on right
+                let max_name = inner_chunks[2]
+                    .width
+                    .saturating_sub(shortcut_str.len() as u16 + 3)
+                    as usize;
+                let name = if cmd.name.len() > max_name {
+                    format!("{}…", &cmd.name[..max_name.saturating_sub(1)])
+                } else {
+                    format!("{:<width$}", cmd.name, width = max_name)
+                };
+                let line = Line::from(vec![
+                    Span::styled(
+                        format!(" {}", name),
+                        if is_selected {
+                            Style::default()
+                                .fg(theme.primary)
+                                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                        } else {
+                            Style::default().fg(theme.primary_light)
+                        },
+                    ),
+                    Span::styled(
+                        format!(" {} ", shortcut_str),
+                        if is_selected {
+                            Style::default()
+                                .fg(theme.secondary)
+                                .add_modifier(Modifier::REVERSED)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
+                    ),
+                ]);
+                ratatui::widgets::ListItem::new(line)
+            })
+            .collect();
 
         let list = ratatui::widgets::List::new(items);
         f.render_stateful_widget(list, inner_chunks[2], &mut app.command_palette_state);
 
         // Hint row
         let hint = Line::from(vec![
-            Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Enter",
+                Style::default()
+                    .fg(theme.success)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" run  "),
-            Span::styled("Up/Down", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Up/Down",
+                Style::default()
+                    .fg(theme.secondary)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" navigate  "),
-            Span::styled("Esc", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme.error)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" cancel "),
         ]);
         f.render_widget(Paragraph::new(hint), inner_chunks[3]);
@@ -760,28 +966,32 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         f.render_widget(Clear, area);
 
         // Build one item per theme: name in its own primary color, description dimmed below
-        let items: Vec<ListItem> = THEMES.iter().enumerate().map(|(i, t)| {
-            let is_selected = app.theme_menu_state.selected() == Some(i);
-            let is_current  = i == app.theme_index;
-            let marker = if is_current { "● " } else { "  " };
+        let items: Vec<ListItem> = THEMES
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let is_selected = app.theme_menu_state.selected() == Some(i);
+                let is_current = i == app.theme_index;
+                let marker = if is_current { "● " } else { "  " };
 
-            let name_style = if is_selected {
-                Style::default().fg(t.primary).add_modifier(Modifier::BOLD | Modifier::REVERSED)
-            } else {
-                Style::default().fg(t.primary).add_modifier(Modifier::BOLD)
-            };
-            let desc_style = Style::default().fg(Color::DarkGray);
+                let name_style = if is_selected {
+                    Style::default()
+                        .fg(t.primary)
+                        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                } else {
+                    Style::default().fg(t.primary).add_modifier(Modifier::BOLD)
+                };
+                let desc_style = Style::default().fg(Color::DarkGray);
 
-            let name_line = Line::from(vec![
-                Span::styled(marker, name_style),
-                Span::styled(t.name, name_style),
-            ]);
-            let desc_line = Line::from(Span::styled(
-                format!("    {}", t.description),
-                desc_style,
-            ));
-            ListItem::new(vec![name_line, desc_line])
-        }).collect();
+                let name_line = Line::from(vec![
+                    Span::styled(marker, name_style),
+                    Span::styled(t.name, name_style),
+                ]);
+                let desc_line =
+                    Line::from(Span::styled(format!("    {}", t.description), desc_style));
+                ListItem::new(vec![name_line, desc_line])
+            })
+            .collect();
 
         let popup_block = Block::default()
             .title(" Select Theme ")
@@ -802,11 +1012,26 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
         f.render_stateful_widget(list, chunks[0], &mut app.theme_menu_state);
 
         let hint = Line::from(vec![
-            Span::styled(" Enter", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Enter",
+                Style::default()
+                    .fg(theme.success)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" apply  "),
-            Span::styled("Esc", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme.error)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" cancel  "),
-            Span::styled("Up/Down", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Up/Down",
+                Style::default()
+                    .fg(theme.secondary)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" navigate"),
         ]);
         f.render_widget(Paragraph::new(hint), chunks[1]);
