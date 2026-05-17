@@ -62,8 +62,10 @@ static API_KEY_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SettingsSnapshot {
     api_key: String,
-    model: String,
-    language: String,
+    standard_model: String,
+    standard_language: String,
+    streaming_model: String,
+    streaming_language: String,
     smart_format: bool,
     key_terms: String,
     push_to_talk: String,
@@ -74,6 +76,8 @@ struct SettingsSnapshot {
     output_mode: String,
     append_newline: bool,
     deliver_to_focused_app: bool,
+    remote_audio_enabled: bool,
+    remote_audio_port: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,18 +311,23 @@ struct SettingsView {
     app: Option<Arc<state::AppState>>,
     completion: Option<CompletionHandle>,
     api_key_input: Entity<InputState>,
-    model_select: Entity<SelectState<Vec<String>>>,
-    language_select: Entity<SelectState<Vec<String>>>,
+    standard_model_select: Entity<SelectState<Vec<String>>>,
+    standard_language_select: Entity<SelectState<Vec<String>>>,
+    streaming_model_select: Entity<SelectState<Vec<String>>>,
+    streaming_language_select: Entity<SelectState<Vec<String>>>,
     key_terms_input: Entity<InputState>,
     push_to_talk_input: Entity<InputState>,
     keep_talking_input: Entity<InputState>,
     streaming_input: Entity<InputState>,
     audio_input_select: Entity<SelectState<Vec<String>>>,
     history_limit_input: Entity<InputState>,
+    remote_audio_port_input: Entity<InputState>,
     output_mode_select: Entity<SelectState<Vec<String>>>,
     api_key: String,
-    model: String,
-    language: String,
+    standard_model: String,
+    standard_language: String,
+    streaming_model: String,
+    streaming_language: String,
     smart_format: bool,
     key_terms: String,
     push_to_talk: String,
@@ -329,9 +338,12 @@ struct SettingsView {
     output_mode: String,
     append_newline: bool,
     deliver_to_focused_app: bool,
+    remote_audio_enabled: bool,
+    remote_audio_port: String,
     launch_at_startup: bool,
     audio_inputs: Vec<String>,
-    language_options: Vec<String>,
+    standard_language_options: Vec<String>,
+    streaming_language_options: Vec<String>,
     meter: Option<AudioMeter>,
     meter_level: u8,
     meter_label: String,
@@ -356,7 +368,8 @@ impl SettingsView {
         window.set_window_title(launch_mode.title());
         set_window_icon(launch_mode.title());
 
-        let model_items = model_options();
+        let standard_model_items = standard_model_options();
+        let streaming_model_items = streaming_model_options();
         let language_items = vec![deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string()];
         let audio_inputs = vec![DEFAULT_AUDIO_INPUT_LABEL.to_string()];
         let output_modes = output_mode_options();
@@ -376,16 +389,43 @@ impl SettingsView {
         let streaming_input = cx.new(|cx| InputState::new(window, cx).placeholder("Streaming"));
         let history_limit_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Recent history limit"));
+        let remote_audio_port_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Remote audio port"));
 
-        let model_select = cx.new(|cx| {
+        let standard_model_select = cx.new(|cx| {
             SelectState::new(
-                model_items.clone(),
-                index_path_for(&deepgram::DEFAULT_MODEL.to_string(), &model_items),
+                standard_model_items.clone(),
+                index_path_for(
+                    &deepgram::DEFAULT_STANDARD_MODEL.to_string(),
+                    &standard_model_items,
+                ),
                 window,
                 cx,
             )
         });
-        let language_select = cx.new(|cx| {
+        let standard_language_select = cx.new(|cx| {
+            SelectState::new(
+                language_items.clone(),
+                index_path_for(
+                    &deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string(),
+                    &language_items,
+                ),
+                window,
+                cx,
+            )
+        });
+        let streaming_model_select = cx.new(|cx| {
+            SelectState::new(
+                streaming_model_items.clone(),
+                index_path_for(
+                    &deepgram::DEFAULT_STREAMING_MODEL.to_string(),
+                    &streaming_model_items,
+                ),
+                window,
+                cx,
+            )
+        });
+        let streaming_language_select = cx.new(|cx| {
             SelectState::new(
                 language_items.clone(),
                 index_path_for(
@@ -421,18 +461,23 @@ impl SettingsView {
             app,
             completion,
             api_key_input,
-            model_select,
-            language_select,
+            standard_model_select,
+            standard_language_select,
+            streaming_model_select,
+            streaming_language_select,
             key_terms_input,
             push_to_talk_input,
             keep_talking_input,
             streaming_input,
             audio_input_select,
             history_limit_input,
+            remote_audio_port_input,
             output_mode_select,
             api_key: String::new(),
-            model: deepgram::DEFAULT_MODEL.to_string(),
-            language: deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string(),
+            standard_model: deepgram::DEFAULT_STANDARD_MODEL.to_string(),
+            standard_language: deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string(),
+            streaming_model: deepgram::DEFAULT_STREAMING_MODEL.to_string(),
+            streaming_language: deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string(),
             smart_format: false,
             key_terms: String::new(),
             push_to_talk: Config::default().hotkeys.push_to_talk,
@@ -443,9 +488,12 @@ impl SettingsView {
             output_mode: OutputMode::DirectInput.as_label().to_string(),
             append_newline: false,
             deliver_to_focused_app: true,
+            remote_audio_enabled: false,
+            remote_audio_port: config::DEFAULT_REMOTE_AUDIO_PORT.to_string(),
             launch_at_startup: startup::is_enabled().unwrap_or(false),
             audio_inputs,
-            language_options: language_items,
+            standard_language_options: language_items.clone(),
+            streaming_language_options: language_items,
             meter: None,
             meter_level: 0,
             meter_label: "Mic activity: unavailable".to_string(),
@@ -506,15 +554,53 @@ impl SettingsView {
                     cx.notify();
                 },
             ),
-            subscribe_select_string(cx, window, &self.model_select, |this, value, window, cx| {
-                this.model = value;
-                this.refresh_language_options(window, cx);
-                cx.notify();
-            }),
-            subscribe_select_string(cx, window, &self.language_select, |this, value, _, cx| {
-                this.language = value;
-                cx.notify();
-            }),
+            subscribe_input_string(
+                cx,
+                window,
+                &self.remote_audio_port_input,
+                |this, value, _, cx| {
+                    this.remote_audio_port = value;
+                    cx.notify();
+                },
+            ),
+            subscribe_select_string(
+                cx,
+                window,
+                &self.standard_model_select,
+                |this, value, window, cx| {
+                    this.standard_model = value;
+                    this.refresh_standard_language_options(window, cx);
+                    cx.notify();
+                },
+            ),
+            subscribe_select_string(
+                cx,
+                window,
+                &self.standard_language_select,
+                |this, value, _, cx| {
+                    this.standard_language = value;
+                    cx.notify();
+                },
+            ),
+            subscribe_select_string(
+                cx,
+                window,
+                &self.streaming_model_select,
+                |this, value, window, cx| {
+                    this.streaming_model = value;
+                    this.refresh_streaming_language_options(window, cx);
+                    cx.notify();
+                },
+            ),
+            subscribe_select_string(
+                cx,
+                window,
+                &self.streaming_language_select,
+                |this, value, _, cx| {
+                    this.streaming_language = value;
+                    cx.notify();
+                },
+            ),
             subscribe_select_string(
                 cx,
                 window,
@@ -638,17 +724,33 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) {
         self.api_key = config.api_key.clone().unwrap_or_default();
-        self.model = config.model.clone();
-        self.language = config
-            .language
+        self.standard_model = config.standard_model.clone();
+        self.standard_language = config
+            .standard_language
             .as_deref()
             .and_then(|value| {
-                deepgram::normalize_language(&self.model, Some(value))
+                deepgram::normalize_standard_language(&self.standard_model, Some(value))
                     .ok()
                     .flatten()
             })
             .and_then(|language| {
-                deepgram::languages_for_model(&self.model)
+                deepgram::languages_for_standard_model(&self.standard_model)
+                    .iter()
+                    .find(|option| option.code.eq_ignore_ascii_case(&language))
+                    .map(deepgram::language_display)
+            })
+            .unwrap_or_else(|| deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string());
+        self.streaming_model = config.streaming_model.clone();
+        self.streaming_language = config
+            .streaming_language
+            .as_deref()
+            .and_then(|value| {
+                deepgram::normalize_streaming_language(&self.streaming_model, Some(value))
+                    .ok()
+                    .flatten()
+            })
+            .and_then(|language| {
+                deepgram::languages_for_streaming_model(&self.streaming_model)
                     .iter()
                     .find(|option| option.code.eq_ignore_ascii_case(&language))
                     .map(deepgram::language_display)
@@ -667,6 +769,8 @@ impl SettingsView {
         self.output_mode = config.output_mode.as_label().to_string();
         self.append_newline = config.append_newline;
         self.deliver_to_focused_app = config.deliver_to_focused_app;
+        self.remote_audio_enabled = config.remote_audio_enabled;
+        self.remote_audio_port = config.remote_audio_port.to_string();
         self.last_loaded_config_write_time = modified_at;
         self.config_changed_externally = false;
         self.last_config_change_check = Instant::now();
@@ -689,15 +793,25 @@ impl SettingsView {
         self.history_limit_input.update(cx, |input, cx| {
             input.set_value(self.history_limit.clone(), window, cx)
         });
+        self.remote_audio_port_input.update(cx, |input, cx| {
+            input.set_value(self.remote_audio_port.clone(), window, cx)
+        });
 
-        let models = model_options();
-        self.model_select.update(cx, |select, cx| {
+        let models = standard_model_options();
+        self.standard_model_select.update(cx, |select, cx| {
             select.set_items(models, window, cx);
-            let model = self.model.clone();
+            let model = self.standard_model.clone();
+            select.set_selected_value(&model, window, cx);
+        });
+        let models = streaming_model_options();
+        self.streaming_model_select.update(cx, |select, cx| {
+            select.set_items(models, window, cx);
+            let model = self.streaming_model.clone();
             select.set_selected_value(&model, window, cx);
         });
 
-        self.refresh_language_options(window, cx);
+        self.refresh_standard_language_options(window, cx);
+        self.refresh_streaming_language_options(window, cx);
         self.refresh_audio_inputs(window, cx);
 
         let output_modes = output_mode_options();
@@ -713,23 +827,51 @@ impl SettingsView {
         self.refresh_startup_state();
     }
 
-    fn refresh_language_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.language_options = language_options_for_model(&self.model);
+    fn refresh_standard_language_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.standard_language_options = standard_language_options_for_model(&self.standard_model);
 
-        let selected = deepgram::language_code_from_display(&self.model, &self.language);
-        self.language = selected
+        let selected = deepgram::standard_language_code_from_display(
+            &self.standard_model,
+            &self.standard_language,
+        );
+        self.standard_language = selected
             .and_then(|language| {
-                deepgram::languages_for_model(&self.model)
+                deepgram::languages_for_standard_model(&self.standard_model)
                     .iter()
                     .find(|option| option.code.eq_ignore_ascii_case(&language))
                     .map(deepgram::language_display)
             })
             .unwrap_or_else(|| deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string());
 
-        let language_options = self.language_options.clone();
-        self.language_select.update(cx, |select, cx| {
+        let language_options = self.standard_language_options.clone();
+        self.standard_language_select.update(cx, |select, cx| {
             select.set_items(language_options, window, cx);
-            let selected_language = self.language.clone();
+            let selected_language = self.standard_language.clone();
+            select.set_selected_value(&selected_language, window, cx);
+        });
+    }
+
+    fn refresh_streaming_language_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.streaming_language_options =
+            streaming_language_options_for_model(&self.streaming_model);
+
+        let selected = deepgram::streaming_language_code_from_display(
+            &self.streaming_model,
+            &self.streaming_language,
+        );
+        self.streaming_language = selected
+            .and_then(|language| {
+                deepgram::languages_for_streaming_model(&self.streaming_model)
+                    .iter()
+                    .find(|option| option.code.eq_ignore_ascii_case(&language))
+                    .map(deepgram::language_display)
+            })
+            .unwrap_or_else(|| deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string());
+
+        let language_options = self.streaming_language_options.clone();
+        self.streaming_language_select.update(cx, |select, cx| {
+            select.set_items(language_options, window, cx);
+            let selected_language = self.streaming_language.clone();
             select.set_selected_value(&selected_language, window, cx);
         });
     }
@@ -825,6 +967,15 @@ impl SettingsView {
                 return None;
             }
         };
+        let remote_audio_port = match self.remote_audio_port.trim().parse::<u16>() {
+            Ok(value) if value > 0 => value,
+            _ => {
+                self.status = remote_audio_port_error(&self.remote_audio_port)
+                    .unwrap_or_default()
+                    .to_string();
+                return None;
+            }
+        };
 
         let output_mode = match self.output_mode.as_str() {
             "Copy to clipboard" => OutputMode::Clipboard,
@@ -835,8 +986,18 @@ impl SettingsView {
         Some(Config {
             api_key: (!self.api_key.trim().is_empty()).then(|| self.api_key.trim().to_string()),
             smart_format: self.smart_format,
-            model: self.model.clone(),
-            language: deepgram::language_code_from_display(&self.model, &self.language),
+            model: None,
+            language: None,
+            standard_model: self.standard_model.clone(),
+            standard_language: deepgram::standard_language_code_from_display(
+                &self.standard_model,
+                &self.standard_language,
+            ),
+            streaming_model: self.streaming_model.clone(),
+            streaming_language: deepgram::streaming_language_code_from_display(
+                &self.streaming_model,
+                &self.streaming_language,
+            ),
             key_terms: parse_key_terms_text(&self.key_terms),
             hotkeys: config::HotkeyConfig {
                 push_to_talk: self.push_to_talk.trim().to_string(),
@@ -853,14 +1014,18 @@ impl SettingsView {
                 .as_ref()
                 .map(|app| app.config().vad_silence_ms)
                 .unwrap_or_else(|| config::Config::default().vad_silence_ms),
+            remote_audio_enabled: self.remote_audio_enabled,
+            remote_audio_port,
         })
     }
 
     fn current_snapshot(&self) -> SettingsSnapshot {
         SettingsSnapshot {
             api_key: self.api_key.clone(),
-            model: self.model.clone(),
-            language: self.language.clone(),
+            standard_model: self.standard_model.clone(),
+            standard_language: self.standard_language.clone(),
+            streaming_model: self.streaming_model.clone(),
+            streaming_language: self.streaming_language.clone(),
             smart_format: self.smart_format,
             key_terms: self.key_terms.clone(),
             push_to_talk: self.push_to_talk.clone(),
@@ -871,6 +1036,8 @@ impl SettingsView {
             output_mode: self.output_mode.clone(),
             append_newline: self.append_newline,
             deliver_to_focused_app: self.deliver_to_focused_app,
+            remote_audio_enabled: self.remote_audio_enabled,
+            remote_audio_port: self.remote_audio_port.clone(),
         }
     }
 
@@ -914,6 +1081,17 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) {
         self.deliver_to_focused_app = *checked;
+        cx.notify();
+    }
+
+    #[cfg(feature = "remote-audio")]
+    fn on_remote_audio_enabled_click(
+        &mut self,
+        checked: &bool,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.remote_audio_enabled = *checked;
         cx.notify();
     }
 
@@ -1016,13 +1194,23 @@ impl SettingsView {
                 )
                 .child(
                     field()
-                        .label("Model")
-                        .child(Select::new(&self.model_select).w_full()),
+                        .label("Standard model")
+                        .child(Select::new(&self.standard_model_select).w_full()),
                 )
                 .child(
                     field()
-                        .label("Language")
-                        .child(Select::new(&self.language_select).w_full()),
+                        .label("Standard language")
+                        .child(Select::new(&self.standard_language_select).w_full()),
+                )
+                .child(
+                    field()
+                        .label("Streaming model")
+                        .child(Select::new(&self.streaming_model_select).w_full()),
+                )
+                .child(
+                    field()
+                        .label("Streaming language")
+                        .child(Select::new(&self.streaming_language_select).w_full()),
                 )
                 .child(
                     field().label("Smart format").child(
@@ -1071,56 +1259,77 @@ impl SettingsView {
             cx,
         );
 
+        #[cfg_attr(not(feature = "remote-audio"), allow(unused_mut))]
+        let mut audio_output_form = v_form()
+            .with_size(Size::Large)
+            .child(
+                field()
+                    .label("Microphone")
+                    .child(Select::new(&self.audio_input_select).w_full()),
+            )
+            .child(
+                field().label("Mic activity").child(
+                    v_flex()
+                        .w_full()
+                        .gap_2()
+                        .child(Progress::new("mic-meter").value(self.meter_level as f32))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(self.meter_label.clone()),
+                        ),
+                ),
+            )
+            .child(
+                field()
+                    .label("Output mode")
+                    .child(Select::new(&self.output_mode_select).w_full()),
+            )
+            .child(
+                field()
+                    .label("History limit")
+                    .child(self.render_history_limit_input(cx)),
+            )
+            .child(
+                field().label("Append newline").child(
+                    Switch::new("append-newline")
+                        .checked(self.append_newline)
+                        .label("Append newline after transcript")
+                        .on_click(cx.listener(Self::on_append_newline_click)),
+                ),
+            )
+            .child(
+                field().label("Focused app").child(
+                    Switch::new("deliver-to-focused-app")
+                        .checked(self.deliver_to_focused_app)
+                        .label("Send transcript to the app focused at delivery")
+                        .on_click(cx.listener(Self::on_deliver_to_focused_app_click)),
+                ),
+            );
+
+        #[cfg(feature = "remote-audio")]
+        {
+            audio_output_form = audio_output_form
+                .child(
+                    field().label("Remote audio").child(
+                        Switch::new("remote-audio-enabled")
+                            .checked(self.remote_audio_enabled)
+                            .label("Accept mobile microphone streams")
+                            .on_click(cx.listener(Self::on_remote_audio_enabled_click)),
+                    ),
+                )
+                .child(
+                    field()
+                        .label("Remote audio port")
+                        .child(self.render_remote_audio_port_input(cx)),
+                );
+        }
+
         let audio_output = self.render_settings_section(
             SettingsSection::AudioOutput,
             "Audio and output",
-            v_form()
-                .with_size(Size::Large)
-                .child(
-                    field()
-                        .label("Microphone")
-                        .child(Select::new(&self.audio_input_select).w_full()),
-                )
-                .child(
-                    field().label("Mic activity").child(
-                        v_flex()
-                            .w_full()
-                            .gap_2()
-                            .child(Progress::new("mic-meter").value(self.meter_level as f32))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(self.meter_label.clone()),
-                            ),
-                    ),
-                )
-                .child(
-                    field()
-                        .label("Output mode")
-                        .child(Select::new(&self.output_mode_select).w_full()),
-                )
-                .child(
-                    field()
-                        .label("History limit")
-                        .child(self.render_history_limit_input(cx)),
-                )
-                .child(
-                    field().label("Append newline").child(
-                        Switch::new("append-newline")
-                            .checked(self.append_newline)
-                            .label("Append newline after transcript")
-                            .on_click(cx.listener(Self::on_append_newline_click)),
-                    ),
-                )
-                .child(
-                    field().label("Focused app").child(
-                        Switch::new("deliver-to-focused-app")
-                            .checked(self.deliver_to_focused_app)
-                            .label("Send transcript to the app focused at delivery")
-                            .on_click(cx.listener(Self::on_deliver_to_focused_app_click)),
-                    ),
-                ),
+            audio_output_form,
             cx,
         );
 
@@ -1324,6 +1533,25 @@ impl SettingsView {
     fn render_history_limit_input(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let input = Input::new(&self.history_limit_input).w_full();
         if history_limit_error(&self.history_limit).is_none() {
+            return input.into_any_element();
+        }
+
+        let input = input
+            .border_color(cx.theme().background)
+            .focus_bordered(false);
+
+        div()
+            .w_full()
+            .relative()
+            .child(input)
+            .child(validation_gradient_border())
+            .into_any_element()
+    }
+
+    #[cfg(feature = "remote-audio")]
+    fn render_remote_audio_port_input(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let input = Input::new(&self.remote_audio_port_input).w_full();
+        if remote_audio_port_error(&self.remote_audio_port).is_none() {
             return input.into_any_element();
         }
 
@@ -1647,6 +1875,13 @@ fn history_limit_error(value: &str) -> Option<&'static str> {
     }
 }
 
+fn remote_audio_port_error(value: &str) -> Option<&'static str> {
+    match value.trim().parse::<u16>() {
+        Ok(value) if value > 0 => None,
+        _ => Some("Remote audio port must be a number between 1 and 65535"),
+    }
+}
+
 fn validation_gradient_border() -> impl IntoElement {
     let border_width = px(2.);
     let horizontal_gradient = || {
@@ -1750,10 +1985,20 @@ fn parse_key_terms_text(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn language_options_for_model(model: &str) -> Vec<String> {
+fn standard_language_options_for_model(model: &str) -> Vec<String> {
     let mut options = vec![deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string()];
     options.extend(
-        deepgram::languages_for_model(model)
+        deepgram::languages_for_standard_model(model)
+            .iter()
+            .map(deepgram::language_display),
+    );
+    options
+}
+
+fn streaming_language_options_for_model(model: &str) -> Vec<String> {
+    let mut options = vec![deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string()];
+    options.extend(
+        deepgram::languages_for_streaming_model(model)
             .iter()
             .map(deepgram::language_display),
     );
@@ -1767,8 +2012,15 @@ fn output_mode_options() -> Vec<String> {
         .collect()
 }
 
-fn model_options() -> Vec<String> {
-    deepgram::supported_models()
+fn standard_model_options() -> Vec<String> {
+    deepgram::supported_standard_models()
+        .iter()
+        .map(|model| (*model).to_string())
+        .collect()
+}
+
+fn streaming_model_options() -> Vec<String> {
+    deepgram::supported_streaming_models()
         .iter()
         .map(|model| (*model).to_string())
         .collect()
@@ -1879,6 +2131,19 @@ mod tests {
             history_limit_error("101"),
             Some("History limit must be a number between 1 and 100")
         );
+    }
+
+    #[test]
+    fn remote_audio_port_error_rejects_invalid_ports() {
+        assert_eq!(
+            remote_audio_port_error("0"),
+            Some("Remote audio port must be a number between 1 and 65535")
+        );
+        assert_eq!(
+            remote_audio_port_error("70000"),
+            Some("Remote audio port must be a number between 1 and 65535")
+        );
+        assert_eq!(remote_audio_port_error("54545"), None);
     }
 
     #[test]

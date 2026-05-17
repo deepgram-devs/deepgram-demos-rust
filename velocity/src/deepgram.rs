@@ -1,4 +1,6 @@
 pub const DEFAULT_MODEL: &str = "nova-3";
+pub const DEFAULT_STANDARD_MODEL: &str = DEFAULT_MODEL;
+pub const DEFAULT_STREAMING_MODEL: &str = DEFAULT_MODEL;
 pub const DO_NOT_SPECIFY_LANGUAGE_LABEL: &str = "Do not specify";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -7,7 +9,8 @@ pub struct LanguageOption {
     pub label: &'static str,
 }
 
-const SUPPORTED_MODELS: [&str; 2] = ["nova-2", "nova-3"];
+const STANDARD_MODELS: [&str; 2] = ["nova-2", "nova-3"];
+const STREAMING_MODELS: [&str; 4] = ["nova-2", "nova-3", "flux-general-en", "flux-general-multi"];
 
 const NOVA_2_LANGUAGES: [LanguageOption; 54] = [
     LanguageOption {
@@ -543,35 +546,154 @@ const NOVA_3_LANGUAGES: [LanguageOption; 78] = [
     },
 ];
 
+const FLUX_ENGLISH_LANGUAGES: [LanguageOption; 1] = [LanguageOption {
+    code: "en",
+    label: "English",
+}];
+
+const FLUX_MULTI_LANGUAGES: [LanguageOption; 10] = [
+    LanguageOption {
+        code: "en",
+        label: "English",
+    },
+    LanguageOption {
+        code: "es",
+        label: "Spanish",
+    },
+    LanguageOption {
+        code: "fr",
+        label: "French",
+    },
+    LanguageOption {
+        code: "de",
+        label: "German",
+    },
+    LanguageOption {
+        code: "hi",
+        label: "Hindi",
+    },
+    LanguageOption {
+        code: "ru",
+        label: "Russian",
+    },
+    LanguageOption {
+        code: "pt",
+        label: "Portuguese",
+    },
+    LanguageOption {
+        code: "ja",
+        label: "Japanese",
+    },
+    LanguageOption {
+        code: "it",
+        label: "Italian",
+    },
+    LanguageOption {
+        code: "nl",
+        label: "Dutch",
+    },
+];
+
 pub fn supported_models() -> &'static [&'static str] {
-    &SUPPORTED_MODELS
+    supported_standard_models()
+}
+
+pub fn supported_standard_models() -> &'static [&'static str] {
+    &STANDARD_MODELS
+}
+
+pub fn supported_streaming_models() -> &'static [&'static str] {
+    &STREAMING_MODELS
 }
 
 pub fn normalize_model(model: &str) -> Option<&'static str> {
+    normalize_standard_model(model)
+}
+
+pub fn normalize_standard_model(model: &str) -> Option<&'static str> {
     let trimmed = model.trim();
-    supported_models()
+    supported_standard_models()
         .iter()
         .copied()
         .find(|candidate| candidate.eq_ignore_ascii_case(trimmed))
 }
 
+pub fn normalize_streaming_model(model: &str) -> Option<&'static str> {
+    let trimmed = model.trim();
+    supported_streaming_models()
+        .iter()
+        .copied()
+        .find(|candidate| candidate.eq_ignore_ascii_case(trimmed))
+}
+
+pub fn is_flux_model(model: &str) -> bool {
+    matches!(
+        normalize_streaming_model(model),
+        Some("flux-general-en" | "flux-general-multi")
+    )
+}
+
 pub fn languages_for_model(model: &str) -> &'static [LanguageOption] {
-    match normalize_model(model).unwrap_or(DEFAULT_MODEL) {
+    languages_for_standard_model(model)
+}
+
+pub fn languages_for_standard_model(model: &str) -> &'static [LanguageOption] {
+    match normalize_standard_model(model).unwrap_or(DEFAULT_STANDARD_MODEL) {
         "nova-2" => &NOVA_2_LANGUAGES,
         _ => &NOVA_3_LANGUAGES,
     }
 }
 
+pub fn languages_for_streaming_model(model: &str) -> &'static [LanguageOption] {
+    match normalize_streaming_model(model).unwrap_or(DEFAULT_STREAMING_MODEL) {
+        "nova-2" => &NOVA_2_LANGUAGES,
+        "flux-general-en" => &FLUX_ENGLISH_LANGUAGES,
+        "flux-general-multi" => &FLUX_MULTI_LANGUAGES,
+        _ => &NOVA_3_LANGUAGES,
+    }
+}
+
 pub fn normalize_language(model: &str, language: Option<&str>) -> Result<Option<String>, String> {
+    normalize_standard_language(model, language)
+}
+
+pub fn normalize_standard_language(
+    model: &str,
+    language: Option<&str>,
+) -> Result<Option<String>, String> {
     let Some(trimmed) = language.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
 
-    languages_for_model(model)
+    languages_for_standard_model(model)
         .iter()
         .find(|option| option.code.eq_ignore_ascii_case(trimmed))
         .map(|option| Some(option.code.to_string()))
         .ok_or_else(|| format!("Language '{trimmed}' is not supported by model {model}"))
+}
+
+pub fn normalize_streaming_language(
+    model: &str,
+    language: Option<&str>,
+) -> Result<Option<String>, String> {
+    let normalized_model = normalize_streaming_model(model).unwrap_or(DEFAULT_STREAMING_MODEL);
+    let Some(trimmed) = language.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    if is_flux_model(normalized_model) {
+        let base_language = trimmed.split('-').next().unwrap_or(trimmed);
+        return languages_for_streaming_model(normalized_model)
+            .iter()
+            .find(|option| option.code.eq_ignore_ascii_case(base_language))
+            .map(|option| Some(option.code.to_string()))
+            .ok_or_else(|| {
+                format!("Language '{trimmed}' is not supported by streaming model {model}")
+            });
+    }
+
+    normalize_standard_language(normalized_model, Some(trimmed))
+        .map_err(|_| format!("Language '{trimmed}' is not supported by streaming model {model}"))
 }
 
 pub fn language_display(option: &LanguageOption) -> String {
@@ -579,6 +701,10 @@ pub fn language_display(option: &LanguageOption) -> String {
 }
 
 pub fn language_code_from_display(model: &str, display: &str) -> Option<String> {
+    standard_language_code_from_display(model, display)
+}
+
+pub fn standard_language_code_from_display(model: &str, display: &str) -> Option<String> {
     let trimmed = display.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case(DO_NOT_SPECIFY_LANGUAGE_LABEL) {
         return None;
@@ -591,7 +717,29 @@ pub fn language_code_from_display(model: &str, display: &str) -> Option<String> 
         }
     }
 
-    normalize_language(model, Some(trimmed)).ok().flatten()
+    normalize_standard_language(model, Some(trimmed))
+        .ok()
+        .flatten()
+}
+
+pub fn streaming_language_code_from_display(model: &str, display: &str) -> Option<String> {
+    let trimmed = display.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case(DO_NOT_SPECIFY_LANGUAGE_LABEL) {
+        return None;
+    }
+
+    if let Some(start) = trimmed.rfind('(') {
+        if trimmed.ends_with(')') && start + 1 < trimmed.len() - 1 {
+            let code = &trimmed[start + 1..trimmed.len() - 1];
+            return normalize_streaming_language(model, Some(code))
+                .ok()
+                .flatten();
+        }
+    }
+
+    normalize_streaming_language(model, Some(trimmed))
+        .ok()
+        .flatten()
 }
 
 #[cfg(test)]
@@ -603,6 +751,14 @@ mod tests {
         assert_eq!(normalize_model("NOVA-2"), Some("nova-2"));
         assert_eq!(normalize_model("nova-3"), Some("nova-3"));
         assert_eq!(normalize_model("flux"), None);
+        assert_eq!(
+            normalize_streaming_model("flux-general-en"),
+            Some("flux-general-en")
+        );
+        assert_eq!(
+            normalize_streaming_model("flux-general-multi"),
+            Some("flux-general-multi")
+        );
     }
 
     #[test]
@@ -629,5 +785,18 @@ mod tests {
             language_code_from_display("nova-2", DO_NOT_SPECIFY_LANGUAGE_LABEL),
             None
         );
+    }
+
+    #[test]
+    fn flux_language_hints_are_limited_to_supported_languages() {
+        assert_eq!(
+            normalize_streaming_language("flux-general-multi", Some("pt-BR")).unwrap(),
+            Some("pt".to_string())
+        );
+        assert_eq!(
+            normalize_streaming_language("flux-general-en", Some("en-GB")).unwrap(),
+            Some("en".to_string())
+        );
+        assert!(normalize_streaming_language("flux-general-multi", Some("ko")).is_err());
     }
 }

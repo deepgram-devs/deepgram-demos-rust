@@ -66,6 +66,7 @@ It lets you configure:
 - append newline after transcript
 - focused-app delivery behavior
 - transcript history retention
+- remote audio streaming from a mobile client, when built with the default `remote-audio` feature
 - launch at Windows sign-in
 
 The current settings UI uses a compact dark layout with a Deepgram gradient heading, hover feedback on each settings section, and an unsaved-changes banner when edited values differ from the last saved configuration. Plain text fields validate as you type: invalid hotkeys and out-of-range history limits are framed with a bright validation border before save. Save failures, runtime errors, and config reload warnings are shown in the settings status area and reflected through the tray status.
@@ -75,6 +76,12 @@ When the settings window is open, the selected microphone shows a live activity 
 By default, completed transcripts are sent to the app focused at delivery time. If `Send transcript to the app focused at delivery` is disabled, Velocity returns focus to the app that was active when recording started before typing or pasting the transcript.
 
 The Windows sign-in setting creates a per-user Startup folder shortcut named `Deepgram Velocity.lnk`, starts Velocity with `--start-minimized`, and uses the Deepgram icon in Windows Startup Apps.
+
+### Remote Audio Streaming
+
+Velocity can optionally listen for a mobile microphone stream over a local-network WebSocket. The feature is compiled in by default with the `remote-audio` Cargo feature, but the listener is disabled at runtime until `Accept mobile microphone streams` is enabled in Settings. The default listen port is `54545`, and the port field validates before saving.
+
+Remote audio clients should follow the protocol in [REMOTE_AUDIO_STREAMING.md](REMOTE_AUDIO_STREAMING.md). The initial protocol sends `linear16` PCM at `16 kHz` mono over WebSocket/TCP. Opus is documented as a future extension point, not part of the version 1 server.
 
 ### Transcript History
 
@@ -87,7 +94,8 @@ Velocity stores a recent transcript history locally in `%USERPROFILE%\.config\de
 
 | Flag | Description |
 |---|---|
-| `--model <name>` | Deepgram model to use (default: `nova-3`) |
+| `--model <name>` | Deepgram Nova model to use for both standard and streaming transcription (default: `nova-3`) |
+| `--streaming-model <name>` | Deepgram model to use for streaming transcription only (`nova-2`, `nova-3`, `flux-general-en`, or `flux-general-multi`) |
 | `--smart-format` | Enable Deepgram Smart Formatting (punctuation, numbers, etc.) |
 | `--start-minimized` | Start tray-first without opening onboarding when launched by Windows sign-in |
 | `--verbose` | Log Deepgram responses and errors to the console |
@@ -97,7 +105,9 @@ Options can also be set in the configuration file:
 ```yaml
 # %USERPROFILE%\.config\deepgram\velocity.yml
 api_key: your-deepgram-api-key
-model: nova-3
+standard_model: nova-3
+standard_language: en
+streaming_model: flux-general-en
 smart_format: true
 keyterms:
   - Velocity
@@ -107,6 +117,8 @@ history_limit: 20
 output_mode: direct-input
 append_newline: false
 deliver_to_focused_app: true
+remote_audio_enabled: false
+remote_audio_port: 54545
 hotkeys:
   push_to_talk: Win+Ctrl+'
   keep_talking: Win+Ctrl+Shift+'
@@ -119,10 +131,17 @@ The configuration file is watched for changes. Valid edits take effect without r
 
 Some commonly used Deepgram models:
 
-| Model | Notes |
-|---|---|
-| `nova-3` | Best accuracy, default |
-| `nova-2` | Previous generation |
-| `base` | Faster, lower accuracy |
+| Model | Modes | Notes |
+|---|---|---|
+| `nova-3` | Standard and streaming | Best Nova accuracy, default |
+| `nova-2` | Standard and streaming | Previous generation |
+| `flux-general-en` | Streaming only | Flux conversational streaming for English |
+| `flux-general-multi` | Streaming only | Flux conversational streaming with language hints for English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian, and Dutch |
 
 See the [Deepgram model docs](https://developers.deepgram.com/docs/models-overview) for the full list.
+
+## Cargo Features
+
+| Feature | Default | Description |
+|---|---:|---|
+| `remote-audio` | Yes | Builds the local WebSocket server and Settings controls for receiving mobile microphone audio. Disable with `cargo build -p velocity --no-default-features` for builds that must not contain a network listener. |

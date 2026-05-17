@@ -9,6 +9,7 @@ pub const CONFIG_SUBDIRECTORY: &str = "deepgram";
 pub const CONFIG_FILE_NAME: &str = "velocity.yml";
 pub const CONFIG_BACKUP_FILE_NAME: &str = "velocity.backup.yml";
 pub const HISTORY_FILE_NAME: &str = "velocity-history.yml";
+pub const DEFAULT_REMOTE_AUDIO_PORT: u16 = 54545;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -59,10 +60,18 @@ pub struct Config {
     pub api_key: Option<String>,
     #[serde(default)]
     pub smart_format: bool,
-    #[serde(default = "default_model")]
-    pub model: String,
-    #[serde(default)]
+    #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    #[serde(default)]
+    pub standard_model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard_language: Option<String>,
+    #[serde(default)]
+    pub streaming_model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub streaming_language: Option<String>,
     #[serde(default, rename = "keyterms", alias = "key_terms")]
     pub key_terms: Vec<String>,
     #[serde(default)]
@@ -80,6 +89,10 @@ pub struct Config {
     /// Set to 0 to disable VAD auto-stop (default).
     #[serde(default)]
     pub vad_silence_ms: u32,
+    #[serde(default)]
+    pub remote_audio_enabled: bool,
+    #[serde(default = "default_remote_audio_port")]
+    pub remote_audio_port: u16,
 }
 
 impl Default for Config {
@@ -87,8 +100,12 @@ impl Default for Config {
         Self {
             api_key: None,
             smart_format: false,
-            model: default_model(),
+            model: None,
             language: None,
+            standard_model: default_standard_model(),
+            standard_language: None,
+            streaming_model: default_streaming_model(),
+            streaming_language: None,
             key_terms: Vec::new(),
             hotkeys: HotkeyConfig::default(),
             audio_input: None,
@@ -97,6 +114,8 @@ impl Default for Config {
             append_newline: false,
             deliver_to_focused_app: true,
             vad_silence_ms: 0,
+            remote_audio_enabled: false,
+            remote_audio_port: default_remote_audio_port(),
         }
     }
 }
@@ -107,8 +126,12 @@ pub struct ConfigFileState {
     pub modified_at: Option<SystemTime>,
 }
 
-fn default_model() -> String {
-    crate::deepgram::DEFAULT_MODEL.to_string()
+fn default_standard_model() -> String {
+    crate::deepgram::DEFAULT_STANDARD_MODEL.to_string()
+}
+
+fn default_streaming_model() -> String {
+    crate::deepgram::DEFAULT_STREAMING_MODEL.to_string()
 }
 
 fn default_history_limit() -> usize {
@@ -117,6 +140,10 @@ fn default_history_limit() -> usize {
 
 fn default_deliver_to_focused_app() -> bool {
     true
+}
+
+fn default_remote_audio_port() -> u16 {
+    DEFAULT_REMOTE_AUDIO_PORT
 }
 
 pub fn app_data_dir() -> PathBuf {
@@ -194,10 +221,55 @@ pub fn ensure_backup(config: &Config) -> Result<(), String> {
 
 impl Config {
     pub fn normalize(&mut self) -> Result<(), String> {
-        self.model = crate::deepgram::normalize_model(&self.model)
-            .ok_or_else(|| format!("Unsupported model: {}", self.model.trim()))?
+        let legacy_model = self
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let legacy_language = self
+            .language
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+
+        if self.standard_model.trim().is_empty() {
+            self.standard_model = legacy_model
+                .unwrap_or(crate::deepgram::DEFAULT_STANDARD_MODEL)
+                .to_string();
+        }
+        if self.streaming_model.trim().is_empty() {
+            self.streaming_model = legacy_model
+                .unwrap_or(self.standard_model.as_str())
+                .to_string();
+        }
+        if self.standard_language.is_none() {
+            self.standard_language = legacy_language.map(str::to_string);
+        }
+        if self.streaming_language.is_none() {
+            self.streaming_language = legacy_language.map(str::to_string);
+        }
+
+        self.standard_model = crate::deepgram::normalize_standard_model(&self.standard_model)
+            .ok_or_else(|| format!("Unsupported standard model: {}", self.standard_model.trim()))?
             .to_string();
-        self.language = crate::deepgram::normalize_language(&self.model, self.language.as_deref())?;
+        self.streaming_model = crate::deepgram::normalize_streaming_model(&self.streaming_model)
+            .ok_or_else(|| {
+                format!(
+                    "Unsupported streaming model: {}",
+                    self.streaming_model.trim()
+                )
+            })?
+            .to_string();
+        self.standard_language = crate::deepgram::normalize_standard_language(
+            &self.standard_model,
+            self.standard_language.as_deref(),
+        )?;
+        self.streaming_language = crate::deepgram::normalize_streaming_language(
+            &self.streaming_model,
+            self.streaming_language.as_deref(),
+        )?;
+        self.model = None;
+        self.language = None;
 
         self.key_terms = self
             .key_terms
@@ -218,6 +290,9 @@ impl Config {
 
         if self.history_limit == 0 {
             return Err("History limit must be greater than zero".to_string());
+        }
+        if self.remote_audio_port == 0 {
+            return Err("Remote audio port must be between 1 and 65535".to_string());
         }
 
         self.hotkeys.push_to_talk = normalize_hotkey_text(&self.hotkeys.push_to_talk)?;
@@ -248,12 +323,16 @@ mod tests {
     #[test]
     fn default_config_contains_expected_values() {
         let config = Config::default();
-        assert_eq!(config.model, crate::deepgram::DEFAULT_MODEL);
-        assert_eq!(config.language, None);
+        assert_eq!(config.standard_model, crate::deepgram::DEFAULT_MODEL);
+        assert_eq!(config.standard_language, None);
+        assert_eq!(config.streaming_model, crate::deepgram::DEFAULT_MODEL);
+        assert_eq!(config.streaming_language, None);
         assert_eq!(config.history_limit, DEFAULT_HISTORY_LIMIT);
         assert_eq!(config.hotkeys.push_to_talk, "Win+Ctrl+'");
         assert_eq!(config.output_mode, OutputMode::DirectInput);
         assert!(config.deliver_to_focused_app);
+        assert!(!config.remote_audio_enabled);
+        assert_eq!(config.remote_audio_port, DEFAULT_REMOTE_AUDIO_PORT);
     }
 
     #[test]
@@ -282,12 +361,64 @@ mod tests {
     #[test]
     fn normalize_rejects_language_not_supported_by_model() {
         let mut config = Config {
-            model: "nova-2".to_string(),
-            language: Some("ar".to_string()),
+            standard_model: "nova-2".to_string(),
+            standard_language: Some("ar".to_string()),
             ..Config::default()
         };
 
         assert!(config.normalize().is_err());
+    }
+
+    #[test]
+    fn normalize_rejects_zero_remote_audio_port() {
+        let mut config = Config {
+            remote_audio_port: 0,
+            ..Config::default()
+        };
+        assert!(config.normalize().is_err());
+    }
+
+    #[test]
+    fn normalize_accepts_flux_only_for_streaming_model() {
+        let mut config = Config {
+            streaming_model: "flux-general-multi".to_string(),
+            streaming_language: Some("fr".to_string()),
+            ..Config::default()
+        };
+
+        config.normalize().unwrap();
+
+        assert_eq!(config.standard_model, "nova-3");
+        assert_eq!(config.streaming_model, "flux-general-multi");
+        assert_eq!(config.streaming_language.as_deref(), Some("fr"));
+    }
+
+    #[test]
+    fn normalize_rejects_flux_as_standard_model() {
+        let mut config = Config {
+            standard_model: "flux-general-en".to_string(),
+            ..Config::default()
+        };
+
+        assert!(config.normalize().is_err());
+    }
+
+    #[test]
+    fn normalize_migrates_legacy_model_fields() {
+        let yaml = r#"
+model: nova-2
+language: es
+"#;
+        let mut config = serde_yaml::from_str::<Config>(yaml).unwrap();
+
+        config.normalize().unwrap();
+
+        assert_eq!(config.standard_model, "nova-2");
+        assert_eq!(config.standard_language.as_deref(), Some("es"));
+        assert_eq!(config.streaming_model, "nova-2");
+        assert_eq!(config.streaming_language.as_deref(), Some("es"));
+        assert_eq!(config.model, None);
+        assert_eq!(config.language, None);
     }
 
     #[test]
@@ -306,7 +437,7 @@ mod tests {
     #[test]
     fn deserialize_accepts_legacy_key_terms_field_name() {
         let yaml = r#"
-model: nova-3
+standard_model: nova-3
 key_terms:
   - Velocity
   - Deepgram

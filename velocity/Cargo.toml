@@ -4,6 +4,10 @@ version = "0.5.0"
 edition = "2024"
 description = "Windows 11 voice dictation using Deepgram Voice AI."
 
+[features]
+default = ["remote-audio"]
+remote-audio = []
+
 [[bin]]
 name = "velocity"
 path = "src/main.rs"

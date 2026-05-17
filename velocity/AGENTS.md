@@ -64,6 +64,7 @@ The Rust settings UI must retain all current configuration functionality:
 - output mode selection
 - append-newline toggle
 - focused-app delivery toggle
+- remote audio toggle and port field when the `remote-audio` Cargo feature is enabled
 - Windows sign-in launch toggle
 - reload from disk
 - config-changed-on-disk warning
@@ -72,6 +73,22 @@ The Rust settings UI must retain all current configuration functionality:
 Failures must be visible in the settings window, not only in logs. Plain text fields should validate as close to real time as GPUI allows; current examples are the hotkey fields and transcript History limit field.
 
 When the focused-app delivery toggle is enabled, Velocity must deliver completed transcripts to the application focused at the end of the transcription connection. When it is disabled, Velocity must deliver completed transcripts to the application that was focused when recording started.
+
+## Future Usage And Cost Settings Idea
+
+Add a Settings UI option that lets the user review recent Deepgram cost and usage for a configurable lookback period. The first target period is the last 24 hours, but the design should allow other periods later.
+
+Expose this feature inside the Settings UI behind an expander widget so it is available without crowding the main settings surface. The view should break usage down by streaming and HTTP/batch transcription activity, then display a chart over the selected period. Each chart bar should represent a time window within that period, such as one hour for a 24-hour view or one day for a longer range.
+
+## Future Flux Streaming Model Idea
+
+Add support for Deepgram's Flux streaming model for audio transcription. This should be considered part of the streaming transcription model selection path, with Settings UI affordances and validation that make it clear when Flux-specific options or constraints apply.
+
+## Future Custom Transcription Sounds Idea
+
+Allow users to configure custom start and stop sounds for transcription. The current beginning and ending transcription sounds are hard-coded in the application; replace that with settings that accept file system paths to user-selected sound files.
+
+The Settings UI should expose separate configurable paths for the start-transcription sound and the stop-transcription sound. Path fields should validate as close to real time as possible, surface missing or unsupported files visibly, and preserve a sensible built-in default when a custom path is not configured.
 
 ## Windows Sign-In Startup
 
@@ -124,6 +141,8 @@ Velocity should call `SetCurrentProcessExplicitAppUserModelID` with `Deepgram.Ve
 - Preserve compatibility with the current config schema.
 - Reject invalid values without corrupting the last known good runtime state.
 - The transcript History limit setting must validate as a number from `1` through `100`.
+- The remote audio port setting must validate as a number from `1` through `65535`.
+- The `remote-audio` Cargo feature is enabled by default. Builds compiled with `--no-default-features` must not start the remote audio server or show remote audio Settings controls, but config files may still contain the ignored remote audio keys for portability.
 
 ## Dependency License Requirements
 

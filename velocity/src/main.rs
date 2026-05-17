@@ -8,11 +8,14 @@ mod beep;
 mod clipboard;
 mod config;
 mod deepgram;
+mod flux;
 mod focus_target;
 mod history;
 mod hotkey;
 mod logger;
 mod output;
+#[cfg(feature = "remote-audio")]
+mod remote_audio;
 mod settings;
 mod single_instance;
 mod startup;
@@ -71,6 +74,10 @@ fn main() {
         .windows(2)
         .find(|w| w[0] == "--model")
         .map(|w| w[1].clone());
+    let streaming_model_flag = args
+        .windows(2)
+        .find(|w| w[0] == "--streaming-model")
+        .map(|w| w[1].clone());
     logger::init(verbose);
 
     let loaded_state = config::load_state().unwrap_or_else(|error| {
@@ -85,7 +92,15 @@ fn main() {
         cfg.smart_format = true;
     }
     if let Some(model) = model_flag {
-        cfg.model = model;
+        cfg.standard_model = model.clone();
+        cfg.streaming_model = model;
+    }
+    if let Some(model) = streaming_model_flag {
+        cfg.streaming_model = model;
+    }
+    if let Err(error) = cfg.normalize() {
+        logger::verbose(&format!("Config normalize failed: {error}"));
+        cfg = config::Config::default();
     }
 
     if cfg
@@ -194,8 +209,8 @@ fn main() {
                 wav,
                 &api_key,
                 config.smart_format,
-                &config.model,
-                config.language.as_deref(),
+                &config.standard_model,
+                config.standard_language.as_deref(),
                 &config.key_terms,
             ) {
                 logger::verbose(&format!("Transcript: {text}"));
@@ -248,16 +263,28 @@ fn main() {
                 transcript_target.push_history_and_deliver(format!("{text} "));
             });
 
-            streaming::run(
-                &api_key,
-                config.smart_format,
-                &config.model,
-                config.language.as_deref(),
-                &config.key_terms,
-                config.audio_input.as_deref(),
-                stream_app.streaming_flag(),
-                on_transcript,
-            );
+            if deepgram::is_flux_model(&config.streaming_model) {
+                flux::run(
+                    &api_key,
+                    &config.streaming_model,
+                    config.streaming_language.as_deref(),
+                    &config.key_terms,
+                    config.audio_input.as_deref(),
+                    stream_app.streaming_flag(),
+                    on_transcript,
+                );
+            } else {
+                streaming::run(
+                    &api_key,
+                    config.smart_format,
+                    &config.streaming_model,
+                    config.streaming_language.as_deref(),
+                    &config.key_terms,
+                    config.audio_input.as_deref(),
+                    stream_app.streaming_flag(),
+                    on_transcript,
+                );
+            }
 
             stream_app.set_streaming(false);
             stream_app.set_meter_level(0);
@@ -280,6 +307,8 @@ fn main() {
     app.set_hotkeys(hotkeys);
 
     spawn_config_watcher(Arc::clone(&app));
+    #[cfg(feature = "remote-audio")]
+    remote_audio::spawn_server(Arc::clone(&app));
 
     unsafe {
         let mut msg = MSG::default();
