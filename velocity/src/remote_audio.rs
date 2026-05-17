@@ -145,10 +145,14 @@ fn handle_client(stream: TcpStream, app: Arc<state::AppState>) {
         return;
     }
 
+    disable_local_microphone(&app);
+    app.set_remote_audio_active(true);
+
     let api_key = match cfg.api_key.clone().filter(|key| !key.trim().is_empty()) {
         Some(key) => key,
         None => {
             app.set_error("Remote audio requires a Deepgram API key".to_string());
+            app.set_remote_audio_active(false);
             return;
         }
     };
@@ -157,6 +161,7 @@ fn handle_client(stream: TcpStream, app: Arc<state::AppState>) {
         Ok(ws) => ws,
         Err(error) => {
             logger::log(&format!("Remote audio: client handshake failed: {error}"));
+            app.set_remote_audio_active(false);
             return;
         }
     };
@@ -171,6 +176,7 @@ fn handle_client(stream: TcpStream, app: Arc<state::AppState>) {
                     .into(),
             ));
             let _ = mobile_ws.close(None);
+            app.set_remote_audio_active(false);
             return;
         }
     };
@@ -256,12 +262,23 @@ fn handle_client(stream: TcpStream, app: Arc<state::AppState>) {
     }
 
     app.set_meter_level(0);
+    app.set_remote_audio_active(false);
     let _ = deepgram_ws.send(Message::Text(
         r#"{"type":"CloseStream"}"#.to_string().into(),
     ));
     let _ = deepgram_ws.close(None);
     let _ = mobile_ws.close(None);
     logger::log("Remote audio: session ended");
+}
+
+fn disable_local_microphone(app: &state::AppState) {
+    if app.is_recording() || app.is_keep_talking() || app.is_streaming() {
+        logger::log("Remote audio: disabling local microphone modes while mobile client is active");
+    }
+    app.set_recording(false);
+    app.set_keep_talking(false);
+    app.set_streaming(false);
+    app.set_meter_level(0);
 }
 
 fn connect_deepgram(

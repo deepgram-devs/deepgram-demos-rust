@@ -1626,7 +1626,10 @@ impl SettingsView {
         let recording = app.is_recording();
         let keep_talking = app.is_keep_talking();
         let streaming = app.is_streaming();
-        let selected = if streaming {
+        let remote_audio = app.is_remote_audio_active();
+        let selected = if remote_audio {
+            "remote"
+        } else if streaming {
             "streaming"
         } else if keep_talking {
             "keep-talking"
@@ -1634,6 +1637,11 @@ impl SettingsView {
             "recording"
         } else {
             ""
+        };
+        let active_microphone = if remote_audio {
+            "Remote mobile microphone".to_string()
+        } else {
+            self.runtime_audio_input()
         };
 
         v_flex()
@@ -1661,9 +1669,16 @@ impl SettingsView {
                         streaming,
                         selected == "streaming",
                         cx,
+                    ))
+                    .child(self.render_status_tile(
+                        "REM",
+                        "Remote audio",
+                        remote_audio,
+                        selected == "remote",
+                        cx,
                     )),
             )
-            .child(self.render_active_microphone_indicator(&self.runtime_audio_input(), cx))
+            .child(self.render_active_microphone_indicator(&active_microphone, cx))
             .into_any_element()
     }
 

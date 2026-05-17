@@ -81,6 +81,8 @@ The Windows sign-in setting creates a per-user Startup folder shortcut named `De
 
 Velocity can optionally listen for a mobile microphone stream over a local-network WebSocket. The feature is compiled in by default with the `remote-audio` Cargo feature, but the listener is disabled at runtime until `Accept mobile microphone streams` is enabled in Settings. The default listen port is `54545`, and the port field validates before saving.
 
+When a remote mobile client is active, Velocity disables local microphone modes for that session. Push-to-talk, keep-talking, and local streaming hotkeys are ignored until the remote client disconnects. The selected local microphone remains saved for later local use, but it is not mixed with the mobile stream.
+
 Remote audio clients should follow the protocol in [REMOTE_AUDIO_STREAMING.md](REMOTE_AUDIO_STREAMING.md). The initial protocol sends `linear16` PCM at `16 kHz` mono over WebSocket/TCP. Opus is documented as a future extension point, not part of the version 1 server.
 
 ### Transcript History

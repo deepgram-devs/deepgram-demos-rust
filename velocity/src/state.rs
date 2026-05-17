@@ -28,6 +28,7 @@ pub struct AppState {
     recording: Arc<AtomicBool>,
     keep_talking: Arc<AtomicBool>,
     streaming_active: Arc<AtomicBool>,
+    remote_audio_active: Arc<AtomicBool>,
     tray_hwnd: AtomicIsize,
     transcript_target_hwnd: AtomicIsize,
     meter_level: AtomicUsize,
@@ -46,6 +47,7 @@ impl AppState {
             recording: Arc::new(AtomicBool::new(false)),
             keep_talking: Arc::new(AtomicBool::new(false)),
             streaming_active: Arc::new(AtomicBool::new(false)),
+            remote_audio_active: Arc::new(AtomicBool::new(false)),
             tray_hwnd: AtomicIsize::new(0),
             transcript_target_hwnd: AtomicIsize::new(0),
             meter_level: AtomicUsize::new(0),
@@ -73,6 +75,10 @@ impl AppState {
 
     pub fn streaming_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.streaming_active)
+    }
+
+    pub fn remote_audio_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.remote_audio_active)
     }
 
     pub fn set_tray_hwnd(&self, hwnd: HWND) {
@@ -116,6 +122,12 @@ impl AppState {
         self.notify_ui();
     }
 
+    #[cfg(feature = "remote-audio")]
+    pub fn set_remote_audio_active(&self, value: bool) {
+        self.remote_audio_active.store(value, Ordering::Relaxed);
+        self.notify_ui();
+    }
+
     pub fn is_recording(&self) -> bool {
         self.recording.load(Ordering::Relaxed)
     }
@@ -126,6 +138,10 @@ impl AppState {
 
     pub fn is_streaming(&self) -> bool {
         self.streaming_active.load(Ordering::Relaxed)
+    }
+
+    pub fn is_remote_audio_active(&self) -> bool {
+        self.remote_audio_active.load(Ordering::Relaxed)
     }
 
     pub fn apply_config(&self, config: Config, modified_at: Option<SystemTime>) {

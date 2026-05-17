@@ -22,6 +22,12 @@ The Velocity Settings window controls whether the server is enabled and which
 port it listens on. If the mobile client leaves the port blank, it should use
 the default port `54545`.
 
+A remote session is exclusive with Velocity's local microphone modes. While a
+mobile client is connected, local push-to-talk, keep-talking, and streaming
+hotkeys are ignored. If a mobile client connects while local capture is active,
+Velocity clears the local recording/streaming state and uses the mobile stream
+as the only active audio source.
+
 ## Audio Format
 
 Version 1 uses raw PCM frames:

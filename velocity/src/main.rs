@@ -145,6 +145,7 @@ fn main() {
     let recording = app.recording_flag();
     let keep_talking = app.keep_talking_flag();
     let streaming_active = app.streaming_flag();
+    let remote_audio_active = app.remote_audio_flag();
 
     let audio_thread_app = Arc::clone(&app);
     let audio_thread_recording = Arc::clone(&recording);
@@ -299,6 +300,7 @@ fn main() {
         on_start,
         on_stop,
         Arc::clone(&streaming_active),
+        Arc::clone(&remote_audio_active),
         on_stream_start,
     );
     if let Err(error) = hotkeys.register() {

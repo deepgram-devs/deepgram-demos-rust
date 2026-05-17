@@ -143,6 +143,7 @@ Velocity should call `SetCurrentProcessExplicitAppUserModelID` with `Deepgram.Ve
 - The transcript History limit setting must validate as a number from `1` through `100`.
 - The remote audio port setting must validate as a number from `1` through `65535`.
 - The `remote-audio` Cargo feature is enabled by default. Builds compiled with `--no-default-features` must not start the remote audio server or show remote audio Settings controls, but config files may still contain the ignored remote audio keys for portability.
+- Remote audio sessions are exclusive with local microphone capture. When a mobile client is active, push-to-talk, keep-talking, and local streaming hotkeys must not start local capture; if local capture is already active when the mobile client connects, clear the local recording/streaming state.
 
 ## Dependency License Requirements
 

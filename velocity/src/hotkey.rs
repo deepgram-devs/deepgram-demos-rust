@@ -24,6 +24,7 @@ pub struct HotkeyManager {
     on_stop: Arc<dyn Fn() + Send + Sync>,
     keep_talking: Arc<AtomicBool>,
     streaming_active: Arc<AtomicBool>,
+    remote_audio_active: Arc<AtomicBool>,
     on_stream_start: Arc<dyn Fn() + Send + Sync>,
     active_config: HotkeyConfig,
 }
@@ -39,6 +40,7 @@ impl HotkeyManager {
         on_start: Arc<dyn Fn() + Send + Sync>,
         on_stop: Arc<dyn Fn() + Send + Sync>,
         streaming_active: Arc<AtomicBool>,
+        remote_audio_active: Arc<AtomicBool>,
         on_stream_start: Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
         Self {
@@ -48,6 +50,7 @@ impl HotkeyManager {
             on_start,
             on_stop,
             streaming_active,
+            remote_audio_active,
             on_stream_start,
             active_config: config,
         }
@@ -89,6 +92,11 @@ impl HotkeyManager {
         let was_recording = self.recording.load(Ordering::Relaxed);
         let keep = self.keep_talking.load(Ordering::Relaxed);
         let streaming = self.streaming_active.load(Ordering::Relaxed);
+        let remote_audio = self.remote_audio_active.load(Ordering::Relaxed);
+
+        if remote_audio {
+            return;
+        }
 
         match id {
             HOTKEY_STREAM => {
