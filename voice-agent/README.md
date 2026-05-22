@@ -66,6 +66,13 @@ cargo run
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--endpoint <URL>` | `wss://agent.deepgram.com` | Deepgram WebSocket endpoint |
+| `--listen-provider <TYPE>` | `deepgram` | STT provider type for `agent.listen.provider.type` |
+| `--listen-model <MODEL>` | `nova-3` | STT model for `agent.listen.provider.model` |
+| `--listen-version <VERSION>` | _(none)_ | STT model version for `agent.listen.provider.version` |
+| `--listen-language <LANG>` | `en` | STT language for `agent.listen.provider.language` and `agent.language` |
+| `--listen-keyterms <CSV>` | _(none)_ | Comma-separated keyterms for `agent.listen.provider.keyterms` |
+| `--listen-eot-threshold <VALUE>` | _(none)_ | End-of-turn threshold for `agent.listen.provider.eot_threshold` |
+| `--listen-eager-eot-threshold <VALUE>` | _(none)_ | Eager end-of-turn threshold for `agent.listen.provider.eager_eot_threshold` |
 | `--speak-model <MODEL>` | `aura-2-thalia-en` | TTS model for agent voice |
 | `--think-type <TYPE>` | `open_ai` | LLM provider type |
 | `--think-model <MODEL>` | `gpt-4o-mini` | LLM model |
@@ -83,6 +90,14 @@ cargo run
 
 # Use a different TTS voice
 cargo run -- --speak-model aura-2-apollo-en
+
+# Tune the listen provider
+cargo run -- --listen-model nova-3 \
+             --listen-language en \
+             --listen-keyterms "Deepgram,Voice Agent,Rust" \
+             --listen-eot-threshold 0.8 \
+             --listen-eager-eot-threshold 0.4 \
+             --verbose
 
 # Use Claude via a custom endpoint
 cargo run -- --think-type anthropic \

@@ -2,21 +2,21 @@ use std::env;
 
 use std::time::Duration;
 
+use clap::Parser;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Stream, StreamConfig, SampleFormat};
+use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info};
+use rodio::{OutputStream, Sink, Source};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
-use std::sync::mpsc as std_mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
-use rodio::{OutputStream, Sink, Source};
-use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(name = "voice-agent")]
@@ -42,6 +42,34 @@ struct Args {
     /// Speak language code (for Eleven Labs: e.g. en-US)
     #[arg(long, default_value = "en-US")]
     speak_language_code: String,
+
+    /// Listen provider type to use for speech-to-text
+    #[arg(long, default_value = "deepgram")]
+    listen_provider: String,
+
+    /// Listen provider model to use for speech-to-text
+    #[arg(long, default_value = "nova-3")]
+    listen_model: String,
+
+    /// Listen provider model version
+    #[arg(long)]
+    listen_version: Option<String>,
+
+    /// Listen provider language code
+    #[arg(long, default_value = "en")]
+    listen_language: String,
+
+    /// Listen provider keyterms as comma-separated values
+    #[arg(long, value_delimiter = ',')]
+    listen_keyterms: Vec<String>,
+
+    /// Listen provider end-of-turn threshold
+    #[arg(long)]
+    listen_eot_threshold: Option<f32>,
+
+    /// Listen provider eager end-of-turn threshold
+    #[arg(long)]
+    listen_eager_eot_threshold: Option<f32>,
 
     /// Eleven Labs voice ID (used in the endpoint URL)
     #[arg(long)]
@@ -150,6 +178,15 @@ struct ListenProviderConfig {
     #[serde(rename = "type")]
     provider_type: String,
     model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    language: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    keyterms: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eot_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eager_eot_threshold: Option<f32>,
     smart_format: bool,
 }
 
@@ -198,33 +235,46 @@ impl AudioCapture {
         let device = host
             .default_input_device()
             .ok_or("No input device available")?;
-        
+
         debug!("Input device: {}", device.name()?);
 
         let supported_config = device.default_input_config()?;
         debug!("Default input config: {:?}", supported_config);
-        
+
         let sample_format = supported_config.sample_format();
         let config: StreamConfig = supported_config.into();
-        
-        Ok(AudioCapture { device, config, sample_format })
+
+        Ok(AudioCapture {
+            device,
+            config,
+            sample_format,
+        })
     }
-    
-    fn start_capture(&self, tx: mpsc::UnboundedSender<Vec<u8>>, mic_enabled: Arc<AtomicBool>) -> Result<Stream, Box<dyn std::error::Error>> {
+
+    fn start_capture(
+        &self,
+        tx: mpsc::UnboundedSender<Vec<u8>>,
+        mic_enabled: Arc<AtomicBool>,
+    ) -> Result<Stream, Box<dyn std::error::Error>> {
         let config = self.config.clone();
-        
+
         let stream = match self.sample_format {
             SampleFormat::F32 => self.build_stream::<f32>(config, tx, mic_enabled)?,
             SampleFormat::I16 => self.build_stream::<i16>(config, tx, mic_enabled)?,
             SampleFormat::U16 => self.build_stream::<u16>(config, tx, mic_enabled)?,
             _ => return Err("Unsupported sample format".into()),
         };
-        
+
         stream.play()?;
         Ok(stream)
     }
-    
-    fn build_stream<T>(&self, config: StreamConfig, tx: mpsc::UnboundedSender<Vec<u8>>, mic_enabled: Arc<AtomicBool>) -> Result<Stream, Box<dyn std::error::Error>>
+
+    fn build_stream<T>(
+        &self,
+        config: StreamConfig,
+        tx: mpsc::UnboundedSender<Vec<u8>>,
+        mic_enabled: Arc<AtomicBool>,
+    ) -> Result<Stream, Box<dyn std::error::Error>>
     where
         T: cpal::Sample + cpal::SizedSample + Send + 'static,
         f32: cpal::FromSample<T>,
@@ -253,7 +303,7 @@ impl AudioCapture {
             |err| error!("Audio stream error: {}", err),
             None,
         )?;
-        
+
         Ok(stream)
     }
 }
@@ -266,7 +316,10 @@ struct AudioPlayer {
 }
 
 impl AudioPlayer {
-    fn new(mic_enabled: Arc<AtomicBool>, mute_on_playback: bool) -> Result<Self, Box<dyn std::error::Error>> {
+    fn new(
+        mic_enabled: Arc<AtomicBool>,
+        mute_on_playback: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()
             .map_err(|e| format!("Failed to create audio output stream: {}", e))?;
         let sink = Arc::new(Sink::connect_new(&stream_handle.mixer()));
@@ -323,7 +376,10 @@ impl AudioPlayer {
     }
 
     fn play_audio(&self, audio_data: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
-        debug!("🔊 Received audio data for playback: {} bytes", audio_data.len());
+        debug!(
+            "🔊 Received audio data for playback: {} bytes",
+            audio_data.len()
+        );
 
         if audio_data.is_empty() {
             return Ok(());
@@ -366,7 +422,7 @@ impl PCMSource {
 
 impl Iterator for PCMSource {
     type Item = f32;
-    
+
     fn next(&mut self) -> Option<Self::Item> {
         self.samples.next()
     }
@@ -376,36 +432,47 @@ impl Source for PCMSource {
     fn current_span_len(&self) -> Option<usize> {
         None
     }
-    
+
     fn channels(&self) -> u16 {
         self.channels
     }
-    
+
     fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
-    
+
     fn total_duration(&self) -> Option<Duration> {
         None
     }
 }
 
-async fn connect_to_voice_agent(api_key: &str, endpoint: &str, _sample_rate: u32, _channels: u16) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Box<dyn std::error::Error>> {
+async fn connect_to_voice_agent(
+    api_key: &str,
+    endpoint: &str,
+    _sample_rate: u32,
+    _channels: u16,
+) -> Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    Box<dyn std::error::Error>,
+> {
     let url = Url::parse(format!("{0}/v1/agent/converse", endpoint).as_str())?;
-    
+
     let request = tokio_tungstenite::tungstenite::handshake::client::Request::get(url.as_str())
         .header("Authorization", format!("Token {}", api_key))
         .header("Host", url.host_str().unwrap_or("agent.deepgram.com"))
         .header("Upgrade", "websocket")
         .header("Connection", "Upgrade")
-        .header("Sec-WebSocket-Key", tokio_tungstenite::tungstenite::handshake::client::generate_key())
+        .header(
+            "Sec-WebSocket-Key",
+            tokio_tungstenite::tungstenite::handshake::client::generate_key(),
+        )
         .header("Sec-WebSocket-Version", "13")
         .body(())?;
-    
+
     debug!("Connecting to Deepgram Voice Agent WebSocket...");
     let (ws_stream, _response) = connect_async(request).await?;
     debug!("Connected to Deepgram Voice Agent successfully");
-    
+
     Ok(ws_stream)
 }
 
@@ -418,7 +485,27 @@ struct SpeakArgs<'a> {
     eleven_labs_api_key: Option<String>,
 }
 
-fn create_agent_config(sample_rate: u32, _channels: u16, speak: SpeakArgs<'_>, think_type: &str, think_model: &str, think_endpoint: Option<&str>, think_headers: &[String], prompt: Option<&str>) -> VoiceAgentConfig {
+struct ListenArgs<'a> {
+    provider: &'a str,
+    model: &'a str,
+    version: Option<&'a str>,
+    language: &'a str,
+    keyterms: &'a [String],
+    eot_threshold: Option<f32>,
+    eager_eot_threshold: Option<f32>,
+}
+
+fn create_agent_config(
+    sample_rate: u32,
+    _channels: u16,
+    listen: ListenArgs<'_>,
+    speak: SpeakArgs<'_>,
+    think_type: &str,
+    think_model: &str,
+    think_endpoint: Option<&str>,
+    think_headers: &[String],
+    prompt: Option<&str>,
+) -> VoiceAgentConfig {
     // Parse think headers from "key=value" format
     let mut headers = std::collections::HashMap::new();
     for header in think_headers {
@@ -484,18 +571,33 @@ fn create_agent_config(sample_rate: u32, _channels: u16, speak: SpeakArgs<'_>, t
             },
         },
         agent: AgentSettings {
-            language: "en".to_string(),
+            language: listen.language.to_string(),
             listen: ListenConfig {
                 provider: ListenProviderConfig {
-                    provider_type: "deepgram".to_string(),
-                    model: "nova-3".to_string(),
+                    provider_type: listen.provider.to_string(),
+                    model: listen.model.to_string(),
+                    version: listen.version.map(|version| version.to_string()),
+                    language: listen.language.to_string(),
+                    keyterms: listen
+                        .keyterms
+                        .iter()
+                        .map(|keyterm| keyterm.trim())
+                        .filter(|keyterm| !keyterm.is_empty())
+                        .map(|keyterm| keyterm.to_string())
+                        .collect(),
+                    eot_threshold: listen.eot_threshold,
+                    eager_eot_threshold: listen.eager_eot_threshold,
                     smart_format: false,
                 },
             },
             think: ThinkConfig {
                 provider: ThinkProviderConfig {
                     provider_type: think_type.to_string(),
-                    model: if think_model.is_empty() { None } else { Some(think_model.to_string()) },
+                    model: if think_model.is_empty() {
+                        None
+                    } else {
+                        Some(think_model.to_string())
+                    },
                     temperature: None,
                 },
                 prompt: prompt.map(|s| s.to_string()),
@@ -507,74 +609,111 @@ fn create_agent_config(sample_rate: u32, _channels: u16, speak: SpeakArgs<'_>, t
 }
 
 async fn handle_voice_agent_responses(
-    mut ws_receiver: futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+    mut ws_receiver: futures_util::stream::SplitStream<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    >,
     audio_tx: std_mpsc::Sender<Vec<u8>>,
     mic_enabled: Arc<AtomicBool>,
     mute_on_playback: bool,
 ) {
     while let Some(message) = ws_receiver.next().await {
         match message {
-            Ok(Message::Text(text)) => {
-                match serde_json::from_str::<VoiceAgentResponse>(&text) {
-                    Ok(response) => {
-                        debug!("📨 Message Type: {}", response.message_type);
+            Ok(Message::Text(text)) => match serde_json::from_str::<VoiceAgentResponse>(&text) {
+                Ok(response) => {
+                    debug!("📨 Message Type: {}", response.message_type);
 
-                        match response.message_type.as_str() {
-                            "ConversationText" => {
-                                let role = response.data.get("role").and_then(|r| r.as_str()).unwrap_or("");
-                                let content = response.data.get("content").and_then(|c| c.as_str()).unwrap_or("");
-                                match role {
-                                    "user" => info!("👤 You: {}", content),
-                                    "assistant" => info!("🤖 Agent: {}", content),
-                                    _ => debug!("ConversationText ({}): {}", role, content),
-                                }
-                            }
-                            "AgentThinking" => {
-                                debug!("🤔 Agent is thinking...");
-                            }
-                            "AgentStartedSpeaking" => {
-                                debug!("🗣️ Agent is speaking...");
-                            }
-                            "UserStartedSpeaking" => {
-                                debug!("🎙️ User started speaking");
-                            }
-                            "AgentAudioDone" => {
-                                debug!("🔊 Agent audio done");
-                            }
-                            "Welcome" => {
-                                debug!("👋 Connected: request_id={}", response.data.get("request_id").and_then(|v| v.as_str()).unwrap_or(""));
-                            }
-                            "SettingsApplied" => {
-                                debug!("✅ Settings applied");
-                            }
-                            "Error" => {
-                                let desc = response.data.get("description").and_then(|v| v.as_str()).unwrap_or("unknown");
-                                let code = response.data.get("code").and_then(|v| v.as_str()).unwrap_or("");
-                                error!("❌ Agent error [{}]: {}", code, desc);
-                            }
-                            "Warning" => {
-                                let desc = response.data.get("description").and_then(|v| v.as_str()).unwrap_or("unknown");
-                                let code = response.data.get("code").and_then(|v| v.as_str()).unwrap_or("");
-                                log::warn!("⚠️ Agent warning [{}]: {}", code, desc);
-                            }
-                            _ => {
-                                debug!("📄 {}: {}", response.message_type, serde_json::to_string_pretty(&response.data).unwrap_or_default());
+                    match response.message_type.as_str() {
+                        "ConversationText" => {
+                            let role = response
+                                .data
+                                .get("role")
+                                .and_then(|r| r.as_str())
+                                .unwrap_or("");
+                            let content = response
+                                .data
+                                .get("content")
+                                .and_then(|c| c.as_str())
+                                .unwrap_or("");
+                            match role {
+                                "user" => info!("👤 You: {}", content),
+                                "assistant" => info!("🤖 Agent: {}", content),
+                                _ => debug!("ConversationText ({}): {}", role, content),
                             }
                         }
-                    }
-                    Err(e) => {
-                        error!("Failed to parse response: {}", e);
-                        debug!("📨 Raw response: {}", text);
+                        "AgentThinking" => {
+                            debug!("🤔 Agent is thinking...");
+                        }
+                        "AgentStartedSpeaking" => {
+                            debug!("🗣️ Agent is speaking...");
+                        }
+                        "UserStartedSpeaking" => {
+                            debug!("🎙️ User started speaking");
+                        }
+                        "AgentAudioDone" => {
+                            debug!("🔊 Agent audio done");
+                        }
+                        "Welcome" => {
+                            debug!(
+                                "👋 Connected: request_id={}",
+                                response
+                                    .data
+                                    .get("request_id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                            );
+                        }
+                        "SettingsApplied" => {
+                            debug!("✅ Settings applied");
+                        }
+                        "Error" => {
+                            let desc = response
+                                .data
+                                .get("description")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            let code = response
+                                .data
+                                .get("code")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            error!("❌ Agent error [{}]: {}", code, desc);
+                        }
+                        "Warning" => {
+                            let desc = response
+                                .data
+                                .get("description")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            let code = response
+                                .data
+                                .get("code")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            log::warn!("⚠️ Agent warning [{}]: {}", code, desc);
+                        }
+                        _ => {
+                            debug!(
+                                "📄 {}: {}",
+                                response.message_type,
+                                serde_json::to_string_pretty(&response.data).unwrap_or_default()
+                            );
+                        }
                     }
                 }
-            }
+                Err(e) => {
+                    error!("Failed to parse response: {}", e);
+                    debug!("📨 Raw response: {}", text);
+                }
+            },
             Ok(Message::Binary(data)) => {
                 debug!("🔊 Received binary audio data: {} bytes", data.len());
                 if mute_on_playback {
                     mic_enabled.store(false, Ordering::Relaxed);
                     debug!("🎤 Microphone disabled immediately upon receiving binary audio");
                 }
-                
+
                 // Handle binary audio data directly
                 if let Err(e) = audio_tx.send(data.to_vec()) {
                     error!("Failed to send binary audio to player: {}", e);
@@ -606,15 +745,15 @@ async fn handle_voice_agent_responses(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command-line arguments
     let args = Args::parse();
-    
+
     // Initialize logging; defaults to "info" but RUST_LOG overrides (e.g. RUST_LOG=debug)
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Stdout)
         .init();
-    
+
     // Load environment variables
     dotenv::dotenv().ok();
-    
+
     let api_key = env::var("DEEPGRAM_API_KEY")
         .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
 
@@ -629,21 +768,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting Deepgram Voice Agent...");
     debug!("Using endpoint: {}", args.endpoint);
-    
+
     // Initialize audio capture
     let audio_capture = AudioCapture::new()?;
     let sample_rate = audio_capture.config.sample_rate.0;
     let channels = audio_capture.config.channels;
-    
-    debug!("Audio config - Sample rate: {}, Channels: {}", sample_rate, channels);
-    
+
+    debug!(
+        "Audio config - Sample rate: {}, Channels: {}",
+        sample_rate, channels
+    );
+
     // Create microphone control flag - start with mic enabled
     let mic_enabled = Arc::new(AtomicBool::new(true));
-    
+
     // Create channels for audio data
     let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let (playback_tx, playback_rx) = std_mpsc::channel::<Vec<u8>>();
-    
+
     let mute_on_playback = !args.no_mic_mute;
     if !mute_on_playback {
         info!("Microphone muting during playback is disabled");
@@ -659,27 +801,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
         };
-        
+
         for audio_data in playback_rx {
             if let Err(e) = audio_player.play_audio(audio_data) {
                 error!("Failed to play audio: {}", e);
             }
         }
     });
-    
+
     // Start audio capture with microphone control
     let mic_enabled_for_capture = Arc::clone(&mic_enabled);
     let _stream = audio_capture.start_capture(audio_tx, mic_enabled_for_capture)?;
     debug!("Audio capture started");
-    
+
     // Connect to Deepgram Voice Agent
     let ws_stream = connect_to_voice_agent(&api_key, &args.endpoint, sample_rate, channels).await?;
     let (mut ws_sender, ws_receiver) = ws_stream.split();
-    
+
     // Send Settings configuration
     let config = create_agent_config(
         sample_rate,
         channels,
+        ListenArgs {
+            provider: &args.listen_provider,
+            model: &args.listen_model,
+            version: args.listen_version.as_deref(),
+            language: &args.listen_language,
+            keyterms: &args.listen_keyterms,
+            eot_threshold: args.listen_eot_threshold,
+            eager_eot_threshold: args.listen_eager_eot_threshold,
+        },
         SpeakArgs {
             provider: &args.speak_provider,
             model: &args.speak_model,
@@ -696,49 +847,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let config_json = serde_json::to_string(&config)?;
     debug!("📤 Sending Settings configuration to WebSocket...");
-    
+
     if args.verbose {
         // Print the entire JSON Settings message with pretty formatting
         let pretty_config = serde_json::to_string_pretty(&config)?;
         info!("📄 Complete Settings JSON message:\n{}", pretty_config);
     }
-    
+
     ws_sender.send(Message::Text(config_json.into())).await?;
     debug!("✅ Settings configuration sent successfully");
-    
+
     // Wait a moment for configuration to be processed
     sleep(Duration::from_millis(500)).await;
-    
+
     // Spawn task to handle WebSocket responses
     let playback_tx_clone = playback_tx.clone();
     let mic_enabled_for_ws = Arc::clone(&mic_enabled);
     let response_handle = tokio::spawn(async move {
-        handle_voice_agent_responses(ws_receiver, playback_tx_clone, mic_enabled_for_ws, mute_on_playback).await;
+        handle_voice_agent_responses(
+            ws_receiver,
+            playback_tx_clone,
+            mic_enabled_for_ws,
+            mute_on_playback,
+        )
+        .await;
     });
-    
+
     // Main loop: send audio data to WebSocket
     info!("🎤 Voice Agent is ready! Start speaking...");
     info!("Press Ctrl+C to stop");
-    
+
     let audio_handle = tokio::spawn(async move {
         let mut packet_count = 0u64;
-        
+
         while let Some(audio_data) = audio_rx.recv().await {
             packet_count += 1;
-            
+
             // Send audio data as binary message
             if let Err(e) = ws_sender.send(Message::Binary(audio_data.into())).await {
                 error!("❌ Failed to send audio data to WebSocket: {}", e);
                 break;
             }
-            
+
             // Log every 100 packets to avoid spam
             if packet_count % 100 == 0 {
                 debug!("📤 Sent {} audio packets to WebSocket", packet_count);
             }
         }
     });
-    
+
     // Wait for either task to complete or for Ctrl+C
     tokio::select! {
         _ = response_handle => {
@@ -751,7 +908,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("Received Ctrl+C, shutting down...");
         }
     }
-    
+
     info!("🛑 Voice Agent stopped");
     Ok(())
 }

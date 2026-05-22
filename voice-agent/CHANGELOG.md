@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.2] - 2026-05-22
+
+### Added
+- Added CLI options for Deepgram listen provider type, model, version, language, keyterms, `eot_threshold`, and `eager_eot_threshold`.
+
 ## [0.2.2] - 2026-04-02
 
 ### Fixed
