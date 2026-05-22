@@ -17,8 +17,11 @@
 - Users can specify environment variables that can override the TOML configuration
 - Users can specify CLI options, such as --option1 --option2 to override settings in the TOML configuration file
   - CLI options have higher priority than corresponding environment variables, if both are specified
-- At application startup time, create a wizard that allows the user to specify any mandatory configuration values, such as an API key
-  - The user should be able to skip entry, but be warned that failure to provide mandatory values may degrade application functionality
+- At application startup time, warn clearly when mandatory configuration values are missing, such as a Deepgram API key or SageMaker endpoint name
+  - When practical, provide an in-app entry flow for runtime overrides, such as the TTS TUI `k` key for a Deepgram API key
+  - The user should be able to continue when a value is missing, but the app must explain which functionality is unavailable until it is configured
+- For applications that can use multiple deployment targets, document provider-specific configuration separately and keep credentials scoped to the target that needs them
+  - Example: the TTS TUI `deepgram` provider covers hosted or self-hosted Deepgram-compatible HTTP endpoints, while the `sagemaker` provider covers self-hosted Deepgram on SageMaker with AWS credentials and a SageMaker endpoint name
 
 ## User Interface Design
 
@@ -61,6 +64,7 @@ For applications that implement a Terminal User Interface (TUI), adhere to the f
 - Do not ever commit any kind of secret value to source control, such as API keys, SSH keys, passwords, and other sensitive information
 - Ensure TLS connections are used for network operations, such as wss for WebSockets, or https for HTTP operations
   - Sometimes unencrypted non-TLS connections may be allowed for local network access, or across connections secured with a VPN
+- Do not push any git branches that start with an `internal-` prefix to GitHub
 
 ## Testing
 

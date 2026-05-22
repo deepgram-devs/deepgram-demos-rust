@@ -1,6 +1,6 @@
 [package]
 name = "tts-tui"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021" # Use 2021 edition
 description = "A terminal user interface for Deepgram Text-to-Speech through hosted, self-hosted, or SageMaker-hosted Deepgram with voice selection, filtering, themes, multi-format audio output, and audio caching"
 

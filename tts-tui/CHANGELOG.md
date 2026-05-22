@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.1 - 2026-05-22
+
+### Changes
+
+- Normalized `--provider`, `TTS_TUI_PROVIDER`, and TOML provider values so whitespace, casing, and invisible characters do not prevent `deepgram` or `sagemaker` selection.
+- Loaded `.env` at startup before configuration resolution so local `DEEPGRAM_API_KEY` values are available consistently.
+- Trimmed configured Deepgram API keys and ignored empty key values before request setup.
+
+### Documentation
+
+- Added `TESTPLAN.md` and `RELEASE.md` for automated checks, manual TUI validation, and release binary packaging across Windows, Linux, and macOS.
+- Added local `AGENTS.md` release guidance for TTS TUI binary coverage and README expectations.
+
 ## 0.8.0 - 2026-05-11
 
 ### Features
@@ -12,6 +25,7 @@
 
 - Updated the TTS TUI README with hosted, self-hosted, and SageMaker provider setup, credential behavior, and the `CustomAttributes` request shape.
 - Updated repository README and AGENTS guidance to reflect the current TTS TUI provider model and startup configuration behavior.
+- Added `TESTPLAN.md` and `RELEASE.md` for automated checks, manual TUI validation, and release binary packaging across Windows, Linux, and macOS.
 
 ### Bug Fixes
 

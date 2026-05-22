@@ -58,6 +58,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
     let args = Args::parse();
     // Setup terminal
     enable_raw_mode()?;
@@ -82,7 +83,7 @@ async fn main() -> Result<()> {
     // Load config, then create app
     let mut app_config = config::load();
     if let Some(provider) = args.provider {
-        app_config.api.provider = Some(provider);
+        app_config.api.provider = Some(config::normalized_tts_provider(Some(&provider)));
     }
     if let Some(endpoint_name) = args.sagemaker_endpoint_name {
         app_config.sagemaker.endpoint_name = Some(endpoint_name);
@@ -194,7 +195,7 @@ fn kick_off_tts(
 }
 
 fn build_tts_backend(app: &App) -> Result<tts::TtsBackend> {
-    match app.tts_provider().to_lowercase().as_str() {
+    match app.tts_provider().as_str() {
         "deepgram" => Ok(tts::TtsBackend::Deepgram {
             api_key: app.api_key_override.clone(),
             endpoint: app.deepgram_endpoint.clone(),

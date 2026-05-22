@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+pub const DEFAULT_TTS_PROVIDER: &str = "deepgram";
+
 /// Top-level application configuration loaded from ~/.config/deepgram-tts-client.toml.
 /// Priority order (highest to lowest): CLI args > env vars > TOML config > defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -259,12 +261,16 @@ pub fn load() -> AppConfig {
     };
 
     apply_env_overrides(&mut config);
+    normalize_provider(&mut config);
     config
 }
 
 fn apply_env_overrides(config: &mut AppConfig) {
     if let Ok(val) = std::env::var("TTS_TUI_PROVIDER") {
         config.api.provider = Some(val);
+    }
+    if let Ok(val) = std::env::var("DEEPGRAM_API_KEY") {
+        config.api.key = normalized_api_key(Some(&val));
     }
     if let Ok(val) = std::env::var("DEEPGRAM_AUDIO_FORMAT") {
         config.audio.format = Some(val);
@@ -288,6 +294,33 @@ fn apply_env_overrides(config: &mut AppConfig) {
     } else if let Ok(val) = std::env::var("AWS_DEFAULT_REGION") {
         config.sagemaker.region = Some(val);
     }
+}
+
+pub fn normalized_tts_provider(provider: Option<&str>) -> String {
+    let provider = provider
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())
+        .unwrap_or(DEFAULT_TTS_PROVIDER)
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+        .collect::<String>()
+        .to_ascii_lowercase();
+
+    if provider.is_empty() {
+        DEFAULT_TTS_PROVIDER.to_string()
+    } else {
+        provider
+    }
+}
+
+pub fn normalize_provider(config: &mut AppConfig) {
+    config.api.provider = Some(normalized_tts_provider(config.api.provider.as_deref()));
+}
+
+pub fn normalized_api_key(key: Option<&str>) -> Option<String> {
+    key.map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(ToString::to_string)
 }
 
 fn parse_bool_env(val: &str) -> bool {
@@ -331,6 +364,44 @@ mod tests {
             result.is_ok(),
             "Default config template must parse cleanly: {:?}",
             result.err()
+        );
+    }
+
+    #[test]
+    fn normalized_tts_provider_defaults_and_trims() {
+        assert_eq!(normalized_tts_provider(None), DEFAULT_TTS_PROVIDER);
+        assert_eq!(normalized_tts_provider(Some("")), DEFAULT_TTS_PROVIDER);
+        assert_eq!(normalized_tts_provider(Some(" \n")), DEFAULT_TTS_PROVIDER);
+        assert_eq!(
+            normalized_tts_provider(Some("\u{200b}")),
+            DEFAULT_TTS_PROVIDER
+        );
+        assert_eq!(normalized_tts_provider(Some(" Deepgram\n")), "deepgram");
+        assert_eq!(
+            normalized_tts_provider(Some("deepgram\u{200b}")),
+            "deepgram"
+        );
+        assert_eq!(normalized_tts_provider(Some(" SAGEMAKER\t")), "sagemaker");
+    }
+
+    #[test]
+    fn normalize_provider_stores_normalized_value() {
+        let mut config = AppConfig::default();
+        config.api.provider = Some(" Deepgram\n".to_string());
+
+        normalize_provider(&mut config);
+
+        assert_eq!(config.api.provider.as_deref(), Some(DEFAULT_TTS_PROVIDER));
+    }
+
+    #[test]
+    fn normalized_api_key_trims_and_rejects_empty_values() {
+        assert_eq!(normalized_api_key(None), None);
+        assert_eq!(normalized_api_key(Some("")), None);
+        assert_eq!(normalized_api_key(Some(" \n")), None);
+        assert_eq!(
+            normalized_api_key(Some("  dg-key-value\n")).as_deref(),
+            Some("dg-key-value")
         );
     }
 }

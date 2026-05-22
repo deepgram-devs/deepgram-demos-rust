@@ -473,11 +473,7 @@ impl App {
 
         let voices: Vec<Voice> = DEEPGRAM_VOICES.values().flatten().cloned().collect();
 
-        // Resolve API key: env var > config file key
-        dotenvy::dotenv().ok();
-        let resolved_api_key = std::env::var("DEEPGRAM_API_KEY")
-            .ok()
-            .or_else(|| config.api.key.clone().filter(|k| !k.is_empty()));
+        let resolved_api_key = config::normalized_api_key(config.api.key.as_deref());
 
         let mut initial_logs: Vec<LogEntry> = Vec::new();
         let make_entry = |level: LogLevel, message: String| LogEntry {
@@ -491,53 +487,55 @@ impl App {
             format!("Config: {}", config::config_path_display()),
         ));
 
-        let provider = config
-            .api
-            .provider
-            .as_deref()
-            .unwrap_or("deepgram")
-            .to_lowercase();
+        let provider = config::normalized_tts_provider(config.api.provider.as_deref());
         initial_logs.push(make_entry(
             LogLevel::Info,
             format!("TTS provider: {}", provider),
         ));
 
-        if provider == "deepgram" && resolved_api_key.is_none() {
-            initial_logs.push(make_entry(
-                LogLevel::Warning,
-                "No DEEPGRAM_API_KEY set. Requests will be sent without an Authorization header; press 'k' to enter an API key if your endpoint requires one.".to_string(),
-            ));
-        } else if provider == "sagemaker" {
-            let endpoint = config
-                .sagemaker
-                .endpoint_name
-                .as_deref()
-                .unwrap_or("<not configured>");
-            let region = config.sagemaker.region.as_deref().unwrap_or("us-east-2");
-            initial_logs.push(make_entry(
-                LogLevel::Info,
-                format!("SageMaker endpoint: {} | region: {}", endpoint, region),
-            ));
-            if config
-                .sagemaker
-                .endpoint_name
-                .as_ref()
-                .map(|s| s.trim().is_empty())
-                .unwrap_or(true)
-            {
+        match provider.as_str() {
+            "deepgram" => {
+                if resolved_api_key.is_none() {
+                    initial_logs.push(make_entry(
+                        LogLevel::Warning,
+                        "No DEEPGRAM_API_KEY set. Requests will be sent without an Authorization header; press 'k' to enter an API key if your endpoint requires one.".to_string(),
+                    ));
+                }
+            }
+            "sagemaker" => {
+                let endpoint = config
+                    .sagemaker
+                    .endpoint_name
+                    .as_deref()
+                    .unwrap_or("<not configured>");
+                let region = config.sagemaker.region.as_deref().unwrap_or("us-east-2");
+                initial_logs.push(make_entry(
+                    LogLevel::Info,
+                    format!("SageMaker endpoint: {} | region: {}", endpoint, region),
+                ));
+                if config
+                    .sagemaker
+                    .endpoint_name
+                    .as_ref()
+                    .map(|s| s.trim().is_empty())
+                    .unwrap_or(true)
+                {
+                    initial_logs.push(make_entry(
+                        LogLevel::Warning,
+                        "SageMaker provider selected but no endpoint name is configured."
+                            .to_string(),
+                    ));
+                }
+            }
+            _ => {
                 initial_logs.push(make_entry(
                     LogLevel::Warning,
-                    "SageMaker provider selected but no endpoint name is configured.".to_string(),
+                    format!(
+                        "Unknown TTS provider '{}'. Supported values: deepgram, sagemaker.",
+                        provider.escape_debug()
+                    ),
                 ));
             }
-        } else {
-            initial_logs.push(make_entry(
-                LogLevel::Warning,
-                format!(
-                    "Unknown TTS provider '{}'. Supported values: deepgram, sagemaker.",
-                    provider
-                ),
-            ));
         }
 
         let flags = &config.experimental;
@@ -1170,8 +1168,8 @@ impl App {
         self.status_message = message;
     }
 
-    pub fn tts_provider(&self) -> &str {
-        self.config.api.provider.as_deref().unwrap_or("deepgram")
+    pub fn tts_provider(&self) -> String {
+        config::normalized_tts_provider(self.config.api.provider.as_deref())
     }
 
     pub fn focus_next_panel(&mut self) {
