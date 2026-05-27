@@ -69,17 +69,19 @@ cargo run
 | `--listen-provider <TYPE>` | `deepgram` | STT provider type for `agent.listen.provider.type` |
 | `--listen-model <MODEL>` | `nova-3` | STT model for `agent.listen.provider.model` |
 | `--listen-version <VERSION>` | _(none)_ | STT model version for `agent.listen.provider.version` |
-| `--listen-language <LANG>` | `en` | STT language for `agent.listen.provider.language` and `agent.language` |
+| `--listen-language <LANG>` | `en` | STT language for `agent.listen.provider.language`; omitted automatically when `--listen-model` starts with `flux-` |
+| `--language-hint <CSV>` | _(none)_ | Comma-separated language hints for `agent.listen.provider.language_hints` |
 | `--listen-keyterms <CSV>` | _(none)_ | Comma-separated keyterms for `agent.listen.provider.keyterms` |
 | `--listen-eot-threshold <VALUE>` | _(none)_ | End-of-turn threshold for `agent.listen.provider.eot_threshold` |
 | `--listen-eager-eot-threshold <VALUE>` | _(none)_ | Eager end-of-turn threshold for `agent.listen.provider.eager_eot_threshold` |
+| `--listen-smart-format [true\|false]` | _(none)_ | Optional smart formatting for `agent.listen.provider.smart_format`; omitted from Settings JSON when unspecified |
 | `--speak-model <MODEL>` | `aura-2-thalia-en` | TTS model for agent voice |
 | `--think-type <TYPE>` | `open_ai` | LLM provider type |
 | `--think-model <MODEL>` | `gpt-4o-mini` | LLM model |
 | `--think-endpoint <URL>` | _(none)_ | Custom URL for LLM provider |
 | `--think-header <KEY=VALUE>` | _(none)_ | Extra header for LLM provider (repeatable) |
 | `--prompt <TEXT>` | _(none)_ | System prompt / instructions for the agent |
-| `--verbose` | _(off)_ | Print full Settings JSON at startup |
+| `--verbose` | _(off)_ | Print full Settings JSON at startup and the Voice Agent request ID after connecting |
 | `--no-mic-mute` | _(off)_ | Disable mic muting during playback |
 
 ## Example Commands
@@ -94,9 +96,11 @@ cargo run -- --speak-model aura-2-apollo-en
 # Tune the listen provider
 cargo run -- --listen-model nova-3 \
              --listen-language en \
+             --language-hint "en,es" \
              --listen-keyterms "Deepgram,Voice Agent,Rust" \
              --listen-eot-threshold 0.8 \
              --listen-eager-eot-threshold 0.4 \
+             --listen-smart-format \
              --verbose
 
 # Use Claude via a custom endpoint

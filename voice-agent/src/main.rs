@@ -59,6 +59,10 @@ struct Args {
     #[arg(long, default_value = "en")]
     listen_language: String,
 
+    /// Listen provider language hints as comma-separated language codes
+    #[arg(long = "language-hint", value_delimiter = ',')]
+    language_hints: Vec<String>,
+
     /// Listen provider keyterms as comma-separated values
     #[arg(long, value_delimiter = ',')]
     listen_keyterms: Vec<String>,
@@ -70,6 +74,10 @@ struct Args {
     /// Listen provider eager end-of-turn threshold
     #[arg(long)]
     listen_eager_eot_threshold: Option<f32>,
+
+    /// Listen provider smart formatting; omit this option to leave it out of the Settings JSON
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+    listen_smart_format: Option<bool>,
 
     /// Eleven Labs voice ID (used in the endpoint URL)
     #[arg(long)]
@@ -95,7 +103,7 @@ struct Args {
     #[arg(long)]
     prompt: Option<String>,
 
-    /// Enable verbose output including full Settings JSON message
+    /// Enable verbose output including full Settings JSON message and request ID
     #[arg(long)]
     verbose: bool,
 
@@ -134,7 +142,6 @@ struct AudioOutputConfig {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AgentSettings {
-    language: String,
     listen: ListenConfig,
     think: ThinkConfig,
     speak: SpeakConfig,
@@ -180,14 +187,18 @@ struct ListenProviderConfig {
     model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<String>,
-    language: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    language: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    language_hints: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     keyterms: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     eot_threshold: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     eager_eot_threshold: Option<f32>,
-    smart_format: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    smart_format: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -490,9 +501,28 @@ struct ListenArgs<'a> {
     model: &'a str,
     version: Option<&'a str>,
     language: &'a str,
+    language_hints: &'a [String],
     keyterms: &'a [String],
     eot_threshold: Option<f32>,
     eager_eot_threshold: Option<f32>,
+    smart_format: Option<bool>,
+}
+
+fn listen_language_for_model(model: &str, language: &str) -> Option<String> {
+    if model.to_ascii_lowercase().starts_with("flux-") {
+        None
+    } else {
+        Some(language.to_string())
+    }
+}
+
+fn cleaned_values(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .collect()
 }
 
 fn create_agent_config(
@@ -571,23 +601,17 @@ fn create_agent_config(
             },
         },
         agent: AgentSettings {
-            language: listen.language.to_string(),
             listen: ListenConfig {
                 provider: ListenProviderConfig {
                     provider_type: listen.provider.to_string(),
                     model: listen.model.to_string(),
                     version: listen.version.map(|version| version.to_string()),
-                    language: listen.language.to_string(),
-                    keyterms: listen
-                        .keyterms
-                        .iter()
-                        .map(|keyterm| keyterm.trim())
-                        .filter(|keyterm| !keyterm.is_empty())
-                        .map(|keyterm| keyterm.to_string())
-                        .collect(),
+                    language: listen_language_for_model(listen.model, listen.language),
+                    language_hints: cleaned_values(listen.language_hints),
+                    keyterms: cleaned_values(listen.keyterms),
                     eot_threshold: listen.eot_threshold,
                     eager_eot_threshold: listen.eager_eot_threshold,
-                    smart_format: false,
+                    smart_format: listen.smart_format,
                 },
             },
             think: ThinkConfig {
@@ -617,6 +641,7 @@ async fn handle_voice_agent_responses(
     audio_tx: std_mpsc::Sender<Vec<u8>>,
     mic_enabled: Arc<AtomicBool>,
     mute_on_playback: bool,
+    verbose: bool,
 ) {
     while let Some(message) = ws_receiver.next().await {
         match message {
@@ -655,14 +680,15 @@ async fn handle_voice_agent_responses(
                             debug!("🔊 Agent audio done");
                         }
                         "Welcome" => {
-                            debug!(
-                                "👋 Connected: request_id={}",
-                                response
-                                    .data
-                                    .get("request_id")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                            );
+                            let request_id = response
+                                .data
+                                .get("request_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            debug!("👋 Connected: request_id={}", request_id);
+                            if verbose {
+                                info!("Request ID: {}", request_id);
+                            }
                         }
                         "SettingsApplied" => {
                             debug!("✅ Settings applied");
@@ -827,9 +853,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             model: &args.listen_model,
             version: args.listen_version.as_deref(),
             language: &args.listen_language,
+            language_hints: &args.language_hints,
             keyterms: &args.listen_keyterms,
             eot_threshold: args.listen_eot_threshold,
             eager_eot_threshold: args.listen_eager_eot_threshold,
+            smart_format: args.listen_smart_format,
         },
         SpeakArgs {
             provider: &args.speak_provider,
@@ -869,6 +897,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             playback_tx_clone,
             mic_enabled_for_ws,
             mute_on_playback,
+            args.verbose,
         )
         .await;
     });
@@ -911,4 +940,104 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("🛑 Voice Agent stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_for_listen_model(
+        model: &str,
+        smart_format: Option<bool>,
+        language_hints: &[String],
+    ) -> serde_json::Value {
+        let keyterms: Vec<String> = Vec::new();
+        let config = create_agent_config(
+            16000,
+            1,
+            ListenArgs {
+                provider: "deepgram",
+                model,
+                version: None,
+                language: "en",
+                language_hints,
+                keyterms: &keyterms,
+                eot_threshold: None,
+                eager_eot_threshold: None,
+                smart_format,
+            },
+            SpeakArgs {
+                provider: "deepgram",
+                model: "aura-2-thalia-en",
+                model_id: "eleven_turbo_v2_5",
+                language_code: "en-US",
+                voice_id: None,
+                eleven_labs_api_key: None,
+            },
+            "open_ai",
+            "gpt-4o-mini",
+            None,
+            &[],
+            None,
+        );
+
+        serde_json::to_value(config).expect("settings config should serialize")
+    }
+
+    #[test]
+    fn listen_language_is_omitted_for_flux_models() {
+        let config = config_for_listen_model("flux-general-en", None, &[]);
+        let provider = &config["agent"]["listen"]["provider"];
+
+        assert!(provider.get("language").is_none());
+    }
+
+    #[test]
+    fn listen_language_is_included_for_non_flux_models() {
+        let config = config_for_listen_model("nova-3", None, &[]);
+        let provider = &config["agent"]["listen"]["provider"];
+
+        assert_eq!(provider["language"], "en");
+    }
+
+    #[test]
+    fn smart_format_is_omitted_when_unspecified() {
+        let config = config_for_listen_model("nova-3", None, &[]);
+        let provider = &config["agent"]["listen"]["provider"];
+
+        assert!(provider.get("smart_format").is_none());
+    }
+
+    #[test]
+    fn smart_format_is_included_when_specified() {
+        let config = config_for_listen_model("nova-3", Some(true), &[]);
+        let provider = &config["agent"]["listen"]["provider"];
+
+        assert_eq!(provider["smart_format"], true);
+    }
+
+    #[test]
+    fn language_hints_are_omitted_when_unspecified() {
+        let config = config_for_listen_model("nova-3", None, &[]);
+        let provider = &config["agent"]["listen"]["provider"];
+
+        assert!(provider.get("language_hints").is_none());
+    }
+
+    #[test]
+    fn language_hints_are_included_when_specified() {
+        let language_hints = vec!["en".to_string(), "es".to_string()];
+        let config = config_for_listen_model("nova-3", None, &language_hints);
+        let provider = &config["agent"]["listen"]["provider"];
+
+        assert_eq!(provider["language_hints"], serde_json::json!(["en", "es"]));
+    }
+
+    #[test]
+    fn language_hint_cli_accepts_comma_separated_values() {
+        let args = Args::try_parse_from(["voice-agent", "--language-hint", "en,es"])
+            .expect("language hint CSV should parse");
+
+        assert_eq!(args.language_hints, vec!["en", "es"]);
+    }
 }

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Removed deprecated top-level `agent.language` from the Voice Agent Settings message; `--listen-language` now only sets `agent.listen.provider.language`.
+- Omitted `agent.listen.provider.language` automatically when the listen model starts with `flux-`.
+- Omitted `agent.listen.provider.smart_format` from Settings JSON unless `--listen-smart-format` is specified.
+- Printed the Voice Agent request ID when `--verbose` is enabled.
+- Added comma-separated `--language-hint` CLI support that serializes to `agent.listen.provider.language_hints`.
+
 ## [0.1.2] - 2026-05-22
 
 ### Added
