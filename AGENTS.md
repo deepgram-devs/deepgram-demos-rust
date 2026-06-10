@@ -64,7 +64,9 @@ For applications that implement a Terminal User Interface (TUI), adhere to the f
 - Do not ever commit any kind of secret value to source control, such as API keys, SSH keys, passwords, and other sensitive information
 - Ensure TLS connections are used for network operations, such as wss for WebSockets, or https for HTTP operations
   - Sometimes unencrypted non-TLS connections may be allowed for local network access, or across connections secured with a VPN
-- Do not push any git branches that start with an `internal-` prefix to GitHub
+- Use the `internal-` prefix for git branch names that are used exclusively internally
+- Do not push any git branches that start with an `internal-` prefix to GitHub public repositories
+  - Pushing these to private repositories are okay
 
 ## Testing
 
