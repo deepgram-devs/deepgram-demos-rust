@@ -607,6 +607,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             "  t         - Select color theme",
             "  f         - Select audio encoding format",
             "  s         - Select TTS sample rate",
+            "  v         - Toggle volume normalization",
             "  k         - Set Deepgram API key interactively",
             "  o         - Open audio cache folder",
             "  Esc       - Stop audio / clear active filter / close popup",
