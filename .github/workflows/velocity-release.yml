@@ -1,0 +1,109 @@
+name: Velocity Release
+
+on:
+  push:
+    tags:
+      - "velocity-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Velocity tag to build and publish"
+        required: true
+        default: "velocity-v0.5.0"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Velocity for Windows 11
+    runs-on: windows-2025
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build release binary
+        run: cargo build --locked --release --package velocity --target x86_64-pc-windows-msvc
+
+      - name: Package Windows artifact
+        shell: pwsh
+        run: |
+          $packageDir = "package"
+          New-Item -ItemType Directory -Path $packageDir | Out-Null
+          Copy-Item "target/x86_64-pc-windows-msvc/release/velocity.exe" "$packageDir/velocity.exe"
+          Copy-Item velocity/README.md, velocity/CHANGELOG.md, velocity/TESTPLAN.md, LICENSE.md $packageDir
+          Compress-Archive -Path "$packageDir/*" -DestinationPath velocity-x86_64-pc-windows-msvc.zip
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: velocity-x86_64-pc-windows-msvc
+          path: velocity-x86_64-pc-windows-msvc.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - name: Download packaged artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: velocity-x86_64-pc-windows-msvc
+          path: release-assets
+
+      - name: Generate checksum and release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum release-assets/* > release-assets/SHA256SUMS.txt
+          release_tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          version="${release_tag#velocity-v}"
+          {
+            echo "## Velocity v$version"
+            echo
+            echo "See [velocity/CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/velocity/CHANGELOG.md) for the complete changelog."
+            echo
+            echo "### Checksums"
+            echo
+            echo '```text'
+            cat release-assets/SHA256SUMS.txt
+            echo '```'
+          } > release-notes.md
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --notes-file release-notes.md
+          else
+            gh release create "$RELEASE_TAG" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "Velocity v${RELEASE_TAG#velocity-v}" \
+              --notes-file release-notes.md
+          fi
