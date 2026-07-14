@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "tts-tui-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tts-tui tag to build and publish"
+        required: true
+        default: "tts-tui-v0.8.2"
 
 permissions:
   contents: read
@@ -32,6 +38,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
       - name: Install Linux audio build dependencies
         if: runner.os == 'Linux'
@@ -92,6 +100,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
       - name: Download packaged artifacts
         uses: actions/download-artifact@v4
@@ -104,7 +114,8 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum release-assets/* > release-assets/SHA256SUMS.txt
-          version="${GITHUB_REF_NAME#tts-tui-v}"
+          release_tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          version="${release_tag#tts-tui-v}"
           {
             echo "## tts-tui v$version"
             echo
@@ -120,9 +131,19 @@ jobs:
       - name: Create GitHub release from artifacts
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release-assets/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --title "tts-tui v${GITHUB_REF_NAME#tts-tui-v}" \
-            --notes-file release-notes.md
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --notes-file release-notes.md
+          else
+            gh release create "$RELEASE_TAG" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "tts-tui v${RELEASE_TAG#tts-tui-v}" \
+              --notes-file release-notes.md
+          fi
