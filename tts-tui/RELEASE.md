@@ -40,18 +40,21 @@ The TTS TUI release should include binaries for:
 | Linux x86_64 | `x86_64-unknown-linux-gnu` | `tts-tui-x86_64-unknown-linux-gnu.tar.gz` |
 | Windows x86_64 | `x86_64-pc-windows-msvc` | `tts-tui-x86_64-pc-windows-msvc.zip` |
 
-## Build Commands
+## GitHub Actions Release Workflow
 
-Build each target from the repository root:
+Use `.github/workflows/tts-tui-release.yml` for release builds. It runs on native
+GitHub-hosted runners for all four targets, packages each binary, uploads the
+artifacts between jobs, generates `SHA256SUMS.txt`, and creates the GitHub release.
+
+After updating the version in `Cargo.toml`, push an annotated tag matching it:
 
 ```bash
-cargo build -p tts-tui --release --target aarch64-apple-darwin
-cargo build -p tts-tui --release --target x86_64-apple-darwin
-cargo build -p tts-tui --release --target x86_64-unknown-linux-gnu
-cargo build -p tts-tui --release --target x86_64-pc-windows-msvc
+git tag -a tts-tui-v<version> -m "tts-tui v<version>"
+git push origin tts-tui-v<version>
 ```
 
-If a target is built in CI rather than locally, record the CI job URL in the release notes.
+The workflow is triggered by tags matching `tts-tui-v*`. Confirm all four build
+jobs and the publish job succeed before announcing the release.
 
 ## Packaging
 
