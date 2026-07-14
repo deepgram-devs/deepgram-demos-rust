@@ -10,6 +10,11 @@ on:
         description: "Velocity tag to build and publish"
         required: true
         default: "velocity-v0.5.0"
+      publish_release:
+        description: "Create or update the GitHub release after the build"
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -53,6 +58,7 @@ jobs:
   release:
     name: Publish GitHub release
     needs: build
+    if: github.event_name == 'push' || inputs.publish_release
     runs-on: ubuntu-24.04
     permissions:
       contents: write
