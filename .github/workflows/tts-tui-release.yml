@@ -116,17 +116,12 @@ jobs:
           sha256sum release-assets/* > release-assets/SHA256SUMS.txt
           release_tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           version="${release_tag#tts-tui-v}"
-          {
-            echo "## tts-tui v$version"
-            echo
-            echo "See [tts-tui/CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/tts-tui/CHANGELOG.md) for the complete changelog."
-            echo
-            echo "### Checksums"
-            echo
-            echo '```text'
-            cat release-assets/SHA256SUMS.txt
-            echo '```'
-          } > release-notes.md
+          awk -v version="$version" '
+            $0 ~ "^## " version "([[:space:]]|$)" { in_section = 1 }
+            in_section && /^## / && $0 !~ "^## " version "([[:space:]]|$)" { exit }
+            in_section { print }
+          ' tts-tui/CHANGELOG.md > release-notes.md
+          test -s release-notes.md
 
       - name: Create GitHub release from artifacts
         env:

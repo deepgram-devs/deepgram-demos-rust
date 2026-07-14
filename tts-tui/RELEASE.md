@@ -90,4 +90,4 @@ Release notes should include:
 - A short summary of user-facing changes.
 - Any provider-specific migration notes.
 - Known limitations or warnings, including any manual tests that were skipped.
-- SHA-256 checksums for every uploaded artifact.
+- Do not copy binary checksums into the release description; GitHub exposes checksums for release assets separately.
