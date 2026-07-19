@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "description": "Deepgram Flux turn-taking command-line client.",
+    "homepage": "https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/flux-turn-taking",
+    "license": "ISC",
+    "depends": "rustup-msvc",
+    "notes": "This package builds from the pinned source archive. Install the Microsoft C++ Build Tools and Windows SDK before installing it.",
+    "url": "https://github.com/deepgram-devs/deepgram-demos-rust/archive/01671341e5f97b79fe907b1f979e9fff585317ea.zip",
+    "hash": "a230339f258a2473f7bd48fe96ca29f2df6fd91446457ce83ce039c6fa6691c6",
+    "pre_install": [
+        "$source = Get-ChildItem -LiteralPath $dir -Directory | Select-Object -First 1",
+        "Push-Location $source.FullName",
+        "cargo build --release --locked --package dg-flux",
+        "if ($LASTEXITCODE -ne 0) { throw 'Failed to build dg-flux from the pinned source archive.' }",
+        "Copy-Item target\\release\\dg-flux.exe $dir",
+        "Pop-Location"
+    ],
+    "bin": "dg-flux.exe"
+}
