@@ -5,22 +5,22 @@ This repository can be used directly as a custom [Scoop](https://scoop.sh/) buck
 ## Install
 
 ```powershell
-scoop bucket add deepgram-demos-rust https://github.com/deepgram-devs/deepgram-demos-rust
-scoop install deepgram-demos-rust/dg-stt
+scoop bucket add dg https://github.com/deepgram-devs/deepgram-demos-rust
+scoop install dg/dg-stt
 ```
 
 Replace `dg-stt` with any available application:
 
 | Application | Scoop command |
 | --- | --- |
-| Audio Recorder | `scoop install deepgram-demos-rust/audio-recorder` |
-| Flux Turn-Taking | `scoop install deepgram-demos-rust/dg-flux` |
-| Speech-to-Text | `scoop install deepgram-demos-rust/dg-stt` |
-| Text-to-Speech | `scoop install deepgram-demos-rust/dg-tts` |
-| Podcaster | `scoop install deepgram-demos-rust/dgpodcaster` |
-| TTS TUI | `scoop install deepgram-demos-rust/tts-tui` |
-| Voice Agent | `scoop install deepgram-demos-rust/voice-agent` |
-| Velocity | `scoop install deepgram-demos-rust/velocity` |
+| Audio Recorder | `scoop install dg/audio-recorder` |
+| Flux Turn-Taking | `scoop install dg/dg-flux` |
+| Speech-to-Text | `scoop install dg/dg-stt` |
+| Text-to-Speech | `scoop install dg/dg-tts` |
+| Podcaster | `scoop install dg/dgpodcaster` |
+| TTS TUI | `scoop install dg/tts-tui` |
+| Voice Agent | `scoop install dg/voice-agent` |
+| Velocity | `scoop install dg/velocity` |
 
 The manifests are source packages: Scoop installs Rust via `rustup-msvc` and then builds the requested application from a SHA256-verified, immutable repository archive. This makes the branch usable before every application has a signed binary release. The first installation needs the Microsoft C++ Build Tools and Windows SDK and can take several minutes; later installs reuse Cargo's caches.
 
