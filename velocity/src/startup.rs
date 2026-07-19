@@ -540,6 +540,6 @@ mod tests {
         assert_eq!(VALUE_NAME, "Deepgram Velocity");
         assert_eq!(LEGACY_VALUE_NAME, "Velocity");
         assert_eq!(SHORTCUT_NAME, "Deepgram Velocity.lnk");
-        assert_eq!(startup_icon_file_name(), "deepgram-velocity-0.5.0.ico");
+        assert_eq!(startup_icon_file_name(), "deepgram-velocity-0.5.1.ico");
     }
 }

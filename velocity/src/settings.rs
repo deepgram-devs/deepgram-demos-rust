@@ -55,6 +55,9 @@ const VALIDATION_GRADIENT_LEFT_RGB: u32 = 0xEB028E;
 const VALIDATION_GRADIENT_RIGHT_RGB: u32 = 0xAF28FC;
 const MAX_HISTORY_LIMIT: usize = 100;
 const SECTION_HOVER_ANIMATION: Duration = Duration::from_millis(150);
+const STATUS_TILE_HEIGHT_PX: f32 = 74.0;
+const STATUS_INDICATOR_WIDTH_PX: f32 = 38.0;
+const STATUS_INDICATOR_HEIGHT_PX: f32 = 22.0;
 
 static SETTINGS_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 static API_KEY_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
@@ -1466,6 +1469,7 @@ impl SettingsView {
 
         v_flex()
             .flex_1()
+            .h(px(STATUS_TILE_HEIGHT_PX))
             .gap_1()
             .rounded_md()
             .border_1()
@@ -1487,23 +1491,32 @@ impl SettingsView {
                             .text_color(foreground)
                             .child(icon),
                     )
-                    .child(if selected {
-                        self.render_microphone_badge(foreground).into_any_element()
-                    } else {
-                        self.render_status_pill(active, foreground)
-                            .into_any_element()
-                    }),
+                    .child(
+                        h_flex()
+                            .w(px(STATUS_INDICATOR_WIDTH_PX))
+                            .h(px(STATUS_INDICATOR_HEIGHT_PX))
+                            .items_center()
+                            .justify_center()
+                            .child(if selected {
+                                self.render_microphone_badge(foreground).into_any_element()
+                            } else {
+                                self.render_status_pill(active, foreground)
+                                    .into_any_element()
+                            }),
+                    ),
             )
             .child(div().text_xs().text_color(foreground).child(label))
     }
 
     fn render_status_pill(&self, active: bool, foreground: gpui::Hsla) -> impl IntoElement {
-        div()
+        h_flex()
+            .w(px(STATUS_INDICATOR_WIDTH_PX))
+            .h(px(STATUS_INDICATOR_HEIGHT_PX))
+            .items_center()
+            .justify_center()
             .rounded_md()
             .border_1()
             .border_color(foreground.opacity(0.35))
-            .px_2()
-            .py_1()
             .text_xs()
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(foreground)
