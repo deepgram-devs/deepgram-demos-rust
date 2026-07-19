@@ -1,6 +1,6 @@
 # TTS TUI (Text-to-Speech Terminal User Interface)
 
-A terminal user interface (TUI) built with Rust and Ratatui for interacting with Deepgram Text-to-Speech. Supports hosted Deepgram, self-hosted Deepgram-compatible HTTP endpoints, and self-hosted Deepgram deployed on Amazon SageMaker, plus voice selection, text and voice filtering, color themes, multi-format audio output, sample rate control, audio caching, playback speed control, timestamped logs, playback queue, favorite voices, a command palette, and a persistent TOML configuration file.
+A terminal user interface (TUI) built with Rust and Ratatui for interacting with Deepgram Text-to-Speech. Supports hosted Deepgram, self-hosted Deepgram-compatible HTTP endpoints, and self-hosted Deepgram deployed on Amazon SageMaker, plus voice selection, text and voice filtering, color themes, multi-format audio output, sample rate control, optional volume normalization, audio caching, playback speed control, timestamped logs, playback queue, favorite voices, a command palette, and a persistent TOML configuration file.
 
 ## Features
 
@@ -16,6 +16,7 @@ A terminal user interface (TUI) built with Rust and Ratatui for interacting with
 - **Color themes** — choose from Deepgram (default), Nord, or Synthwave Outrun via the `t` key
 - **Audio format selection** — choose MP3, Linear16 (WAV), μ-law, A-law, FLAC, or AAC via the `f` key
 - **Sample rate selection** — choose the output sample rate for the active format via the `s` key
+- **Volume normalization** — optionally request normalized output with `--normalize-volume`, `DEEPGRAM_NORMALIZE_VOLUME=true`, or `[audio].normalize_volume = true`
 - Adjustable TTS playback speed (`+`/`-`/`0` keys)
 - Interactive API key entry — set or override the key at runtime without restarting (`k`)
 - Open the audio cache folder with a single keystroke (`o`)
@@ -171,6 +172,24 @@ Supported formats and their valid sample rates:
 
 You can also change format and sample rate interactively with the `f` and `s` keys while the app is running. Switching formats automatically snaps the sample rate to a valid value if needed.
 
+#### Volume normalization
+
+Volume normalization is disabled by default. Enable it for new requests with any of these equivalent settings:
+
+```bash
+# CLI flag (the flag enables normalization; --normalize-volume=false disables it)
+cargo run -- --normalize-volume
+
+# Environment variable
+DEEPGRAM_NORMALIZE_VOLUME=true cargo run
+
+# Config file (~/.config/deepgram-tts-client.toml)
+# [audio]
+# normalize_volume = true
+```
+
+When enabled, the app adds `normalize_volume=true` to the Deepgram TTS query parameters for both the HTTP and SageMaker providers. The setting is included in the audio cache key.
+
 ### Experimental Feature Flags
 
 In-development features can be enabled in `~/.config/deepgram-tts-client.toml`:
@@ -224,6 +243,7 @@ TTS_TUI_FEATURE_SSML_SUPPORT=true cargo run
 | `t` | Select color theme |
 | `f` | Select audio encoding format |
 | `s` | Select output sample rate |
+| `v` | Toggle volume normalization |
 | `k` | Set Deepgram API key interactively |
 | `o` | Open audio cache folder |
 | `Up` / `Down` | Navigate list |

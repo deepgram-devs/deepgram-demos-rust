@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.2 - 2026-07-13
+
+### Features
+
+- Added opt-in Deepgram TTS volume normalization through `--normalize-volume`, `DEEPGRAM_NORMALIZE_VOLUME`, or `[audio].normalize_volume = true`.
+- Applied `normalize_volume=true` to both Deepgram HTTP query strings and SageMaker `CustomAttributes` when enabled.
+- Included the normalization setting in audio cache identities so normalized and unnormalized audio remain separate.
+
 ## 0.8.1 - 2026-05-22
 
 ### Changes

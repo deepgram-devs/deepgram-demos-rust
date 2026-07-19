@@ -70,6 +70,13 @@ pub struct AudioConfig {
     /// Overridden by --sample-rate CLI flag or DEEPGRAM_SAMPLE_RATE env var.
     /// Default: format-dependent (e.g. 22050 for mp3, 24000 for linear16)
     pub sample_rate: Option<u32>,
+
+    /// Normalize the volume of generated audio.
+    /// Valid values: true or false.
+    /// Overridden by --normalize-volume or DEEPGRAM_NORMALIZE_VOLUME.
+    /// Default: false
+    #[serde(default)]
+    pub normalize_volume: bool,
 }
 
 impl Default for AudioConfig {
@@ -77,6 +84,7 @@ impl Default for AudioConfig {
         Self {
             format: None,
             sample_rate: None,
+            normalize_volume: false,
         }
     }
 }
@@ -200,6 +208,12 @@ const DEFAULT_CONFIG: &str = r#"# tts-tui configuration
 # Default: format-dependent (e.g. 22050 for mp3, 24000 for linear16)
 # sample_rate = 22050
 
+# Normalize the volume of generated audio through the Deepgram TTS API.
+# Valid values: true or false.
+# Can also be set via --normalize-volume or DEEPGRAM_NORMALIZE_VOLUME=true.
+# Default: false
+normalize_volume = false
+
 
 # [experimental] — Feature flags for in-development functionality.
 # Set a flag to true to opt in. Features may be incomplete or unstable.
@@ -280,6 +294,9 @@ fn apply_env_overrides(config: &mut AppConfig) {
             config.audio.sample_rate = Some(rate);
         }
     }
+    if let Ok(val) = std::env::var("DEEPGRAM_NORMALIZE_VOLUME") {
+        config.audio.normalize_volume = parse_bool_env(&val);
+    }
     if let Ok(val) = std::env::var("TTS_TUI_FEATURE_STREAMING_PLAYBACK") {
         config.experimental.streaming_playback = parse_bool_env(&val);
     }
@@ -343,6 +360,11 @@ mod tests {
         let flags = ExperimentalFlags::default();
         assert!(!flags.streaming_playback);
         assert!(!flags.ssml_support);
+    }
+
+    #[test]
+    fn default_audio_config_disables_volume_normalization() {
+        assert!(!AudioConfig::default().normalize_volume);
     }
 
     #[test]
