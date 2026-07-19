@@ -10,3 +10,6 @@ members = [
   "velocity",
 ]
 resolver = "3"
+
+[patch.crates-io]
+xcb = { git = "https://github.com/rust-x-bindings/rust-xcb", rev = "8f1a726abc8cb9f62169d0032a94e268fc3379af" }

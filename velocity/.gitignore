@@ -2,6 +2,8 @@
 Velocity.Settings/bin/
 Velocity.Settings/obj/
 **.wav
+!assets/record-start.wav
+!assets/record-end.wav
 **.mp3
 **.aac
 **.flac
