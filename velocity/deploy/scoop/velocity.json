@@ -1,13 +1,13 @@
 {
-    "version": "0.5.0",
+    "version": "0.5.1",
     "description": "Windows 11 push-to-talk dictation using Deepgram Voice AI.",
     "homepage": "https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/velocity",
     "license": "ISC",
     "notes": "Velocity runs from the system tray. On first launch, open the settings window to save your Deepgram API key.",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/velocity-v0.5.0/velocity-0.5.0-windows-x64.zip",
-            "hash": "8889c6abd905c4af8ce9d9272052a6ed1ef5906a946751cf696dba4550437ed6"
+            "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/velocity-v0.5.1/velocity-0.5.1-windows-x64.zip",
+            "hash": "adba525d657128b48628d77f25e816867dce5268f9c2fbabec623124ae7267ab"
         }
     },
     "bin": "velocity.exe",

@@ -59,6 +59,7 @@ pub enum CommandAction {
     MoveTextUp,
     MoveTextDown,
     ToggleFavoriteVoice,
+    ToggleVolumeNormalization,
     FilterVoices,
     FilterTexts,
     SetApiKey,
@@ -129,6 +130,11 @@ pub static ALL_COMMANDS: &[AppCommand] = &[
         name: "Toggle Favorite Voice",
         shortcut: Some("*"),
         action: CommandAction::ToggleFavoriteVoice,
+    },
+    AppCommand {
+        name: "Toggle Volume Normalization",
+        shortcut: Some("v"),
+        action: CommandAction::ToggleVolumeNormalization,
     },
     AppCommand {
         name: "Filter Voices",
@@ -911,6 +917,17 @@ impl App {
         self.favorite_voices.contains(voice_id)
     }
 
+    pub fn toggle_volume_normalization(&mut self) {
+        self.config.audio.normalize_volume = !self.config.audio.normalize_volume;
+        let state = if self.config.audio.normalize_volume {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        self.add_log(format!("Volume normalization {}", state));
+        self.set_status_message(format!("Volume normalization {}", state));
+    }
+
     // ── Playback Queue ────────────────────────────────────────────────────────
 
     pub fn enqueue_current(&mut self) {
@@ -1041,6 +1058,7 @@ impl App {
                 CommandAction::MoveTextUp => self.move_text_up(),
                 CommandAction::MoveTextDown => self.move_text_down(),
                 CommandAction::ToggleFavoriteVoice => self.toggle_favorite_voice(),
+                CommandAction::ToggleVolumeNormalization => self.toggle_volume_normalization(),
                 CommandAction::FilterVoices => self.enter_voice_filter_mode(),
                 CommandAction::FilterTexts => self.enter_text_filter_mode(),
                 CommandAction::SetApiKey => self.enter_api_key_mode(),

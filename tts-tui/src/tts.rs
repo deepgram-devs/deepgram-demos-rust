@@ -42,6 +42,7 @@ pub async fn fetch_audio_for_playback(
     speed: Decimal,
     sample_rate: u32,
     encoding: &str,
+    normalize_volume: bool,
     extension: &str,
     cache_dir: &str,
     force_regenerate: bool,
@@ -54,6 +55,7 @@ pub async fn fetch_audio_for_playback(
         speed,
         sample_rate,
         encoding,
+        normalize_volume,
         extension,
     )?;
     let message;
@@ -92,6 +94,7 @@ pub async fn fetch_audio_for_playback(
                     speed,
                     sample_rate,
                     encoding,
+                    normalize_volume,
                     endpoint,
                 )
                 .await?
@@ -108,6 +111,7 @@ pub async fn fetch_audio_for_playback(
                     speed,
                     sample_rate,
                     encoding,
+                    normalize_volume,
                 )
                 .await?
             }
@@ -337,6 +341,7 @@ fn get_cache_file_path(
     speed: Decimal,
     sample_rate: u32,
     encoding: &str,
+    normalize_volume: bool,
     extension: &str,
 ) -> Result<PathBuf> {
     let mut hasher = Sha256::new();
@@ -346,6 +351,7 @@ fn get_cache_file_path(
     hasher.update(speed.to_string().as_bytes());
     hasher.update(sample_rate.to_string().as_bytes());
     hasher.update(encoding.as_bytes());
+    hasher.update(normalize_volume.to_string().as_bytes());
     let hash = hasher.finalize();
     let filename = format!("{:x}.{}", hash, extension);
     let path = PathBuf::from(cache_dir).join(filename);
@@ -359,10 +365,18 @@ async fn fetch_deepgram_tts(
     speed: Decimal,
     sample_rate: u32,
     encoding: &str,
+    normalize_volume: bool,
     endpoint: &str,
 ) -> Result<Vec<u8>> {
     let client = Client::new();
-    let url = build_deepgram_tts_url(endpoint, voice_id, speed, sample_rate, encoding)?;
+    let url = build_deepgram_tts_url(
+        endpoint,
+        voice_id,
+        speed,
+        sample_rate,
+        encoding,
+        normalize_volume,
+    )?;
 
     let mut request = client
         .post(url.clone())
@@ -406,6 +420,7 @@ fn build_deepgram_tts_url(
     speed: Decimal,
     sample_rate: u32,
     encoding: &str,
+    normalize_volume: bool,
 ) -> Result<Url> {
     let mut url = Url::parse(endpoint)
         .with_context(|| format!("Invalid Deepgram TTS endpoint URL: {}", endpoint))?;
@@ -435,6 +450,9 @@ fn build_deepgram_tts_url(
         if encoding != "mp3" && encoding != "aac" {
             pairs.append_pair("sample_rate", &sample_rate.to_string());
         }
+        if normalize_volume {
+            pairs.append_pair("normalize_volume", "true");
+        }
     }
 
     Ok(url)
@@ -458,6 +476,7 @@ mod tests {
             Decimal::new(10, 1),
             22050,
             "mp3",
+            false,
         )
         .unwrap();
 
@@ -475,6 +494,7 @@ mod tests {
             Decimal::new(10, 1),
             22050,
             "mp3",
+            false,
         )
         .unwrap();
 
@@ -492,6 +512,7 @@ mod tests {
             Decimal::new(12, 1),
             24000,
             "linear16",
+            false,
         )
         .unwrap();
 
@@ -509,11 +530,30 @@ mod tests {
             Decimal::new(10, 1),
             22050,
             "mp3",
+            false,
         )
         .unwrap_err();
 
         assert!(err
             .to_string()
             .contains("Unsupported Deepgram TTS endpoint scheme"));
+    }
+
+    #[test]
+    fn deepgram_url_adds_volume_normalization_when_enabled() {
+        let url = build_deepgram_tts_url(
+            "https://api.deepgram.com/v1/speak",
+            "aura-2-thalia-en",
+            Decimal::new(10, 1),
+            24000,
+            "linear16",
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "https://api.deepgram.com/v1/speak?model=aura-2-thalia-en&encoding=linear16&sample_rate=24000&normalize_volume=true"
+        );
     }
 }

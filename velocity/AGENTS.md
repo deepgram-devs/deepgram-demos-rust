@@ -1,5 +1,13 @@
 # Velocity Implementation Notes
 
+## Releases
+
+- Publish Windows releases through `.github/workflows/velocity-release.yml`.
+- Do not rely on local Windows cross-compilation for release artifacts; the workflow builds the MSVC binary on a native `windows-2025` GitHub-hosted runner for Windows 11 users.
+- When updating Velocity, keep `Cargo.toml`, `Cargo.lock`, `README.md`, `CHANGELOG.md`, and `TESTPLAN.md` current as appropriate.
+- After merging an update, push an annotated tag named `velocity-v<version>` matching `Cargo.toml`. The workflow builds `velocity.exe`, packages it with the required documentation, generates checksums, and creates or updates the GitHub release.
+- Verify both the Windows build job and release job succeed before considering a release complete.
+
 ## Product Direction
 
 Velocity is a Windows 11 speech-to-text tray application written entirely in Rust.

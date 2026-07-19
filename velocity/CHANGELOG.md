@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1 - 2026-07-19
+
+- Hardened the Velocity dependency graph by replacing packaged MP3 notification sounds with WAV assets, removing the vulnerable `minimp3` transitive dependency path.
+- Updated vulnerable transitive dependencies in the release lockfile, including the patched HTTP/3 transport dependency and the XML parser used through the GPUI/X11 stack.
+
 ## 0.5.0 - 2026-05-10
 
 - Added a Windows sign-in startup toggle to the built-in GPUI settings window, backed by a branded Startup-folder shortcut with Deepgram icon metadata.

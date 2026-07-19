@@ -1,6 +1,6 @@
 [package]
 name = "velocity"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 description = "Windows 11 voice dictation using Deepgram Voice AI."
 
@@ -39,7 +39,6 @@ serde_json = "1"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "native-tls"] }
 tungstenite = { version = "0.29", features = ["native-tls"] }
 hound = "3"
-minimp3 = "0.6"
 png = "0.18"
 webrtc-vad = "0.4"
 

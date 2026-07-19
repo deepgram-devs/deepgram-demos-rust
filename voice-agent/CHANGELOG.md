@@ -2,7 +2,16 @@
 
 ## Unreleased
 
+## [0.1.3] - 2026-07-14
+
 ### Changed
+- Added a default system prompt that instructs the Voice Agent to keep responses concise; `--prompt` continues to override it.
+- Added Amazon Bedrock think-provider CLI options for temperature, endpoint, IAM/STS credential type, region, access key, secret key, and session token.
+- Added validation for required Bedrock endpoint and credentials; reusable configurations reject embedded AWS credentials.
+- Added `config create`, `config use`, and `config delete` subcommands for managing reusable Deepgram agent configurations.
+- Agent configuration creation and deletion now discover accessible projects automatically when `--project-id` is omitted. A sole project is selected automatically; multiple projects require an explicit project ID.
+- Added `config variable` subcommands to create, list, get, update, and delete reusable agent template variables.
+- Updated variable creation requests to send `is_sensitive: false` as a JSON boolean.
 - Removed deprecated top-level `agent.language` from the Voice Agent Settings message; `--listen-language` now only sets `agent.listen.provider.language`.
 - Omitted `agent.listen.provider.language` automatically when the listen model starts with `flux-`.
 - Omitted `agent.listen.provider.smart_format` from Settings JSON unless `--listen-smart-format` is specified.

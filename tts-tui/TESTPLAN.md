@@ -15,6 +15,7 @@ Automated coverage currently verifies:
 - The generated default TOML configuration template parses successfully.
 - SageMaker `CustomAttributes` are built with the Deepgram `v1/speak` path and encoded TTS query parameters.
 - SageMaker fixed-rate encodings omit `sample_rate` when appropriate.
+- Deepgram HTTP and SageMaker requests add `normalize_volume=true` only when enabled.
 
 Run the package build check:
 
@@ -30,7 +31,7 @@ cargo check -p tts-tui
 - Verify the log panel shows the config path at startup.
 - Set `TTS_TUI_PROVIDER=deepgram` and verify the app logs the `deepgram` provider.
 - Set `TTS_TUI_PROVIDER=sagemaker` without a SageMaker endpoint name and verify the app logs a warning that the endpoint name is missing.
-- Verify CLI values override environment variables and TOML values for provider, endpoint, audio format, sample rate, SageMaker endpoint name, and AWS region.
+- Verify CLI values override environment variables and TOML values for provider, endpoint, audio format, sample rate, volume normalization, SageMaker endpoint name, and AWS region.
 
 ### 2. Deepgram HTTP Provider
 
@@ -40,6 +41,8 @@ cargo check -p tts-tui
 - Press `Ctrl+Enter` and verify the cache is bypassed and a fresh request is made.
 - Run with `--endpoint` pointing at a self-hosted or proxy Deepgram-compatible TTS endpoint and verify playback still works.
 - Remove or invalidate the API key for an endpoint that requires one and verify the log panel shows a useful error.
+- Enable volume normalization and verify the request query contains `normalize_volume=true`; disable it and verify the parameter is omitted.
+- Press `v` and verify the status bar/log reports volume normalization enabled or disabled; verify the next request uses the new state.
 
 ### 3. SageMaker Provider
 
@@ -48,6 +51,7 @@ cargo check -p tts-tui
 - Add a short text snippet and play it with an Aura-2 voice.
 - Verify the request reaches the SageMaker endpoint and audio plays locally.
 - Verify the generated cache entry is distinct from the same text and voice generated through the `deepgram` provider.
+- Verify normalized and unnormalized requests produce distinct cache entries.
 - Run with an invalid endpoint name and verify the log panel surfaces a SageMaker invocation error with endpoint and region context.
 
 ### 4. Audio Formats And Sample Rates

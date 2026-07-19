@@ -13,6 +13,7 @@ pub async fn fetch_sagemaker_tts(
     speed: Decimal,
     sample_rate: u32,
     encoding: &str,
+    normalize_volume: bool,
 ) -> Result<Vec<u8>> {
     let body = serde_json::to_vec(&json!({ "text": text }))
         .context("Failed to serialize SageMaker TTS request body")?;
@@ -33,6 +34,7 @@ pub async fn fetch_sagemaker_tts(
             speed,
             sample_rate,
             encoding,
+            normalize_volume,
         ))
         .body(Blob::new(body))
         .send()
@@ -55,6 +57,7 @@ fn build_custom_attributes(
     speed: Decimal,
     sample_rate: u32,
     encoding: &str,
+    normalize_volume: bool,
 ) -> String {
     let mut serializer = form_urlencoded::Serializer::new(String::new());
     serializer.append_pair("model", voice_id);
@@ -64,6 +67,9 @@ fn build_custom_attributes(
     }
     if encoding != "mp3" && encoding != "aac" {
         serializer.append_pair("sample_rate", &sample_rate.to_string());
+    }
+    if normalize_volume {
+        serializer.append_pair("normalize_volume", "true");
     }
 
     format!("v1/speak?{}", serializer.finish())
@@ -86,8 +92,13 @@ mod tests {
 
     #[test]
     fn custom_attributes_include_deepgram_path_and_query() {
-        let attrs =
-            build_custom_attributes("aura-2-thalia-en", Decimal::new(10, 1), 24000, "linear16");
+        let attrs = build_custom_attributes(
+            "aura-2-thalia-en",
+            Decimal::new(10, 1),
+            24000,
+            "linear16",
+            false,
+        );
 
         assert_eq!(
             attrs,
@@ -97,11 +108,28 @@ mod tests {
 
     #[test]
     fn custom_attributes_omit_fixed_sample_rate_for_mp3() {
-        let attrs = build_custom_attributes("aura-2-orion-en", Decimal::new(12, 1), 22050, "mp3");
+        let attrs =
+            build_custom_attributes("aura-2-orion-en", Decimal::new(12, 1), 22050, "mp3", false);
 
         assert_eq!(
             attrs,
             "v1/speak?model=aura-2-orion-en&encoding=mp3&speed=1.2"
+        );
+    }
+
+    #[test]
+    fn custom_attributes_add_volume_normalization_when_enabled() {
+        let attrs = build_custom_attributes(
+            "aura-2-thalia-en",
+            Decimal::new(10, 1),
+            24000,
+            "linear16",
+            true,
+        );
+
+        assert_eq!(
+            attrs,
+            "v1/speak?model=aura-2-thalia-en&encoding=linear16&sample_rate=24000&normalize_volume=true"
         );
     }
 }

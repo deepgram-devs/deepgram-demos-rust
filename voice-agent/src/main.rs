@@ -1,8 +1,9 @@
 use std::env;
+use std::io::{self, Write};
 
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use futures_util::{SinkExt, StreamExt};
@@ -18,11 +19,168 @@ use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
 
+const DEFAULT_SYSTEM_PROMPT: &str =
+    "Keep your responses concise and focused. Answer in as few words as possible while remaining helpful.";
+
 #[derive(Parser, Debug)]
 #[command(name = "voice-agent")]
 #[command(about = "A Deepgram Voice Agent client")]
 #[command(version)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    #[command(flatten)]
+    launch: LaunchOptions,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Manage reusable Deepgram agent configurations
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigCommand {
+    /// Create an agent configuration without opening a voice connection
+    Create(ConfigCreateArgs),
+    /// Open a voice connection using a saved agent configuration UUID
+    Use(ConfigUseArgs),
+    /// Delete a saved agent configuration
+    Delete(ConfigDeleteArgs),
+    /// Manage reusable agent template variables
+    #[command(alias = "variables")]
+    Variable {
+        #[command(subcommand)]
+        command: ConfigVariableCommand,
+    },
+}
+
+#[derive(Parser, Debug)]
+struct ConfigCreateArgs {
+    /// Deepgram project ID where the configuration will be saved
+    #[arg(long, env = "DEEPGRAM_PROJECT_ID")]
+    project_id: Option<String>,
+
+    /// Metadata name for the saved configuration
+    #[arg(long, value_name = "NAME")]
+    name: String,
+
+    #[command(flatten)]
+    launch: LaunchOptions,
+}
+
+#[derive(Parser, Debug)]
+struct ConfigUseArgs {
+    /// UUID returned when the reusable configuration was saved
+    #[arg(value_name = "AGENT_CONFIG_ID")]
+    agent_config_id: String,
+
+    #[command(flatten)]
+    launch: LaunchOptions,
+}
+
+#[derive(Parser, Debug)]
+struct ConfigDeleteArgs {
+    /// UUID returned when the reusable configuration was saved
+    #[arg(value_name = "AGENT_CONFIG_ID")]
+    agent_config_id: String,
+
+    /// Deepgram project containing the configuration
+    #[arg(long, env = "DEEPGRAM_PROJECT_ID")]
+    project_id: Option<String>,
+
+    /// Skip the interactive deletion confirmation
+    #[arg(long)]
+    yes: bool,
+
+    /// Print the exact API URL and payload
+    #[arg(long)]
+    verbose: bool,
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigVariableCommand {
+    /// Create a template variable
+    Create(ConfigVariableCreateArgs),
+    /// List template variables
+    List(ConfigVariableProjectArgs),
+    /// Get a template variable
+    Get(ConfigVariableGetArgs),
+    /// Update a template variable value
+    Update(ConfigVariableUpdateArgs),
+    /// Delete a template variable
+    Delete(ConfigVariableDeleteArgs),
+}
+
+#[derive(Parser, Debug)]
+struct ConfigVariableProjectArgs {
+    /// Deepgram project containing the variable
+    #[arg(long, env = "DEEPGRAM_PROJECT_ID")]
+    project_id: Option<String>,
+
+    /// Print the exact API URL and payload
+    #[arg(long)]
+    verbose: bool,
+}
+
+#[derive(Parser, Debug)]
+struct ConfigVariableCreateArgs {
+    /// Variable key, for example DG_SYSTEM_PROMPT
+    #[arg(long)]
+    key: String,
+
+    /// Value to store; valid JSON is preserved, otherwise the value is stored as a string
+    #[arg(long)]
+    value: String,
+
+    #[command(flatten)]
+    project: ConfigVariableProjectArgs,
+}
+
+#[derive(Parser, Debug)]
+struct ConfigVariableGetArgs {
+    /// Variable ID returned by the API
+    #[arg(value_name = "VARIABLE_ID")]
+    variable_id: String,
+
+    #[command(flatten)]
+    project: ConfigVariableProjectArgs,
+}
+
+#[derive(Parser, Debug)]
+struct ConfigVariableUpdateArgs {
+    /// Variable ID returned by the API
+    #[arg(value_name = "VARIABLE_ID")]
+    variable_id: String,
+
+    /// New value; valid JSON is preserved, otherwise the value is stored as a string
+    #[arg(long)]
+    value: String,
+
+    #[command(flatten)]
+    project: ConfigVariableProjectArgs,
+}
+
+#[derive(Parser, Debug)]
+struct ConfigVariableDeleteArgs {
+    /// Variable ID returned by the API
+    #[arg(value_name = "VARIABLE_ID")]
+    variable_id: String,
+
+    #[command(flatten)]
+    project: ConfigVariableProjectArgs,
+
+    /// Skip the interactive deletion confirmation
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Parser, Debug)]
+struct LaunchOptions {
     /// Custom Deepgram endpoint URL to connect to
     #[arg(long, default_value = "wss://agent.deepgram.com")]
     endpoint: String,
@@ -91,6 +249,10 @@ struct Args {
     #[arg(long, default_value = "gpt-4o-mini")]
     think_model: String,
 
+    /// Think provider temperature
+    #[arg(long)]
+    think_temperature: Option<f32>,
+
     /// Custom endpoint URL for think provider
     #[arg(long)]
     think_endpoint: Option<String>,
@@ -98,6 +260,26 @@ struct Args {
     /// Custom headers for think provider in format "key=value" (can be specified multiple times)
     #[arg(long)]
     think_header: Vec<String>,
+
+    /// AWS Bedrock credential type: iam or sts
+    #[arg(long, value_parser = ["iam", "sts"])]
+    think_credentials_type: Option<String>,
+
+    /// AWS Bedrock region
+    #[arg(long, env = "AWS_REGION")]
+    think_aws_region: Option<String>,
+
+    /// AWS Bedrock access key ID
+    #[arg(long, env = "AWS_ACCESS_KEY_ID")]
+    think_aws_access_key_id: Option<String>,
+
+    /// AWS Bedrock secret access key
+    #[arg(long, env = "AWS_SECRET_ACCESS_KEY")]
+    think_aws_secret_access_key: Option<String>,
+
+    /// AWS STS session token, required for temporary STS credentials
+    #[arg(long, env = "AWS_SESSION_TOKEN")]
+    think_aws_session_token: Option<String>,
 
     /// Agent system prompt / instructions
     #[arg(long)]
@@ -118,7 +300,14 @@ struct VoiceAgentConfig {
     message_type: String,
     tags: Vec<String>,
     audio: AudioSettings,
-    agent: AgentSettings,
+    agent: AgentConfiguration,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum AgentConfiguration {
+    Inline(AgentSettings),
+    Reference(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -209,6 +398,19 @@ struct ThinkProviderConfig {
     model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credentials: Option<ThinkCredentials>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ThinkCredentials {
+    #[serde(rename = "type")]
+    credential_type: String,
+    region: String,
+    access_key_id: String,
+    secret_access_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_token: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -462,11 +664,20 @@ async fn connect_to_voice_agent(
     endpoint: &str,
     _sample_rate: u32,
     _channels: u16,
+    verbose: bool,
 ) -> Result<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     Box<dyn std::error::Error>,
 > {
     let url = Url::parse(format!("{0}/v1/agent/converse", endpoint).as_str())?;
+
+    if verbose {
+        info!("Voice Agent WebSocket URL: {}", url);
+        info!(
+            "Voice Agent WebSocket request headers: Authorization: Token <redacted>, Host: {}, Upgrade: websocket, Connection: Upgrade, Sec-WebSocket-Key: <redacted>, Sec-WebSocket-Version: 13",
+            url.host_str().unwrap_or("agent.deepgram.com")
+        );
+    }
 
     let request = tokio_tungstenite::tungstenite::handshake::client::Request::get(url.as_str())
         .header("Authorization", format!("Token {}", api_key))
@@ -532,8 +743,14 @@ fn create_agent_config(
     speak: SpeakArgs<'_>,
     think_type: &str,
     think_model: &str,
+    think_temperature: Option<f32>,
     think_endpoint: Option<&str>,
     think_headers: &[String],
+    think_credentials_type: Option<&str>,
+    think_aws_region: Option<&str>,
+    think_aws_access_key_id: Option<&str>,
+    think_aws_secret_access_key: Option<&str>,
+    think_aws_session_token: Option<&str>,
     prompt: Option<&str>,
 ) -> VoiceAgentConfig {
     // Parse think headers from "key=value" format
@@ -600,7 +817,7 @@ fn create_agent_config(
                 container: "none".to_string(),
             },
         },
-        agent: AgentSettings {
+        agent: AgentConfiguration::Inline(AgentSettings {
             listen: ListenConfig {
                 provider: ListenProviderConfig {
                     provider_type: listen.provider.to_string(),
@@ -622,14 +839,517 @@ fn create_agent_config(
                     } else {
                         Some(think_model.to_string())
                     },
-                    temperature: None,
+                    temperature: think_temperature,
+                    credentials: think_credentials_type
+                        .or(think_aws_region)
+                        .or(think_aws_access_key_id)
+                        .or(think_aws_secret_access_key)
+                        .or(think_aws_session_token)
+                        .map(|_| ThinkCredentials {
+                            credential_type: think_credentials_type.unwrap_or("iam").to_string(),
+                            region: think_aws_region.unwrap_or_default().to_string(),
+                            access_key_id: think_aws_access_key_id.unwrap_or_default().to_string(),
+                            secret_access_key: think_aws_secret_access_key
+                                .unwrap_or_default()
+                                .to_string(),
+                            session_token: think_aws_session_token.map(str::to_string),
+                        }),
                 },
-                prompt: prompt.map(|s| s.to_string()),
+                prompt: Some(prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT).to_string()),
                 endpoint: endpoint_config,
             },
             speak: speak_config,
-        },
+        }),
     }
+}
+
+fn config_from_options(
+    options: &LaunchOptions,
+    sample_rate: u32,
+    channels: u16,
+    eleven_labs_api_key: Option<String>,
+) -> VoiceAgentConfig {
+    create_agent_config(
+        sample_rate,
+        channels,
+        ListenArgs {
+            provider: &options.listen_provider,
+            model: &options.listen_model,
+            version: options.listen_version.as_deref(),
+            language: &options.listen_language,
+            language_hints: &options.language_hints,
+            keyterms: &options.listen_keyterms,
+            eot_threshold: options.listen_eot_threshold,
+            eager_eot_threshold: options.listen_eager_eot_threshold,
+            smart_format: options.listen_smart_format,
+        },
+        SpeakArgs {
+            provider: &options.speak_provider,
+            model: &options.speak_model,
+            model_id: &options.speak_model_id,
+            language_code: &options.speak_language_code,
+            voice_id: options.speak_voice_id.as_deref(),
+            eleven_labs_api_key,
+        },
+        &options.think_type,
+        &options.think_model,
+        options.think_temperature,
+        options.think_endpoint.as_deref(),
+        &options.think_header,
+        options.think_credentials_type.as_deref(),
+        options.think_aws_region.as_deref(),
+        options.think_aws_access_key_id.as_deref(),
+        options.think_aws_secret_access_key.as_deref(),
+        options.think_aws_session_token.as_deref(),
+        options.prompt.as_deref(),
+    )
+}
+
+fn validate_think_options(options: &LaunchOptions) -> Result<(), Box<dyn std::error::Error>> {
+    let has_bedrock_credentials = options.think_credentials_type.is_some()
+        || options.think_aws_region.is_some()
+        || options.think_aws_access_key_id.is_some()
+        || options.think_aws_secret_access_key.is_some()
+        || options.think_aws_session_token.is_some();
+
+    if has_bedrock_credentials && options.think_type != "aws_bedrock" {
+        return Err("AWS Bedrock credentials require --think-type aws_bedrock".into());
+    }
+
+    if options.think_type != "aws_bedrock" {
+        return Ok(());
+    }
+
+    if options.think_endpoint.as_deref().is_none_or(str::is_empty) {
+        return Err("AWS Bedrock requires --think-endpoint".into());
+    }
+
+    let missing = [
+        (
+            "--think-credentials-type",
+            options.think_credentials_type.is_none(),
+        ),
+        ("--think-aws-region", options.think_aws_region.is_none()),
+        (
+            "--think-aws-access-key-id",
+            options.think_aws_access_key_id.is_none(),
+        ),
+        (
+            "--think-aws-secret-access-key",
+            options.think_aws_secret_access_key.is_none(),
+        ),
+    ];
+    if let Some((name, _)) = missing.iter().find(|(_, missing)| *missing) {
+        return Err(format!("AWS Bedrock requires {name}").into());
+    }
+
+    if options.think_credentials_type.as_deref() == Some("sts")
+        && options.think_aws_session_token.is_none()
+    {
+        return Err("AWS STS credentials require --think-aws-session-token".into());
+    }
+
+    Ok(())
+}
+
+fn load_eleven_labs_api_key(
+    options: &LaunchOptions,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    if options.speak_provider == "eleven_labs" {
+        Ok(Some(env::var("ELEVEN_LABS_API_KEY").map_err(|_| {
+            "ELEVEN_LABS_API_KEY environment variable not set (required for eleven_labs speak provider)"
+        })?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateAgentConfigResponse {
+    agent_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectsResponse {
+    projects: Vec<ProjectSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectSummary {
+    project_id: String,
+    name: String,
+}
+
+fn log_api_request(
+    verbose: bool,
+    method: &reqwest::Method,
+    url: &str,
+    payload: Option<&serde_json::Value>,
+) {
+    if verbose {
+        info!("API request: {} {}", method, url);
+        info!(
+            "API request headers: Authorization: Token <redacted>{}",
+            if payload.is_some() {
+                ", Content-Type: application/json"
+            } else {
+                ""
+            }
+        );
+        info!(
+            "API payload: {}",
+            payload
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "<none>".to_string())
+        );
+    }
+}
+
+async fn resolve_project_id(
+    api_key: &str,
+    requested_project_id: Option<&str>,
+    verbose: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
+    if let Some(project_id) = requested_project_id {
+        return Ok(project_id.to_string());
+    }
+
+    let url = "https://api.deepgram.com/v1/projects";
+    log_api_request(verbose, &reqwest::Method::GET, url, None);
+    let response = reqwest::Client::new()
+        .get(url)
+        .header(reqwest::header::AUTHORIZATION, format!("Token {api_key}"))
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await?;
+    if !status.is_success() {
+        return Err(format!("Deepgram project listing failed ({status}): {body}").into());
+    }
+
+    let projects: ProjectsResponse = serde_json::from_str(&body)
+        .map_err(|error| format!("invalid response from project API: {error}; body: {body}"))?;
+    match projects.projects.as_slice() {
+        [] => Err("the API key has access to no Deepgram projects; provide a project ID with --project-id".into()),
+        [project] => {
+            info!(
+                "Using the only accessible Deepgram project: {} ({})",
+                project.name, project.project_id
+            );
+            Ok(project.project_id.clone())
+        }
+        _ => {
+            let available = projects
+                .projects
+                .iter()
+                .map(|project| format!("{} ({})", project.name, project.project_id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(format!(
+                "the API key has access to multiple Deepgram projects: {available}; specify one with --project-id"
+            )
+            .into())
+        }
+    }
+}
+
+async fn create_reusable_agent_config(
+    api_key: &str,
+    project_id: &str,
+    config: &VoiceAgentConfig,
+    name: &str,
+    verbose: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let agent = match &config.agent {
+        AgentConfiguration::Inline(agent) => agent,
+        AgentConfiguration::Reference(_) => {
+            return Err("cannot create a configuration that is already an agent reference".into())
+        }
+    };
+
+    if agent
+        .think
+        .endpoint
+        .as_ref()
+        .is_some_and(|endpoint| !endpoint.headers.is_empty())
+        || agent
+            .speak
+            .endpoint
+            .as_ref()
+            .is_some_and(|endpoint| !endpoint.headers.is_empty())
+    {
+        return Err(
+            "cannot create agent configurations containing provider headers; headers may contain secrets"
+                .into(),
+        );
+    }
+
+    if agent.think.provider.credentials.is_some() {
+        return Err(
+            "cannot create reusable agent configurations containing AWS credentials; use an inline Voice Agent launch"
+                .into(),
+        );
+    }
+
+    let request = serde_json::json!({
+        "config": serde_json::to_string(agent)?,
+        "metadata": { "name": name },
+    });
+    let url = format!("https://api.deepgram.com/v1/projects/{project_id}/agents");
+    log_api_request(verbose, &reqwest::Method::POST, &url, Some(&request));
+    let response = reqwest::Client::new()
+        .post(url)
+        .header(reqwest::header::AUTHORIZATION, format!("Token {api_key}"))
+        .json(&request)
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await?;
+    if !status.is_success() {
+        return Err(
+            format!("Deepgram agent configuration create failed ({status}): {body}").into(),
+        );
+    }
+
+    let result: CreateAgentConfigResponse = serde_json::from_str(&body).map_err(|error| {
+        format!("invalid response from agent configuration API: {error}; body: {body}")
+    })?;
+    Ok(result.agent_id)
+}
+
+async fn delete_agent_config(
+    api_key: &str,
+    project_id: &str,
+    agent_id: &str,
+    verbose: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let url = format!("https://api.deepgram.com/v1/projects/{project_id}/agents/{agent_id}");
+    log_api_request(verbose, &reqwest::Method::DELETE, &url, None);
+    let response = reqwest::Client::new()
+        .delete(url)
+        .header(reqwest::header::AUTHORIZATION, format!("Token {api_key}"))
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await?;
+    if !status.is_success() {
+        return Err(
+            format!("Deepgram agent configuration deletion failed ({status}): {body}").into(),
+        );
+    }
+    Ok(())
+}
+
+async fn delete_agent_configuration(
+    args: ConfigDeleteArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = env::var("DEEPGRAM_API_KEY")
+        .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
+    let project_id = resolve_project_id(&api_key, args.project_id.as_deref(), args.verbose).await?;
+
+    if !args.yes {
+        print!(
+            "Delete reusable agent configuration '{}' from project '{}' [y/N]? ",
+            args.agent_config_id, project_id
+        );
+        io::stdout().flush()?;
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            println!("Deletion cancelled.");
+            return Ok(());
+        }
+    }
+
+    delete_agent_config(&api_key, &project_id, &args.agent_config_id, args.verbose).await?;
+    println!(
+        "Deleted reusable agent configuration {}",
+        args.agent_config_id
+    );
+    Ok(())
+}
+
+fn parse_variable_value(raw: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    Ok(serde_json::from_str(raw).unwrap_or_else(|_| serde_json::Value::String(raw.to_string())))
+}
+
+fn print_json_response(body: &str) {
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(value) => println!(
+            "{}",
+            serde_json::to_string_pretty(&value).unwrap_or_else(|_| body.to_string())
+        ),
+        Err(_) if !body.is_empty() => println!("{body}"),
+        Err(_) => {}
+    }
+}
+
+fn redact_voice_agent_credentials(config: &VoiceAgentConfig) -> serde_json::Value {
+    let mut value = serde_json::to_value(config).expect("voice agent config should serialize");
+    if let Some(credentials) = value
+        .get_mut("agent")
+        .and_then(|agent| agent.get_mut("think"))
+        .and_then(|think| think.get_mut("provider"))
+        .and_then(|provider| provider.get_mut("credentials"))
+        .and_then(|credentials| credentials.as_object_mut())
+    {
+        for key in ["access_key_id", "secret_access_key", "session_token"] {
+            if credentials.contains_key(key) {
+                credentials.insert(key.to_string(), serde_json::json!("<redacted>"));
+            }
+        }
+    }
+    value
+}
+
+async fn agent_variable_request(
+    method: reqwest::Method,
+    url: String,
+    api_key: &str,
+    payload: Option<serde_json::Value>,
+    verbose: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
+    log_api_request(verbose, &method, &url, payload.as_ref());
+    let client = reqwest::Client::new();
+    let mut request = client
+        .request(method, url)
+        .header(reqwest::header::AUTHORIZATION, format!("Token {api_key}"));
+    if let Some(payload) = payload {
+        request = request.json(&payload);
+    }
+    let response = request.send().await?;
+    let status = response.status();
+    let body = response.text().await?;
+    if !status.is_success() {
+        return Err(format!("Deepgram agent variable request failed ({status}): {body}").into());
+    }
+    Ok(body)
+}
+
+fn agent_variables_url(project_id: &str, variable_id: Option<&str>) -> String {
+    match variable_id {
+        Some(variable_id) => format!(
+            "https://api.deepgram.com/v1/projects/{project_id}/agent-variables/{variable_id}"
+        ),
+        None => format!("https://api.deepgram.com/v1/projects/{project_id}/agent-variables"),
+    }
+}
+
+async fn create_agent_variable(
+    args: ConfigVariableCreateArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = env::var("DEEPGRAM_API_KEY")
+        .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
+    let verbose = args.project.verbose;
+    let project_id =
+        resolve_project_id(&api_key, args.project.project_id.as_deref(), verbose).await?;
+    let value = parse_variable_value(&args.value)?;
+    let body = agent_variable_request(
+        reqwest::Method::POST,
+        agent_variables_url(&project_id, None),
+        &api_key,
+        Some(serde_json::json!({
+            "key": args.key,
+            "value": value,
+            "is_sensitive": false
+        })),
+        verbose,
+    )
+    .await?;
+    print_json_response(&body);
+    Ok(())
+}
+
+async fn list_agent_variables(
+    args: ConfigVariableProjectArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = env::var("DEEPGRAM_API_KEY")
+        .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
+    let verbose = args.verbose;
+    let project_id = resolve_project_id(&api_key, args.project_id.as_deref(), verbose).await?;
+    let body = agent_variable_request(
+        reqwest::Method::GET,
+        agent_variables_url(&project_id, None),
+        &api_key,
+        None,
+        verbose,
+    )
+    .await?;
+    print_json_response(&body);
+    Ok(())
+}
+
+async fn get_agent_variable(args: ConfigVariableGetArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = env::var("DEEPGRAM_API_KEY")
+        .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
+    let verbose = args.project.verbose;
+    let project_id =
+        resolve_project_id(&api_key, args.project.project_id.as_deref(), verbose).await?;
+    let body = agent_variable_request(
+        reqwest::Method::GET,
+        agent_variables_url(&project_id, Some(&args.variable_id)),
+        &api_key,
+        None,
+        verbose,
+    )
+    .await?;
+    print_json_response(&body);
+    Ok(())
+}
+
+async fn update_agent_variable(
+    args: ConfigVariableUpdateArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = env::var("DEEPGRAM_API_KEY")
+        .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
+    let verbose = args.project.verbose;
+    let project_id =
+        resolve_project_id(&api_key, args.project.project_id.as_deref(), verbose).await?;
+    let value = parse_variable_value(&args.value)?;
+    let body = agent_variable_request(
+        reqwest::Method::PATCH,
+        agent_variables_url(&project_id, Some(&args.variable_id)),
+        &api_key,
+        Some(serde_json::json!({"value": value})),
+        verbose,
+    )
+    .await?;
+    print_json_response(&body);
+    Ok(())
+}
+
+async fn delete_agent_variable(
+    args: ConfigVariableDeleteArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = env::var("DEEPGRAM_API_KEY")
+        .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
+    let verbose = args.project.verbose;
+    let project_id =
+        resolve_project_id(&api_key, args.project.project_id.as_deref(), verbose).await?;
+    if !args.yes {
+        print!(
+            "Delete agent template variable '{}' from project '{}' [y/N]? ",
+            args.variable_id, project_id
+        );
+        io::stdout().flush()?;
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            println!("Deletion cancelled.");
+            return Ok(());
+        }
+    }
+
+    agent_variable_request(
+        reqwest::Method::DELETE,
+        agent_variables_url(&project_id, Some(&args.variable_id)),
+        &api_key,
+        None,
+        verbose,
+    )
+    .await?;
+    println!("Deleted agent template variable {}", args.variable_id);
+    Ok(())
 }
 
 async fn handle_voice_agent_responses(
@@ -769,28 +1489,77 @@ async fn handle_voice_agent_responses(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Parse command-line arguments
-    let args = Args::parse();
-
     // Initialize logging; defaults to "info" but RUST_LOG overrides (e.g. RUST_LOG=debug)
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Stdout)
         .init();
 
-    // Load environment variables
     dotenv::dotenv().ok();
+
+    let args = Args::parse();
+    match args.command {
+        None => run_voice_agent(args.launch, None).await,
+        Some(Command::Config { command }) => match command {
+            ConfigCommand::Create(create) => create_agent_configuration(create).await,
+            ConfigCommand::Use(use_config) => {
+                run_voice_agent(use_config.launch, Some(use_config.agent_config_id)).await
+            }
+            ConfigCommand::Delete(delete) => delete_agent_configuration(delete).await,
+            ConfigCommand::Variable { command } => match command {
+                ConfigVariableCommand::Create(create) => create_agent_variable(create).await,
+                ConfigVariableCommand::List(list) => list_agent_variables(list).await,
+                ConfigVariableCommand::Get(get) => get_agent_variable(get).await,
+                ConfigVariableCommand::Update(update) => update_agent_variable(update).await,
+                ConfigVariableCommand::Delete(delete) => delete_agent_variable(delete).await,
+            },
+        },
+    }
+}
+
+async fn create_agent_configuration(
+    args: ConfigCreateArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    validate_think_options(&args.launch)?;
+    let api_key = env::var("DEEPGRAM_API_KEY")
+        .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
+    let project_id =
+        resolve_project_id(&api_key, args.project_id.as_deref(), args.launch.verbose).await?;
+    let eleven_labs_api_key = load_eleven_labs_api_key(&args.launch)?;
+    let audio_capture = AudioCapture::new()?;
+    let config = config_from_options(
+        &args.launch,
+        audio_capture.config.sample_rate.0,
+        audio_capture.config.channels,
+        eleven_labs_api_key,
+    );
+    let agent_id = create_reusable_agent_config(
+        &api_key,
+        &project_id,
+        &config,
+        &args.name,
+        args.launch.verbose,
+    )
+    .await?;
+    println!(
+        "Saved reusable agent configuration '{}' as {}",
+        args.name, agent_id
+    );
+    Ok(())
+}
+
+async fn run_voice_agent(
+    args: LaunchOptions,
+    agent_config_id: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Load environment variables
+
+    validate_think_options(&args)?;
 
     let api_key = env::var("DEEPGRAM_API_KEY")
         .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
 
     // Load Eleven Labs API key if using eleven_labs speak provider
-    let eleven_labs_api_key = if args.speak_provider == "eleven_labs" {
-        let key = env::var("ELEVEN_LABS_API_KEY")
-            .map_err(|_| "ELEVEN_LABS_API_KEY environment variable not set (required for eleven_labs speak provider)")?;
-        Some(key)
-    } else {
-        None
-    };
+    let eleven_labs_api_key = load_eleven_labs_api_key(&args)?;
 
     info!("Starting Deepgram Voice Agent...");
     debug!("Using endpoint: {}", args.endpoint);
@@ -840,46 +1609,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _stream = audio_capture.start_capture(audio_tx, mic_enabled_for_capture)?;
     debug!("Audio capture started");
 
+    let mut config = config_from_options(&args, sample_rate, channels, eleven_labs_api_key);
+    if let Some(agent_id) = agent_config_id {
+        config.agent = AgentConfiguration::Reference(agent_id.to_string());
+    }
+
     // Connect to Deepgram Voice Agent
-    let ws_stream = connect_to_voice_agent(&api_key, &args.endpoint, sample_rate, channels).await?;
+    let ws_stream = connect_to_voice_agent(
+        &api_key,
+        &args.endpoint,
+        sample_rate,
+        channels,
+        args.verbose,
+    )
+    .await?;
     let (mut ws_sender, ws_receiver) = ws_stream.split();
 
     // Send Settings configuration
-    let config = create_agent_config(
-        sample_rate,
-        channels,
-        ListenArgs {
-            provider: &args.listen_provider,
-            model: &args.listen_model,
-            version: args.listen_version.as_deref(),
-            language: &args.listen_language,
-            language_hints: &args.language_hints,
-            keyterms: &args.listen_keyterms,
-            eot_threshold: args.listen_eot_threshold,
-            eager_eot_threshold: args.listen_eager_eot_threshold,
-            smart_format: args.listen_smart_format,
-        },
-        SpeakArgs {
-            provider: &args.speak_provider,
-            model: &args.speak_model,
-            model_id: &args.speak_model_id,
-            language_code: &args.speak_language_code,
-            voice_id: args.speak_voice_id.as_deref(),
-            eleven_labs_api_key,
-        },
-        &args.think_type,
-        &args.think_model,
-        args.think_endpoint.as_deref(),
-        &args.think_header,
-        args.prompt.as_deref(),
-    );
     let config_json = serde_json::to_string(&config)?;
     debug!("📤 Sending Settings configuration to WebSocket...");
 
     if args.verbose {
-        // Print the entire JSON Settings message with pretty formatting
-        let pretty_config = serde_json::to_string_pretty(&config)?;
-        info!("📄 Complete Settings JSON message:\n{}", pretty_config);
+        info!(
+            "Voice Agent Settings payload: {}",
+            redact_voice_agent_credentials(&config)
+        );
     }
 
     ws_sender.send(Message::Text(config_json.into())).await?;
@@ -977,7 +1731,13 @@ mod tests {
             "open_ai",
             "gpt-4o-mini",
             None,
+            None,
             &[],
+            None,
+            None,
+            None,
+            None,
+            None,
             None,
         );
 
@@ -1038,6 +1798,109 @@ mod tests {
         let args = Args::try_parse_from(["voice-agent", "--language-hint", "en,es"])
             .expect("language hint CSV should parse");
 
-        assert_eq!(args.language_hints, vec!["en", "es"]);
+        assert_eq!(args.launch.language_hints, vec!["en", "es"]);
+    }
+
+    #[test]
+    fn reusable_agent_reference_serializes_as_a_string() {
+        let mut config = config_for_listen_model("nova-3", None, &[]);
+        config["agent"] = serde_json::json!("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+
+        assert_eq!(config["agent"], "a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    }
+
+    #[test]
+    fn default_system_prompt_requests_concise_responses() {
+        let config = config_for_listen_model("nova-3", None, &[]);
+
+        assert_eq!(config["agent"]["think"]["prompt"], DEFAULT_SYSTEM_PROMPT);
+    }
+
+    #[test]
+    fn config_create_is_a_subcommand() {
+        let args = Args::try_parse_from([
+            "voice-agent",
+            "config",
+            "create",
+            "--project-id",
+            "project",
+            "--name",
+            "support",
+        ])
+        .expect("config create should parse");
+
+        assert!(matches!(
+            args.command,
+            Some(Command::Config {
+                command: ConfigCommand::Create(_)
+            })
+        ));
+    }
+
+    #[test]
+    fn config_use_accepts_a_positional_agent_id() {
+        let args = Args::try_parse_from([
+            "voice-agent",
+            "config",
+            "use",
+            "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        ])
+        .expect("config use should parse");
+
+        assert!(matches!(
+            args.command,
+            Some(Command::Config {
+                command: ConfigCommand::Use(ConfigUseArgs { agent_config_id, .. })
+            }) if agent_config_id == "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        ));
+    }
+
+    #[test]
+    fn config_delete_accepts_project_and_agent_id() {
+        let args = Args::try_parse_from([
+            "voice-agent",
+            "config",
+            "delete",
+            "--project-id",
+            "project",
+            "--yes",
+            "agent-id",
+        ])
+        .expect("config delete should parse");
+
+        assert!(matches!(
+            args.command,
+            Some(Command::Config {
+                command: ConfigCommand::Delete(ConfigDeleteArgs {
+                    project_id,
+                    agent_config_id,
+                    yes: true,
+                    ..
+                })
+            }) if project_id == Some("project".to_string()) && agent_config_id == "agent-id"
+        ));
+    }
+
+    #[test]
+    fn projects_response_deserializes_project_id_and_name() {
+        let response: ProjectsResponse = serde_json::from_value(serde_json::json!({
+            "projects": [{"project_id": "project", "name": "Support"}]
+        }))
+        .expect("project response should deserialize");
+
+        assert_eq!(response.projects[0].project_id, "project");
+        assert_eq!(response.projects[0].name, "Support");
+    }
+
+    #[test]
+    fn plain_text_variable_values_are_encoded_as_json_strings() {
+        assert_eq!(
+            parse_variable_value("Hello and welcome").expect("value should parse"),
+            serde_json::json!("Hello and welcome")
+        );
+        assert_eq!(
+            parse_variable_value("42").expect("JSON number should parse"),
+            serde_json::json!(42)
+        );
     }
 }

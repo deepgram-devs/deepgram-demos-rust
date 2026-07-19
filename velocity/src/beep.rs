@@ -1,46 +1,42 @@
-use minimp3::{Decoder, Error, Frame};
 use windows::Win32::Media::Audio::*;
 use windows::core::PSTR;
 
-static START_MP3: &[u8] = include_bytes!("../assets/record-start.mp3");
-static END_MP3: &[u8] = include_bytes!("../assets/record-end.mp3");
+static START_WAV: &[u8] = include_bytes!("../assets/record-start.wav");
+static END_WAV: &[u8] = include_bytes!("../assets/record-end.wav");
 
 pub fn play_start() {
-    play_mp3(START_MP3);
+    play_wav(START_WAV);
 }
 
 pub fn play_end() {
-    play_mp3(END_MP3);
+    play_wav(END_WAV);
 }
 
-fn play_mp3(data: &'static [u8]) {
-    let mut decoder = Decoder::new(std::io::Cursor::new(data));
-    let mut samples: Vec<i16> = Vec::new();
-    let mut sample_rate = 48_000u32;
-    let mut channels = 1u16;
-
-    loop {
-        match decoder.next_frame() {
-            Ok(Frame {
-                data: frame_samples,
-                sample_rate: sr,
-                channels: ch,
-                ..
-            }) => {
-                sample_rate = sr as u32;
-                channels = ch as u16;
-                samples.extend_from_slice(&frame_samples);
-            }
-            Err(Error::Eof) => break,
-            Err(_) => break,
-        }
-    }
+fn play_wav(data: &'static [u8]) {
+    let Some((mut samples, sample_rate, channels)) = decode_wav(data) else {
+        return;
+    };
 
     if samples.is_empty() {
         return;
     }
 
     unsafe { play_pcm(&mut samples, sample_rate, channels) };
+}
+
+fn decode_wav(data: &'static [u8]) -> Option<(Vec<i16>, u32, u16)> {
+    let cursor = std::io::Cursor::new(data);
+    let mut reader = hound::WavReader::new(cursor).ok()?;
+    let spec = reader.spec();
+    if spec.sample_format != hound::SampleFormat::Int || spec.bits_per_sample != 16 {
+        return None;
+    }
+
+    let samples = reader
+        .samples::<i16>()
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    Some((samples, spec.sample_rate, spec.channels))
 }
 
 unsafe fn play_pcm(samples: &mut Vec<i16>, sample_rate: u32, channels: u16) {

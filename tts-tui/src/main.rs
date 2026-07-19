@@ -54,6 +54,15 @@ struct Args {
     /// Valid values depend on the chosen format
     #[arg(long, env = "DEEPGRAM_SAMPLE_RATE")]
     sample_rate: Option<u32>,
+
+    /// Normalize the volume of generated audio (overrides config file and env var)
+    #[arg(
+        long,
+        env = "DEEPGRAM_NORMALIZE_VOLUME",
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
+    normalize_volume: Option<bool>,
 }
 
 #[tokio::main]
@@ -111,6 +120,11 @@ async fn main() -> Result<()> {
         .or(app_config.audio.sample_rate)
         .unwrap_or_else(|| AUDIO_FORMATS[format_index].default_sample_rate);
 
+    // Resolve volume normalization: CLI > env > config > default (false).
+    if let Some(normalize_volume) = args.normalize_volume {
+        app_config.audio.normalize_volume = normalize_volume;
+    }
+
     let mut app = App::new(endpoint, format_index, sample_rate, app_config);
     let res = run_app(&mut terminal, &mut app).await;
 
@@ -158,6 +172,7 @@ fn kick_off_tts(
     let speed = app.playback_speed;
     let sample_rate = app.sample_rate;
     let encoding = app.current_audio_format().encoding.to_string();
+    let normalize_volume = app.config.audio.normalize_volume;
     let extension = app.current_audio_format().extension.to_string();
     let cache_dir = app.audio_cache_dir.clone();
 
@@ -169,6 +184,7 @@ fn kick_off_tts(
             speed,
             sample_rate,
             &encoding,
+            normalize_volume,
             &extension,
             &cache_dir,
             force_regenerate,
@@ -404,6 +420,9 @@ async fn run_app(
                                 if app.focused_panel == Panel::VoiceMenu {
                                     app.toggle_favorite_voice();
                                 }
+                            }
+                            KeyCode::Char('v') | KeyCode::Char('V') => {
+                                app.toggle_volume_normalization();
                             }
                             KeyCode::Down => {
                                 if key.modifiers.contains(KeyModifiers::CONTROL)
