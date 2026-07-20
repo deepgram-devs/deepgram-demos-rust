@@ -147,6 +147,11 @@ enum Commands {
         #[arg(long, default_value = "10000")]
         inactivity_timeout: u64,
 
+        /// Convert spoken numbers into numerical digits (e.g. "nine hundred" -> "900").
+        /// Must be set at connection time; Flux does not support toggling this mid-stream.
+        #[arg(long)]
+        numerals: bool,
+
         /// Print all response messages instead of statistics table
         #[arg(long, short = 'v')]
         verbose: bool,
@@ -176,6 +181,11 @@ enum Commands {
         /// Inactivity timeout in milliseconds (default: 10000)
         #[arg(long, default_value = "10000")]
         inactivity_timeout: u64,
+
+        /// Convert spoken numbers into numerical digits (e.g. "nine hundred" -> "900").
+        /// Must be set at connection time; Flux does not support toggling this mid-stream.
+        #[arg(long)]
+        numerals: bool,
 
         /// Print full JSON responses instead of incremental transcription
         #[arg(long, short = 'v')]
@@ -257,6 +267,7 @@ async fn connect_to_deepgram(
     endpoint: Option<&str>,
     sample_rate: u32,
     encoding: &str,
+    numerals: bool,
 ) -> Result<
     (
         tokio_tungstenite::WebSocketStream<
@@ -272,8 +283,8 @@ async fn connect_to_deepgram(
     let base_url = base_url.trim_end_matches('/');
 
     let url = format!(
-        "{}/v2/listen?model=flux-general-en&sample_rate={}&encoding={}",
-        base_url, sample_rate, encoding
+        "{}/v2/listen?model=flux-general-en&sample_rate={}&encoding={}&numerals={}",
+        base_url, sample_rate, encoding, numerals
     );
 
     let url = Url::parse(&url)?;
@@ -506,6 +517,7 @@ fn run_thread_worker(
     endpoint: Option<String>,
     sample_rate: u32,
     encoding: String,
+    numerals: bool,
     stats: StatsMap,
     verbose: bool,
     inactivity_timeout_ms: u64,
@@ -518,7 +530,7 @@ fn run_thread_worker(
         // Connect to Deepgram WebSocket
         info!("[Thread {}] Connecting to Deepgram WebSocket...", thread_id);
 
-        let (ws_stream, response) = match connect_to_deepgram(&api_key, endpoint.as_deref(), sample_rate, &encoding).await {
+        let (ws_stream, response) = match connect_to_deepgram(&api_key, endpoint.as_deref(), sample_rate, &encoding, numerals).await {
             Ok(result) => {
                 info!("[Thread {}] Connected successfully", thread_id);
                 result
@@ -628,6 +640,7 @@ async fn run_microphone(
     encoding: String,
     threads: usize,
     inactivity_timeout_ms: u64,
+    numerals: bool,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get API key from environment variable
@@ -685,6 +698,7 @@ async fn run_microphone(
                 endpoint_clone,
                 sample_rate,
                 encoding_clone,
+                numerals,
                 stats_clone,
                 verbose,
                 inactivity_timeout_ms,
@@ -709,73 +723,26 @@ async fn run_microphone(
 
     // Wait for Ctrl+C
     tokio::signal::ctrl_c().await?;
-    info!("Received Ctrl+C, shutting down...");
-
-    // Reset terminal colors
-    let _ = std::io::stdout().execute(crossterm::style::ResetColor);
-
-    // Stop audio capture first
-    drop(stream);
-
-    // Drop the audio_tx to signal all threads to exit
-    drop(audio_tx);
+    info!("Received Ctrl+C, shutting down immediately...");
 
     // Cancel display task if it exists
     if let Some(task) = display_task {
         task.abort();
     }
 
-    // Wait for all threads to finish with 2 second timeout
-    println!("\nWaiting for worker threads to finish (2 second timeout)...");
-
-    let shutdown_timeout = tokio::time::Duration::from_secs(2);
-    let thread_count = thread_handles.len();
-
-    // Spawn tasks to wait for each thread
-    let mut join_tasks = Vec::new();
-    for (thread_id, handle) in thread_handles.into_iter().enumerate() {
-        let task = tokio::task::spawn_blocking(move || {
-            (thread_id, handle.join())
-        });
-        join_tasks.push(task);
-    }
-
-    // Wait for all threads with timeout
-    match tokio::time::timeout(shutdown_timeout, async {
-        for task in join_tasks {
-            if let Ok((thread_id, join_result)) = task.await {
-                match join_result {
-                    Ok(Ok(())) => {
-                        info!("Thread {} exited successfully", thread_id);
-                    }
-                    Ok(Err(e)) => {
-                        error!("Thread {} exited with error: {}", thread_id, e);
-                    }
-                    Err(e) => {
-                        error!("Thread {} panicked: {:?}", thread_id, e);
-                    }
-                }
-            }
-        }
-    }).await {
-        Ok(_) => {
-            info!("All {} threads exited successfully", thread_count);
-        }
-        Err(_) => {
-            error!("Shutdown timeout exceeded after 2 seconds, forcing exit");
-            // Reset terminal colors before forced exit
-            let _ = std::io::stdout().execute(crossterm::style::ResetColor);
-            println!("🛑 Application stopped (forced)");
-            std::process::exit(0);
-        }
-    }
+    // Stop audio capture and drop the sender so worker threads observe the
+    // channel closing, but don't wait for them to join: on Ctrl+C the user
+    // wants the process to exit now, not after the inactivity timeout.
+    drop(stream);
+    drop(audio_tx);
+    drop(thread_handles);
 
     // Reset terminal colors before exit
     let _ = std::io::stdout().execute(crossterm::style::ResetColor);
 
     println!("🛑 Application stopped");
 
-    // Force exit to ensure immediate termination
+    // Force exit immediately; worker threads are detached and will not be waited on.
     std::process::exit(0);
 }
 
@@ -880,6 +847,7 @@ async fn run_file(
     encoding: String,
     threads: usize,
     inactivity_timeout_ms: u64,
+    numerals: bool,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get API key from environment variable
@@ -961,6 +929,7 @@ async fn run_file(
                 endpoint_clone,
                 actual_sample_rate,
                 encoding_clone,
+                numerals,
                 stats_clone,
                 verbose,
                 inactivity_timeout_ms,
@@ -1121,11 +1090,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Microphone { endpoint, sample_rate, encoding, threads, inactivity_timeout, verbose } => {
-            run_microphone(endpoint, sample_rate, encoding, threads, inactivity_timeout, verbose).await?;
+        Commands::Microphone { endpoint, sample_rate, encoding, threads, inactivity_timeout, numerals, verbose } => {
+            run_microphone(endpoint, sample_rate, encoding, threads, inactivity_timeout, numerals, verbose).await?;
         }
-        Commands::File { path, endpoint, _sample_rate, encoding, threads, inactivity_timeout, verbose } => {
-            run_file(path, endpoint, encoding, threads, inactivity_timeout, verbose).await?;
+        Commands::File { path, endpoint, _sample_rate, encoding, threads, inactivity_timeout, numerals, verbose } => {
+            run_file(path, endpoint, encoding, threads, inactivity_timeout, numerals, verbose).await?;
         }
     }
 

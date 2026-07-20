@@ -85,12 +85,19 @@ Or with the built binary:
 - `--encoding <FORMAT>` - Audio encoding format (default: linear16)
 - `--threads <N>` - Number of concurrent connections (default: 1)
 - `--inactivity-timeout <MS>` - Inactivity timeout in milliseconds (default: 10000)
+- `--numerals` - Convert spoken numbers into digits (e.g. "nine hundred" -> "900")
 - `--verbose` - Print statistics table instead of all messages
 
 **Example with custom options:**
 
 ```bash
 cargo run -- microphone --sample-rate 16000 --threads 2 --verbose
+```
+
+**Example with numerals enabled:**
+
+```bash
+cargo run -- microphone --numerals
 ```
 
 ### File Mode
@@ -120,6 +127,7 @@ Or with the built binary:
 - `--encoding <FORMAT>` - Audio encoding format (always linear16 for decoded audio)
 - `--threads <N>` - Number of concurrent connections (default: 1)
 - `--inactivity-timeout <MS>` - Inactivity timeout in milliseconds (default: 10000)
+- `--numerals` - Convert spoken numbers into digits (e.g. "nine hundred" -> "900")
 - `--verbose` - Print full JSON responses instead of incremental transcription
 
 **Example commands:**
@@ -136,6 +144,9 @@ cargo run -- file --path audio.wav --threads 4
 
 # Verbose mode to see full JSON responses
 cargo run -- file --path audio.aac --verbose
+
+# Convert spoken numbers into digits
+cargo run -- file --path recording.mp3 --numerals
 ```
 
 ### Help
@@ -331,7 +342,9 @@ In microphone mode with multiple threads, a statistics table shows throughput fo
 This application connects to the Deepgram Flux API WebSocket endpoint:
 
 ```text
-wss://api.deepgram.com/v2/listen?model=flux-general-en&sample_rate={rate}&encoding=linear16
+wss://api.deepgram.com/v2/listen?model=flux-general-en&sample_rate={rate}&encoding=linear16&numerals={true|false}
 ```
+
+Note: `numerals` must be set when the connection is opened. Flux does not support toggling `numerals` mid-stream via a `Configure` message.
 
 For more information about the Flux API, visit: [Deepgram Flux Documentation](https://developers.deepgram.com/docs/flux)
