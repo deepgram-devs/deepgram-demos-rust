@@ -146,12 +146,18 @@ enum Commands {
         eager_eot_threshold: Option<f64>,
 
         /// Which connection's transcript to print in the regular (non-verbose,
-        /// non-table) output mode. Connections are zero-indexed; the first
+        /// non-stats) output mode. Connections are zero-indexed; the first
         /// connection (0) is used by default.
         #[arg(long, default_value = "0")]
         connection: usize,
 
-        /// Print all response messages instead of statistics table
+        /// Show a live statistics table for all connections instead of the
+        /// selected connection's transcript.
+        #[arg(long)]
+        stats: bool,
+
+        /// Print all raw response messages for every connection instead of the
+        /// selected connection's transcript
         #[arg(long, short = 'v')]
         verbose: bool,
     },
@@ -194,12 +200,18 @@ enum Commands {
         eager_eot_threshold: Option<f64>,
 
         /// Which connection's transcript to print in the regular (non-verbose,
-        /// non-table) output mode. Connections are zero-indexed; the first
+        /// non-stats) output mode. Connections are zero-indexed; the first
         /// connection (0) is used by default.
         #[arg(long, default_value = "0")]
         connection: usize,
 
-        /// Print full JSON responses instead of incremental transcription
+        /// Show a live statistics table for all connections instead of the
+        /// selected connection's transcript.
+        #[arg(long)]
+        stats: bool,
+
+        /// Print all raw response messages for every connection instead of the
+        /// selected connection's transcript
         #[arg(long, short = 'v')]
         verbose: bool,
     },
@@ -326,6 +338,7 @@ async fn connect_to_deepgram(
 async fn handle_websocket_responses(
     thread_id: usize,
     is_selected_connection: bool,
+    stats_mode: bool,
     mut ws_receiver: futures_util::stream::SplitStream<
         tokio_tungstenite::WebSocketStream<
             tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -417,7 +430,7 @@ async fn handle_websocket_responses(
                                 serde_json::to_string_pretty(&response.data).unwrap_or_default()
                             );
                             println!("---");
-                        } else if msg_type == "TurnInfo" && is_selected_connection {
+                        } else if msg_type == "TurnInfo" && is_selected_connection && !stats_mode {
                             // Regular functional mode: print the transcript for the selected
                             // connection only, one line per message, prefixed with the Flux
                             // event type and suffixed with the eager/end-of-turn confidence
@@ -524,6 +537,7 @@ async fn handle_websocket_responses(
 fn run_thread_worker(
     thread_id: usize,
     connection: usize,
+    stats_mode: bool,
     mut audio_rx: broadcast::Receiver<Vec<u8>>,
     api_key: String,
     endpoint: Option<String>,
@@ -576,7 +590,7 @@ fn run_thread_worker(
         let stats_clone = stats.clone();
         let is_selected_connection = thread_id == connection;
         let response_handle = tokio::spawn(async move {
-            handle_websocket_responses(thread_id, is_selected_connection, ws_receiver, stats_clone, verbose, inactivity_timeout_ms).await;
+            handle_websocket_responses(thread_id, is_selected_connection, stats_mode, ws_receiver, stats_clone, verbose, inactivity_timeout_ms).await;
         });
 
         // Main loop: receive audio from broadcast and send to WebSocket
@@ -657,6 +671,7 @@ async fn run_microphone(
     numerals: bool,
     eager_eot_threshold: Option<f64>,
     connection: usize,
+    stats_mode: bool,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     validate_eager_eot_threshold(eager_eot_threshold)?;
@@ -694,8 +709,8 @@ async fn run_microphone(
     println!("Spawning {} worker thread(s)...", threads);
     println!("📝 Writing logs to: flux-turn-taking.log");
     println!("Press Ctrl+C to stop");
-    if !verbose {
-        println!("Use --verbose to see all messages");
+    if !verbose && !stats_mode {
+        println!("Printing transcript for connection {} (use --connection to change, --stats for a live statistics table, --verbose for raw messages)", connection);
     }
     println!("===");
 
@@ -713,6 +728,7 @@ async fn run_microphone(
             run_thread_worker(
                 thread_id,
                 connection,
+                stats_mode,
                 audio_rx,
                 api_key_clone,
                 endpoint_clone,
@@ -729,8 +745,8 @@ async fn run_microphone(
         thread_handles.push(handle);
     }
 
-    // Spawn stats display task if not in verbose mode
-    let display_task = if !verbose {
+    // Spawn stats display task only when --stats is passed
+    let display_task = if stats_mode {
         let stats_clone = stats.clone();
         Some(tokio::spawn(async move {
             loop {
@@ -871,6 +887,7 @@ async fn run_file(
     numerals: bool,
     eager_eot_threshold: Option<f64>,
     connection: usize,
+    stats_mode: bool,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     validate_eager_eot_threshold(eager_eot_threshold)?;
@@ -933,6 +950,9 @@ async fn run_file(
     );
     println!("Spawning {} worker thread(s)...", threads);
     println!("📝 Writing logs to: flux-turn-taking.log");
+    if !verbose && !stats_mode {
+        println!("Printing transcript for connection {} (use --connection to change, --stats for a live statistics table, --verbose for raw messages)", connection);
+    }
     println!("===");
     println!("Transcription results:");
     println!();
@@ -951,6 +971,7 @@ async fn run_file(
             run_thread_worker(
                 thread_id,
                 connection,
+                stats_mode,
                 audio_rx,
                 api_key_clone,
                 endpoint_clone,
@@ -966,6 +987,19 @@ async fn run_file(
 
         thread_handles.push(handle);
     }
+
+    // Spawn stats display task only when --stats is passed
+    let display_task = if stats_mode {
+        let stats_clone = stats.clone();
+        Some(tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                display_stats_table(&stats_clone);
+            }
+        }))
+    } else {
+        None
+    };
 
     // Calculate chunk size and delay for real-time streaming
     // Each sample is 2 bytes (16-bit), and we want chunks of approximately 100ms
@@ -1016,6 +1050,11 @@ async fn run_file(
     }
 
     println!("✅ File streaming complete: {} chunks sent ({} total bytes)", chunk_count, total_bytes_sent);
+
+    // Cancel the stats display task, if it was running
+    if let Some(task) = display_task {
+        task.abort();
+    }
 
     // Reset terminal colors
     let _ = std::io::stdout().execute(crossterm::style::ResetColor);
@@ -1149,11 +1188,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Microphone { endpoint, sample_rate, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, connection, verbose } => {
-            run_microphone(endpoint, sample_rate, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, connection, verbose).await?;
+        Commands::Microphone { endpoint, sample_rate, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, connection, stats, verbose } => {
+            run_microphone(endpoint, sample_rate, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, connection, stats, verbose).await?;
         }
-        Commands::File { path, endpoint, _sample_rate, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, connection, verbose } => {
-            run_file(path, endpoint, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, connection, verbose).await?;
+        Commands::File { path, endpoint, _sample_rate, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, connection, stats, verbose } => {
+            run_file(path, endpoint, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, connection, stats, verbose).await?;
         }
     }
 
