@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0 - 2026-07-21
+
+### Features
+
+- Added support for Deepgram's early-access Flux TTS model, including all 12 `flux-*-en` voices, selectable alongside Aura and Aura-2 in the Voices panel.
+- Automatically routed requests for Flux voices to `/v2/speak` instead of `/v1/speak` on the `deepgram` provider, with no configuration changes required.
+- Omitted the `speed` and `normalize_volume` query parameters for Flux requests, since Flux does not document support for them, and logged a note when either setting was active but ignored.
+
+### Documentation
+
+- Documented the full Flux voice catalog and `/v2/speak` routing behavior in the README.
+
 ## 0.8.2 - 2026-07-13
 
 ### Features

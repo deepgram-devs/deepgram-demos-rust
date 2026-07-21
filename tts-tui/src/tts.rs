@@ -120,6 +120,16 @@ pub async fn fetch_audio_for_playback(
         is_cached = false;
     }
 
+    let is_flux = matches!(backend, TtsBackend::Deepgram { .. }) && voice_id.starts_with("flux-");
+    let message = if is_flux && (speed != Decimal::new(10, 1) || normalize_volume) {
+        format!(
+            "{} (note: Flux voices ignore playback speed and volume normalization)",
+            message
+        )
+    } else {
+        message
+    };
+
     Ok((message, audio_data, is_cached))
 }
 
@@ -435,22 +445,31 @@ fn build_deepgram_tts_url(
         }
     }
 
+    // Flux voices (early access) are only served on /v2/speak, unlike Aura and
+    // Aura-2 which remain on /v1/speak. Only override the well-known default
+    // Aura path; a custom self-hosted path is left untouched since Flux is
+    // hosted-only at this time.
+    let is_flux = voice_id.starts_with("flux-");
     if url.path().is_empty() || url.path() == "/" {
-        url.set_path("/v1/speak");
+        url.set_path(if is_flux { "/v2/speak" } else { "/v1/speak" });
+    } else if is_flux && url.path() == "/v1/speak" {
+        url.set_path("/v2/speak");
     }
 
     {
         let mut pairs = url.query_pairs_mut();
         pairs.append_pair("model", voice_id);
         pairs.append_pair("encoding", encoding);
-        if speed != Decimal::new(10, 1) {
+        // Flux does not document `speed` or `normalize_volume` on /v2/speak, so
+        // both are omitted for Flux voices rather than sent and possibly rejected.
+        if !is_flux && speed != Decimal::new(10, 1) {
             pairs.append_pair("speed", &speed.to_string());
         }
         // MP3 and AAC have fixed sample rates; omit the parameter for those encodings.
         if encoding != "mp3" && encoding != "aac" {
             pairs.append_pair("sample_rate", &sample_rate.to_string());
         }
-        if normalize_volume {
+        if !is_flux && normalize_volume {
             pairs.append_pair("normalize_volume", "true");
         }
     }
@@ -554,6 +573,78 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "https://api.deepgram.com/v1/speak?model=aura-2-thalia-en&encoding=linear16&sample_rate=24000&normalize_volume=true"
+        );
+    }
+
+    #[test]
+    fn flux_url_uses_v2_speak_for_host_only_endpoint() {
+        let url = build_deepgram_tts_url(
+            "https://api.deepgram.com",
+            "flux-haley-en",
+            Decimal::new(10, 1),
+            24000,
+            "linear16",
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "https://api.deepgram.com/v2/speak?model=flux-haley-en&encoding=linear16&sample_rate=24000"
+        );
+    }
+
+    #[test]
+    fn flux_url_overrides_default_v1_speak_path() {
+        let url = build_deepgram_tts_url(
+            "https://api.deepgram.com/v1/speak",
+            "flux-jack-en",
+            Decimal::new(10, 1),
+            22050,
+            "mp3",
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "https://api.deepgram.com/v2/speak?model=flux-jack-en&encoding=mp3"
+        );
+    }
+
+    #[test]
+    fn flux_url_omits_speed_and_normalize_volume() {
+        let url = build_deepgram_tts_url(
+            "https://api.deepgram.com/v1/speak",
+            "flux-cole-en",
+            Decimal::new(13, 1),
+            24000,
+            "linear16",
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "https://api.deepgram.com/v2/speak?model=flux-cole-en&encoding=linear16&sample_rate=24000"
+        );
+    }
+
+    #[test]
+    fn flux_url_preserves_custom_non_default_path() {
+        let url = build_deepgram_tts_url(
+            "https://selfhosted.example.com/custom/route",
+            "flux-jack-en",
+            Decimal::new(10, 1),
+            22050,
+            "mp3",
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "https://selfhosted.example.com/custom/route?model=flux-jack-en&encoding=mp3"
         );
     }
 }
