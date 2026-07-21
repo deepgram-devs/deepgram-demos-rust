@@ -127,3 +127,4 @@ asking the app to stop right now.
 - There is no dedicated release workflow for this project (unlike `velocity` or
   `tts-tui`); version bumps happen in `Cargo.toml` without a corresponding
   `.github/workflows/*-release.yml`.
+- Keep this `AGENTS.md` file updated with functional changes
