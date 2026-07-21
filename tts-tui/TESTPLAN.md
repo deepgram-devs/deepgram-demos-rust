@@ -44,6 +44,15 @@ cargo check -p tts-tui
 - Enable volume normalization and verify the request query contains `normalize_volume=true`; disable it and verify the parameter is omitted.
 - Press `v` and verify the status bar/log reports volume normalization enabled or disabled; verify the next request uses the new state.
 
+### 2a. Flux TTS Voices
+
+- Open the Voices filter (`/`) and type `flux`; verify all 12 `flux-*-en` voices are shown.
+- Play a short phrase with a Flux voice and verify audio is generated and plays correctly.
+- Increase or decrease playback speed, then play a Flux voice and verify the log notes that Flux ignores playback speed.
+- Enable volume normalization, then play a Flux voice and verify the log notes that Flux ignores volume normalization.
+- With a proxy tool (e.g. `mitmproxy`) or endpoint logs, confirm the outgoing request path is `/v2/speak` for a Flux voice and `/v1/speak` for an Aura or Aura-2 voice in the same session.
+- Play an Aura or Aura-2 voice immediately after a Flux voice and verify both work without needing to restart the app or change configuration.
+
 ### 3. SageMaker Provider
 
 - Configure AWS credentials with `sagemaker:InvokeEndpoint` permission.

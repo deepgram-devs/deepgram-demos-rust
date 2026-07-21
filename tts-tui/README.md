@@ -4,7 +4,8 @@ A terminal user interface (TUI) built with Rust and Ratatui for interacting with
 
 ## Features
 
-- Play saved text snippets with any Deepgram Aura or Aura-2 voice
+- Play saved text snippets with any Deepgram Aura, Aura-2, or Flux voice
+- **Flux TTS support** — all 12 early-access Flux voices (`flux-*-en`) are selectable alongside Aura and Aura-2; requests are automatically routed to Deepgram's `/v2/speak` endpoint
 - Choose the TTS provider: Deepgram-compatible HTTP endpoint or Amazon SageMaker `InvokeEndpoint`
 - Browse and filter voices by name, language, or model via a dedicated popup (`/` with Voices panel focused)
 - Filter saved texts by content via the same `/` key (with Saved Texts panel focused)
@@ -139,6 +140,29 @@ cargo run
 This setting applies to the `deepgram` provider, which is the direct HTTP path for hosted or self-hosted Deepgram-compatible TTS. SageMaker provider configuration uses `[sagemaker].endpoint_name` and `[sagemaker].region` instead.
 
 Both HTTP and HTTPS endpoint URLs are supported. If the endpoint is only a scheme and host, such as `https://api.eu.deepgram.com`, `tts-tui` sends requests to `/v1/speak` on that host. If the URL already includes a path, that path is preserved.
+
+### Flux TTS
+
+[Flux](https://developers.deepgram.com/docs/flux-tts/overview) is Deepgram's early-access TTS model built for voice agent pipelines. All 12 Flux voices are available in the Voices panel, filterable with `flux` (e.g. `/` then type `flux`):
+
+| Voice ID | Name | Accent | Gender |
+|----------|------|--------|--------|
+| `flux-haley-en` | Haley | American | Female |
+| `flux-heather-en` | Heather | American | Female |
+| `flux-cole-en` | Cole | American | Male |
+| `flux-alexis-en` | Alexis | American | Female |
+| `flux-priya-en` | Priya | Indian | Female |
+| `flux-jack-en` | Jack | British | Male |
+| `flux-bruce-en` | Bruce | American | Male |
+| `flux-rufus-en` | Rufus | British | Male |
+| `flux-drew-en` | Drew | American | Male |
+| `flux-renee-en` | Renee | American | Female |
+| `flux-marcus-en` | Marcus | American | Male |
+| `flux-sharon-en` | Sharon | Australian | Female |
+
+Selecting a Flux voice on the `deepgram` provider automatically sends the request to `/v2/speak` instead of `/v1/speak` — no configuration change is needed, including with a hosted regional base URL. Aura and Aura-2 voices continue to use `/v1/speak` unchanged.
+
+Flux does not currently document support for the `speed` or `normalize_volume` query parameters, so `tts-tui` omits both when a Flux voice is selected rather than sending values the API may reject. If playback speed or volume normalization is active while a Flux voice plays, the log panel notes that the setting was ignored for that request. All standard audio formats (MP3, Linear16, μ-law, A-law, FLAC, AAC) are supported by Flux voices. Flux is not yet supported through the `sagemaker` provider.
 
 ### Audio Format and Sample Rate
 
