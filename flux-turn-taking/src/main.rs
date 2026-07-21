@@ -349,6 +349,7 @@ async fn handle_websocket_responses(
     inactivity_timeout_ms: u64,
 ) {
     use crossterm::style::{Color, SetForegroundColor, ResetColor};
+    use std::io::Write as IoWrite;
 
     let colors = [
         Color::Cyan,
@@ -358,6 +359,11 @@ async fn handle_websocket_responses(
         Color::Blue,
         Color::White,
     ];
+
+    // Tracks which turn is currently being drawn on the terminal's current line, so the
+    // selected connection's transcript can be redrawn in place (one line per turn) rather
+    // than printing a new line for every message.
+    let mut current_turn_index: Option<usize> = None;
 
     let inactivity_timeout = tokio::time::Duration::from_millis(inactivity_timeout_ms);
 
@@ -432,11 +438,13 @@ async fn handle_websocket_responses(
                             println!("---");
                         } else if msg_type == "TurnInfo" && is_selected_connection && !stats_mode {
                             // Regular functional mode: print the transcript for the selected
-                            // connection only, one line per message, prefixed with the Flux
-                            // event type and suffixed with the eager/end-of-turn confidence
-                            // score when Flux reports one. Color is scoped to this single
-                            // line (set immediately before printing, reset immediately after)
-                            // so it never bleeds into the stats table.
+                            // connection only. Flux resends the full transcript-so-far on
+                            // every message rather than just the new words, so each message
+                            // redraws the current line in place (erase + rewrite) instead of
+                            // appending a new line. The line is only finalized with a newline
+                            // once the turn actually ends or a new turn begins. Color is scoped
+                            // to this single line (set immediately before printing, reset
+                            // immediately after) so it never bleeds into the stats table.
                             match serde_json::from_value::<FluxResponse>(response.data.clone()) {
                                 Ok(flux_response) => {
                                     info!(
@@ -461,9 +469,30 @@ async fn handle_websocket_responses(
                                         _ => String::new(),
                                     };
 
-                                    let _ = std::io::stdout().execute(SetForegroundColor(color));
-                                    println!("{}: {}{}", event_name, flux_response.transcript, confidence_suffix);
-                                    let _ = std::io::stdout().execute(ResetColor);
+                                    // A new turn starts a fresh line; finalize whatever was
+                                    // left of the previous turn's line first.
+                                    if current_turn_index != Some(turn_index) {
+                                        if current_turn_index.is_some() {
+                                            println!();
+                                        }
+                                        current_turn_index = Some(turn_index);
+                                    }
+
+                                    let mut stdout = std::io::stdout();
+                                    let _ = stdout.execute(cursor::MoveToColumn(0));
+                                    let _ = stdout.execute(terminal::Clear(terminal::ClearType::CurrentLine));
+                                    let _ = stdout.execute(SetForegroundColor(color));
+                                    print!("{}: {}{}", event_name, flux_response.transcript, confidence_suffix);
+                                    let _ = stdout.execute(ResetColor);
+                                    let _ = stdout.flush();
+
+                                    // A real EndOfTurn finalizes the line. EagerEndOfTurn is
+                                    // just a heads-up that the turn might be ending (a
+                                    // TurnResumed may follow), so the line stays open until
+                                    // EndOfTurn arrives.
+                                    if response.event == Some(TurnEvent::EndOfTurn) {
+                                        println!();
+                                    }
                                 }
                                 Err(e) => {
                                     error!("[Thread {}] Failed to parse Flux response: {}", thread_id, e);
