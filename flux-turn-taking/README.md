@@ -186,7 +186,7 @@ Each line represents a different speaker turn, displayed in a different color in
 With `--verbose`, see the full JSON responses from the Flux API:
 
 ```text
-[Thread 0] 📨 Event: TurnInfo
+[Thread 0] 📨 Type: TurnInfo (event: StartOfTurn)
 [Thread 0] 📄 Response Data: {
   "audio_window_end": 1.44,
   "audio_window_start": 0.0,
@@ -213,19 +213,32 @@ With `--verbose`, see the full JSON responses from the Flux API:
 2. **Format Detection**: Sample rate, channels, and duration are automatically detected
 3. **Real-time Streaming**: Audio is chunked and streamed at real-time speed (100ms chunks by default)
 4. **WebSocket Communication**: Audio data is sent as binary messages to the Flux API
-5. **Incremental Display**: As TurnInfo events arrive, new words are appended to the current line
+5. **Incremental Display**: As `TurnInfo` messages arrive, new words are appended to the current line
 6. **Turn Detection**: When turn_index changes, a new line starts with a different color
 7. **Completion**: When audio streaming completes, the connection closes gracefully
 
-### Event Types
+### Message Types
 
-The Flux API sends these event types:
+The Flux API sends these top-level message types (the `type` field):
 
 - `Connected` - Initial connection confirmation
-- `TurnInfo` - Incremental transcription updates with words
-- `EndOfTurn` - Turn completion (when detected)
-- `SpeechStarted` - Speech detection events
-- `Metadata` - Connection and configuration information
+- `TurnInfo` - Transcription and turn-state updates (see below)
+- `ConfigureSuccess` - A `Configure` control message was applied
+- `ConfigureFailure` - A `Configure` control message was rejected
+- `Error` - A fatal, unrecoverable error; the connection closes shortly after
+
+Every `TurnInfo` message also carries an `event` field describing the turn-state
+transition it represents:
+
+- `StartOfTurn` - The user has begun speaking for the first time in the turn
+- `Update` - Additional audio has been transcribed, but the turn state hasn't changed
+- `EagerEndOfTurn` - Moderate confidence the user has finished speaking; an opportunity to start preparing an agent reply
+- `TurnResumed` - Speech is continuing after an `EagerEndOfTurn` was sent for this turn
+- `EndOfTurn` - The user has finished speaking for the turn; the client finalizes the line here
+
+Unlike Nova-3 streaming, Flux does not send separate `Results`, `SpeechStarted`,
+`UtteranceEnd`, or `Metadata` message types - all transcription and turn-state
+updates arrive as `TurnInfo` messages distinguished by their `event` field.
 
 ## Configuration
 
@@ -330,11 +343,11 @@ cargo run -- file --path audio.mp3 --threads 10
 In microphone mode with multiple threads, a statistics table shows throughput for each connection:
 
 ```text
-┌────────┬─────────────┬─────────────┬─────────┬──────────────┬─────────────┬──────────┬───────┐
-│ Thread │ Bytes Sent  │ Bytes Recv  │ Results │ SpeechStarted│ UtteranceEnd│ Metadata │ Other │
-├────────┼─────────────┼─────────────┼─────────┼──────────────┼─────────────┼──────────┼───────┤
-│ 0      │ 1048576     │ 45231       │ 142     │ 3            │ 5           │ 1        │ 0     │
-└────────┴─────────────┴─────────────┴─────────┴──────────────┴─────────────┴──────────┴───────┘
+┌────────┬────────────┬────────────┬─────────────┬────────┬────────────────┬─────────────┬───────────┬────────┬───────┐
+│ Thread │ Bytes Sent │ Bytes Recv │ StartOfTurn │ Update │ EagerEndOfTurn │ TurnResumed │ EndOfTurn │ Errors │ Other │
+├────────┼────────────┼────────────┼─────────────┼────────┼────────────────┼─────────────┼───────────┼────────┼───────┤
+│ 0      │ 1048576    │ 45231      │ 4           │ 142    │ 3              │ 1           │ 4         │ 0      │ 1     │
+└────────┴────────────┴────────────┴─────────────┴────────┴────────────────┴─────────────┴───────────┴────────┴───────┘
 ```
 
 ## API Reference

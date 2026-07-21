@@ -40,32 +40,29 @@ impl Write for ThreadSafeWriter {
 struct DeepgramResponse {
     #[serde(rename = "type")]
     message_type: Option<String>,
-    event: Option<String>,
+    event: Option<TurnEvent>,
     #[serde(flatten)]
     data: serde_json::Value,
 }
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct ResultsResponse {
-    channel: Channel,
-    #[serde(default)]
-    is_final: bool,
-    #[serde(default)]
-    speech_final: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Channel {
-    alternatives: Vec<Alternative>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Alternative {
-    transcript: String,
-    confidence: Option<f64>,
+/// The sub-state reported by the `event` field of a Flux `TurnInfo` message.
+/// See https://developers.deepgram.com/reference/speech-to-text/listen-flux
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+enum TurnEvent {
+    /// Additional audio has been transcribed, but the turn state hasn't changed.
+    Update,
+    /// The user has begun speaking for the first time in the turn.
+    StartOfTurn,
+    /// Moderate confidence the user has finished speaking; an opportunity to
+    /// begin preparing an agent reply.
+    EagerEndOfTurn,
+    /// Speech was detected as continuing after an EagerEndOfTurn was sent.
+    TurnResumed,
+    /// The user has finished speaking for the turn.
+    EndOfTurn,
+    /// Any event value not yet known to this client.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,14 +98,18 @@ struct ThreadStats {
     bytes_sent: u64,
     #[tabled(rename = "Bytes Recv")]
     bytes_received: u64,
-    #[tabled(rename = "Results")]
-    results_count: u64,
-    #[tabled(rename = "SpeechStarted")]
-    speech_started_count: u64,
-    #[tabled(rename = "UtteranceEnd")]
-    utterance_end_count: u64,
-    #[tabled(rename = "Metadata")]
-    metadata_count: u64,
+    #[tabled(rename = "StartOfTurn")]
+    start_of_turn_count: u64,
+    #[tabled(rename = "Update")]
+    update_count: u64,
+    #[tabled(rename = "EagerEndOfTurn")]
+    eager_end_of_turn_count: u64,
+    #[tabled(rename = "TurnResumed")]
+    turn_resumed_count: u64,
+    #[tabled(rename = "EndOfTurn")]
+    end_of_turn_count: u64,
+    #[tabled(rename = "Errors")]
+    error_count: u64,
     #[tabled(rename = "Other")]
     other_count: u64,
 }
@@ -365,20 +366,27 @@ async fn handle_websocket_responses(
 
                 match serde_json::from_str::<DeepgramResponse>(&text) {
                     Ok(response) => {
-                        let msg_type = response.message_type.as_deref()
-                            .or(response.event.as_deref())
-                            .unwrap_or("Unknown");
+                        // Flux always reports "TurnInfo" as the top-level message type;
+                        // the actual turn state lives in the nested "event" field.
+                        let msg_type = response.message_type.as_deref().unwrap_or("Unknown");
 
-                        info!("[Thread {}] Received message type: '{}', verbose: {}", thread_id, msg_type, verbose);
+                        info!(
+                            "[Thread {}] Received message type: '{}', event: {:?}, verbose: {}",
+                            thread_id, msg_type, response.event, verbose
+                        );
 
                         // Update message type counts
                         if let Ok(mut stats_map) = stats.lock() {
                             if let Some(thread_stats) = stats_map.get_mut(&thread_id) {
-                                match msg_type {
-                                    "TurnInfo" | "Results" | "Update" => thread_stats.results_count += 1,
-                                    "SpeechStarted" => thread_stats.speech_started_count += 1,
-                                    "UtteranceEnd" | "EndOfTurn" => thread_stats.utterance_end_count += 1,
-                                    "Metadata" => thread_stats.metadata_count += 1,
+                                match (msg_type, response.event) {
+                                    ("TurnInfo", Some(TurnEvent::StartOfTurn)) => thread_stats.start_of_turn_count += 1,
+                                    ("TurnInfo", Some(TurnEvent::Update)) => thread_stats.update_count += 1,
+                                    ("TurnInfo", Some(TurnEvent::EagerEndOfTurn)) => thread_stats.eager_end_of_turn_count += 1,
+                                    ("TurnInfo", Some(TurnEvent::TurnResumed)) => thread_stats.turn_resumed_count += 1,
+                                    ("TurnInfo", Some(TurnEvent::EndOfTurn)) => thread_stats.end_of_turn_count += 1,
+                                    ("Error", _) => thread_stats.error_count += 1,
+                                    // Connected, ConfigureSuccess, ConfigureFailure, and any
+                                    // unrecognized TurnInfo event fall back to "Other".
                                     _ => thread_stats.other_count += 1,
                                 }
                             }
@@ -386,72 +394,83 @@ async fn handle_websocket_responses(
 
                         if verbose {
                             // Verbose mode: print full JSON
-                            println!("[Thread {}] 📨 Event: {}", thread_id, msg_type);
+                            println!(
+                                "[Thread {}] 📨 Type: {}{}",
+                                thread_id,
+                                msg_type,
+                                response.event.map(|e| format!(" (event: {:?})", e)).unwrap_or_default()
+                            );
                             println!(
                                 "[Thread {}] 📄 Response Data: {}",
                                 thread_id,
                                 serde_json::to_string_pretty(&response.data).unwrap_or_default()
                             );
                             println!("---");
-                        } else {
-                            // Normal mode: print incremental words
-                            info!("[Thread {}] Checking if msg_type '{}' matches TurnInfo/Results/Update/EndOfTurn", thread_id, msg_type);
-                            if msg_type == "TurnInfo" || msg_type == "Results" || msg_type == "Update" || msg_type == "EndOfTurn" {
-                                info!("[Thread {}] Matched! Attempting to parse FluxResponse", thread_id);
-                                match serde_json::from_value::<FluxResponse>(response.data.clone()) {
-                                    Ok(flux_response) => {
-                                        info!(
-                                            "[Thread {}] Parsed Flux response - turn_index: {:?}, words count: {}",
-                                            thread_id,
-                                            flux_response.turn_index,
-                                            flux_response.words.len()
-                                        );
+                        } else if msg_type == "TurnInfo" {
+                            // Normal mode: print incremental words for every turn event
+                            // (StartOfTurn, Update, EagerEndOfTurn, TurnResumed, EndOfTurn all
+                            // carry the words transcribed so far in the turn).
+                            match serde_json::from_value::<FluxResponse>(response.data.clone()) {
+                                Ok(flux_response) => {
+                                    info!(
+                                        "[Thread {}] Parsed Flux response - turn_index: {:?}, words count: {}",
+                                        thread_id,
+                                        flux_response.turn_index,
+                                        flux_response.words.len()
+                                    );
 
-                                        // Use turn_index if present, otherwise default to 0
-                                        let turn_index = flux_response.turn_index.unwrap_or(0);
+                                    // Use turn_index if present, otherwise default to 0
+                                    let turn_index = flux_response.turn_index.unwrap_or(0);
 
-                                        if transcription_state.current_turn != Some(turn_index) {
-                                            // New turn: print newline and change color
-                                            if transcription_state.current_turn.is_some() {
-                                                println!(); // End previous turn
-                                            }
-                                            transcription_state.current_turn = Some(turn_index);
-                                            transcription_state.words_printed = 0;
-                                            transcription_state.color_index =
-                                                (transcription_state.color_index + 1) % colors.len();
-
-                                            // Set new color
-                                            let _ = std::io::stdout()
-                                                .execute(SetForegroundColor(colors[transcription_state.color_index]));
-
-                                            info!("[Thread {}] Starting new turn {} with color index {}",
-                                                thread_id, turn_index, transcription_state.color_index);
+                                    if transcription_state.current_turn != Some(turn_index) {
+                                        // New turn: print newline and change color
+                                        if transcription_state.current_turn.is_some() {
+                                            println!(); // End previous turn
                                         }
+                                        transcription_state.current_turn = Some(turn_index);
+                                        transcription_state.words_printed = 0;
+                                        transcription_state.color_index =
+                                            (transcription_state.color_index + 1) % colors.len();
 
-                                        // Print new words
-                                        if flux_response.words.len() > transcription_state.words_printed {
-                                            let new_words = &flux_response.words[transcription_state.words_printed..];
-                                            info!("[Thread {}] Printing {} new words", thread_id, new_words.len());
-                                            for word in new_words {
-                                                print!("{} ", word.word);
-                                                let _ = std::io::stdout().flush();
-                                            }
-                                            transcription_state.words_printed = flux_response.words.len();
-                                        }
+                                        // Set new color
+                                        let _ = std::io::stdout()
+                                            .execute(SetForegroundColor(colors[transcription_state.color_index]));
 
-                                        // If EndOfTurn, finalize the line
-                                        if msg_type == "EndOfTurn" {
-                                            let _ = std::io::stdout().execute(ResetColor);
-                                            println!();
-                                            info!("[Thread {}] EndOfTurn - resetting for next turn", thread_id);
-                                        }
+                                        info!("[Thread {}] Starting new turn {} with color index {}",
+                                            thread_id, turn_index, transcription_state.color_index);
                                     }
-                                    Err(e) => {
-                                        error!("[Thread {}] Failed to parse Flux response: {}", thread_id, e);
-                                        error!("[Thread {}] Raw data: {}", thread_id, serde_json::to_string_pretty(&response.data).unwrap_or_default());
+
+                                    // Print new words
+                                    if flux_response.words.len() > transcription_state.words_printed {
+                                        let new_words = &flux_response.words[transcription_state.words_printed..];
+                                        info!("[Thread {}] Printing {} new words", thread_id, new_words.len());
+                                        for word in new_words {
+                                            print!("{} ", word.word);
+                                            let _ = std::io::stdout().flush();
+                                        }
+                                        transcription_state.words_printed = flux_response.words.len();
+                                    }
+
+                                    // Only a real EndOfTurn finalizes the line. EagerEndOfTurn is
+                                    // just a heads-up that the turn might be ending (a TurnResumed
+                                    // may follow), so the line stays open until EndOfTurn arrives.
+                                    if response.event == Some(TurnEvent::EndOfTurn) {
+                                        let _ = std::io::stdout().execute(ResetColor);
+                                        println!();
+                                        info!("[Thread {}] EndOfTurn - resetting for next turn", thread_id);
                                     }
                                 }
+                                Err(e) => {
+                                    error!("[Thread {}] Failed to parse Flux response: {}", thread_id, e);
+                                    error!("[Thread {}] Raw data: {}", thread_id, serde_json::to_string_pretty(&response.data).unwrap_or_default());
+                                }
                             }
+                        } else if msg_type == "Error" {
+                            error!(
+                                "[Thread {}] Fatal error from Flux: {}",
+                                thread_id,
+                                serde_json::to_string_pretty(&response.data).unwrap_or_default()
+                            );
                         }
                     }
                     Err(e) => {
