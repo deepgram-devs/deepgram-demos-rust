@@ -124,6 +124,17 @@ asking the app to stop right now.
   updated example commands, and the sample output/table screenshots in "Output Examples".
 - Keep `CHANGELOG.md` up to date under an `[Unreleased]` (or next version) heading as
   functionality changes, per the repository root `AGENTS.md` release guidance.
-- There is no dedicated release workflow for this project (unlike `velocity` or
-  `tts-tui`); version bumps happen in `Cargo.toml` without a corresponding
-  `.github/workflows/*-release.yml`.
+- Releases are published through `.github/workflows/dg-flux-release.yml`, matching the
+  `velocity` and `tts-tui` pattern: it builds native binaries on GitHub-hosted runners for
+  `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, and
+  `x86_64-pc-windows-msvc`, packages each with `README.md`, `CHANGELOG.md`, and the root
+  `LICENSE.md`, and creates the GitHub release from those artifacts. Do not rely on local
+  cross-compilation for release artifacts.
+- When cutting a release: bump `version` in `Cargo.toml`, add a `## [x.y.z] - YYYY-MM-DD`
+  section to `CHANGELOG.md` (the release workflow extracts that section verbatim as the
+  release notes — keep the heading format consistent with existing entries), update
+  `Cargo.lock`, and update `README.md` for any user-visible change.
+- After merging a release-ready update, push an annotated tag named `dg-flux-v<version>`
+  matching `Cargo.toml`. Verify the workflow's build job succeeds for all four targets and
+  the release job successfully creates or updates the GitHub release before considering
+  the release complete.
