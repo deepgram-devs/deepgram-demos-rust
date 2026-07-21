@@ -153,6 +153,13 @@ enum Commands {
         #[arg(long)]
         numerals: bool,
 
+        /// Confidence threshold (0.3-0.9) for EagerEndOfTurn events, which give an early,
+        /// lower-confidence signal that the turn may be ending so an agent reply can start
+        /// preparing. A TurnResumed event follows if speech continues after all. Omit to
+        /// disable eager end-of-turn detection (the default).
+        #[arg(long)]
+        eager_eot_threshold: Option<f64>,
+
         /// Print all response messages instead of statistics table
         #[arg(long, short = 'v')]
         verbose: bool,
@@ -187,6 +194,13 @@ enum Commands {
         /// Must be set at connection time; Flux does not support toggling this mid-stream.
         #[arg(long)]
         numerals: bool,
+
+        /// Confidence threshold (0.3-0.9) for EagerEndOfTurn events, which give an early,
+        /// lower-confidence signal that the turn may be ending so an agent reply can start
+        /// preparing. A TurnResumed event follows if speech continues after all. Omit to
+        /// disable eager end-of-turn detection (the default).
+        #[arg(long)]
+        eager_eot_threshold: Option<f64>,
 
         /// Print full JSON responses instead of incremental transcription
         #[arg(long, short = 'v')]
@@ -269,6 +283,7 @@ async fn connect_to_deepgram(
     sample_rate: u32,
     encoding: &str,
     numerals: bool,
+    eager_eot_threshold: Option<f64>,
 ) -> Result<
     (
         tokio_tungstenite::WebSocketStream<
@@ -283,10 +298,14 @@ async fn connect_to_deepgram(
     // Remove trailing slashes from base_url to avoid double slashes
     let base_url = base_url.trim_end_matches('/');
 
-    let url = format!(
+    let mut url = format!(
         "{}/v2/listen?model=flux-general-en&sample_rate={}&encoding={}&numerals={}",
         base_url, sample_rate, encoding, numerals
     );
+
+    if let Some(threshold) = eager_eot_threshold {
+        url.push_str(&format!("&eager_eot_threshold={}", threshold));
+    }
 
     let url = Url::parse(&url)?;
 
@@ -537,6 +556,7 @@ fn run_thread_worker(
     sample_rate: u32,
     encoding: String,
     numerals: bool,
+    eager_eot_threshold: Option<f64>,
     stats: StatsMap,
     verbose: bool,
     inactivity_timeout_ms: u64,
@@ -549,7 +569,7 @@ fn run_thread_worker(
         // Connect to Deepgram WebSocket
         info!("[Thread {}] Connecting to Deepgram WebSocket...", thread_id);
 
-        let (ws_stream, response) = match connect_to_deepgram(&api_key, endpoint.as_deref(), sample_rate, &encoding, numerals).await {
+        let (ws_stream, response) = match connect_to_deepgram(&api_key, endpoint.as_deref(), sample_rate, &encoding, numerals, eager_eot_threshold).await {
             Ok(result) => {
                 info!("[Thread {}] Connected successfully", thread_id);
                 result
@@ -660,8 +680,11 @@ async fn run_microphone(
     threads: usize,
     inactivity_timeout_ms: u64,
     numerals: bool,
+    eager_eot_threshold: Option<f64>,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    validate_eager_eot_threshold(eager_eot_threshold)?;
+
     // Get API key from environment variable
     let api_key =
         env::var("DEEPGRAM_API_KEY").map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
@@ -718,6 +741,7 @@ async fn run_microphone(
                 sample_rate,
                 encoding_clone,
                 numerals,
+                eager_eot_threshold,
                 stats_clone,
                 verbose,
                 inactivity_timeout_ms,
@@ -867,8 +891,11 @@ async fn run_file(
     threads: usize,
     inactivity_timeout_ms: u64,
     numerals: bool,
+    eager_eot_threshold: Option<f64>,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    validate_eager_eot_threshold(eager_eot_threshold)?;
+
     // Get API key from environment variable
     let api_key =
         env::var("DEEPGRAM_API_KEY").map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
@@ -949,6 +976,7 @@ async fn run_file(
                 actual_sample_rate,
                 encoding_clone,
                 numerals,
+                eager_eot_threshold,
                 stats_clone,
                 verbose,
                 inactivity_timeout_ms,
@@ -1090,6 +1118,19 @@ fn display_stats_table(stats: &StatsMap) {
     }
 }
 
+/// Flux accepts eager_eot_threshold values in the range 0.3-0.9; reject anything
+/// outside that range up front instead of letting Deepgram reject the connection.
+fn validate_eager_eot_threshold(threshold: Option<f64>) -> Result<(), Box<dyn std::error::Error>> {
+    match threshold {
+        Some(value) if !(0.3..=0.9).contains(&value) => Err(format!(
+            "--eager-eot-threshold must be between 0.3 and 0.9, got {}",
+            value
+        )
+        .into()),
+        _ => Ok(()),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configure logging to write to file
@@ -1109,11 +1150,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Microphone { endpoint, sample_rate, encoding, threads, inactivity_timeout, numerals, verbose } => {
-            run_microphone(endpoint, sample_rate, encoding, threads, inactivity_timeout, numerals, verbose).await?;
+        Commands::Microphone { endpoint, sample_rate, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, verbose } => {
+            run_microphone(endpoint, sample_rate, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, verbose).await?;
         }
-        Commands::File { path, endpoint, _sample_rate, encoding, threads, inactivity_timeout, numerals, verbose } => {
-            run_file(path, endpoint, encoding, threads, inactivity_timeout, numerals, verbose).await?;
+        Commands::File { path, endpoint, _sample_rate, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, verbose } => {
+            run_file(path, endpoint, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, verbose).await?;
         }
     }
 
