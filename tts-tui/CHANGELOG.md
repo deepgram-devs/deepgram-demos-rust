@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1 - 2026-07-21
+
+### Fixes
+
+- Fixed audible static/pop artifacts during playback by opening the audio output device (`rodio::OutputStream`) once at startup and reusing it for every play, instead of closing and reopening it on each individual playback. Only a lightweight `Sink` is created per play now.
+
 ## 0.9.0 - 2026-07-21
 
 ### Features

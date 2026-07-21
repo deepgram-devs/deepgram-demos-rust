@@ -43,6 +43,8 @@ cargo check -p tts-tui
 - Remove or invalidate the API key for an endpoint that requires one and verify the log panel shows a useful error.
 - Enable volume normalization and verify the request query contains `normalize_volume=true`; disable it and verify the parameter is omitted.
 - Press `v` and verify the status bar/log reports volume normalization enabled or disabled; verify the next request uses the new state.
+- Play several different texts/voices back-to-back in quick succession (bypassing the cache with `Ctrl+Enter` for at least one) and verify no audible pop, click, or static plays between or during tracks.
+- Start the app on a machine with no audio output device (or with audio hardware disabled) and verify the log panel shows "No audio output device available" at startup and that text/voice management still works without crashing.
 
 ### 2a. Flux TTS Voices
 
