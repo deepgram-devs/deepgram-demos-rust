@@ -86,6 +86,7 @@ Or with the built binary:
 - `--threads <N>` - Number of concurrent connections (default: 1)
 - `--inactivity-timeout <MS>` - Inactivity timeout in milliseconds (default: 10000)
 - `--numerals` - Convert spoken numbers into digits (e.g. "nine hundred" -> "900")
+- `--eager-eot-threshold <0.3-0.9>` (alias: `--eeot`) - Enable `EagerEndOfTurn`/`TurnResumed` events at this confidence threshold (default: disabled)
 - `--verbose` - Print statistics table instead of all messages
 
 **Example with custom options:**
@@ -98,6 +99,14 @@ cargo run -- microphone --sample-rate 16000 --threads 2 --verbose
 
 ```bash
 cargo run -- microphone --numerals
+```
+
+**Example with eager end-of-turn detection enabled:**
+
+```bash
+cargo run -- microphone --eager-eot-threshold 0.4
+# or, using the short alias
+cargo run -- microphone --eeot 0.4
 ```
 
 ### File Mode
@@ -128,6 +137,7 @@ Or with the built binary:
 - `--threads <N>` - Number of concurrent connections (default: 1)
 - `--inactivity-timeout <MS>` - Inactivity timeout in milliseconds (default: 10000)
 - `--numerals` - Convert spoken numbers into digits (e.g. "nine hundred" -> "900")
+- `--eager-eot-threshold <0.3-0.9>` (alias: `--eeot`) - Enable `EagerEndOfTurn`/`TurnResumed` events at this confidence threshold (default: disabled)
 - `--verbose` - Print full JSON responses instead of incremental transcription
 
 **Example commands:**
@@ -147,6 +157,9 @@ cargo run -- file --path audio.aac --verbose
 
 # Convert spoken numbers into digits
 cargo run -- file --path recording.mp3 --numerals
+
+# Enable eager end-of-turn detection (or use the short --eeot alias)
+cargo run -- file --path recording.mp3 --eager-eot-threshold 0.4
 ```
 
 ### Help
@@ -355,9 +368,12 @@ In microphone mode with multiple threads, a statistics table shows throughput fo
 This application connects to the Deepgram Flux API WebSocket endpoint:
 
 ```text
-wss://api.deepgram.com/v2/listen?model=flux-general-en&sample_rate={rate}&encoding=linear16&numerals={true|false}
+wss://api.deepgram.com/v2/listen?model=flux-general-en&sample_rate={rate}&encoding=linear16&numerals={true|false}&eager_eot_threshold={0.3-0.9}
 ```
 
-Note: `numerals` must be set when the connection is opened. Flux does not support toggling `numerals` mid-stream via a `Configure` message.
+Notes:
+
+- `numerals` must be set when the connection is opened. Flux does not support toggling `numerals` mid-stream via a `Configure` message.
+- `eager_eot_threshold` is only appended when `--eager-eot-threshold` is passed; omitting it disables `EagerEndOfTurn`/`TurnResumed` events (Flux's default). Unlike `numerals`, Flux does allow changing `eager_eot_threshold` mid-stream via a `Configure` message, though this CLI only sets it at connection time.
 
 For more information about the Flux API, visit: [Deepgram Flux Documentation](https://developers.deepgram.com/docs/flux)
