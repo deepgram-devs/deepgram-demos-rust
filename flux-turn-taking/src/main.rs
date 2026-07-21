@@ -157,7 +157,7 @@ enum Commands {
         /// lower-confidence signal that the turn may be ending so an agent reply can start
         /// preparing. A TurnResumed event follows if speech continues after all. Omit to
         /// disable eager end-of-turn detection (the default).
-        #[arg(long)]
+        #[arg(long, visible_alias = "eeot")]
         eager_eot_threshold: Option<f64>,
 
         /// Print all response messages instead of statistics table
@@ -199,7 +199,7 @@ enum Commands {
         /// lower-confidence signal that the turn may be ending so an agent reply can start
         /// preparing. A TurnResumed event follows if speech continues after all. Omit to
         /// disable eager end-of-turn detection (the default).
-        #[arg(long)]
+        #[arg(long, visible_alias = "eeot")]
         eager_eot_threshold: Option<f64>,
 
         /// Print full JSON responses instead of incremental transcription

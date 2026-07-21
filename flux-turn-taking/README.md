@@ -86,7 +86,7 @@ Or with the built binary:
 - `--threads <N>` - Number of concurrent connections (default: 1)
 - `--inactivity-timeout <MS>` - Inactivity timeout in milliseconds (default: 10000)
 - `--numerals` - Convert spoken numbers into digits (e.g. "nine hundred" -> "900")
-- `--eager-eot-threshold <0.3-0.9>` - Enable `EagerEndOfTurn`/`TurnResumed` events at this confidence threshold (default: disabled)
+- `--eager-eot-threshold <0.3-0.9>` (alias: `--eeot`) - Enable `EagerEndOfTurn`/`TurnResumed` events at this confidence threshold (default: disabled)
 - `--verbose` - Print statistics table instead of all messages
 
 **Example with custom options:**
@@ -105,6 +105,8 @@ cargo run -- microphone --numerals
 
 ```bash
 cargo run -- microphone --eager-eot-threshold 0.4
+# or, using the short alias
+cargo run -- microphone --eeot 0.4
 ```
 
 ### File Mode
@@ -135,7 +137,7 @@ Or with the built binary:
 - `--threads <N>` - Number of concurrent connections (default: 1)
 - `--inactivity-timeout <MS>` - Inactivity timeout in milliseconds (default: 10000)
 - `--numerals` - Convert spoken numbers into digits (e.g. "nine hundred" -> "900")
-- `--eager-eot-threshold <0.3-0.9>` - Enable `EagerEndOfTurn`/`TurnResumed` events at this confidence threshold (default: disabled)
+- `--eager-eot-threshold <0.3-0.9>` (alias: `--eeot`) - Enable `EagerEndOfTurn`/`TurnResumed` events at this confidence threshold (default: disabled)
 - `--verbose` - Print full JSON responses instead of incremental transcription
 
 **Example commands:**
@@ -156,7 +158,7 @@ cargo run -- file --path audio.aac --verbose
 # Convert spoken numbers into digits
 cargo run -- file --path recording.mp3 --numerals
 
-# Enable eager end-of-turn detection
+# Enable eager end-of-turn detection (or use the short --eeot alias)
 cargo run -- file --path recording.mp3 --eager-eot-threshold 0.4
 ```
 
