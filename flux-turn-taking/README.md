@@ -16,11 +16,12 @@ A Rust application that streams audio to the Deepgram Flux API via WebSocket for
 
 ### Transcription Display
 
-- **Single-connection transcript** - by default, prints the transcript from the first connection (connection 0); select another with `--connection`
+- **Single-connection transcript by default** - prints the transcript from the first connection (connection 0); select another with `--connection`
 - **Message-type prefix** - every printed line is prefixed with the Flux event that produced it (`StartOfTurn`, `Update`, `EagerEndOfTurn`, `TurnResumed`, `EndOfTurn`)
 - **Confidence scores** - `EagerEndOfTurn` and `EndOfTurn` lines are suffixed with their confidence score
 - **Color-coded speaker turns** - different colors for each turn_index, applied only to the transcript text (never to the statistics table)
 - **Real-time feedback** - see transcriptions as they happen
+- **Optional statistics table** - pass `--stats` to see live throughput/event counts for every connection instead of the transcript (useful for load testing)
 - **Verbose mode** - optional full JSON response output for debugging, for every connection
 
 ### Technical Features
@@ -89,6 +90,7 @@ Or with the built binary:
 - `--numerals` - Convert spoken numbers into digits (e.g. "nine hundred" -> "900")
 - `--eager-eot-threshold <0.3-0.9>` (alias: `--eeot`) - Enable `EagerEndOfTurn`/`TurnResumed` events at this confidence threshold (default: disabled)
 - `--connection <N>` - Which connection's transcript to print in the regular output mode (default: 0, the first connection)
+- `--stats` - Show a live statistics table for all connections instead of the selected connection's transcript
 - `--verbose` - Print full JSON responses for every connection instead of the selected connection's transcript
 
 **Example with custom options:**
@@ -115,6 +117,12 @@ cargo run -- microphone --eeot 0.4
 
 ```bash
 cargo run -- microphone --threads 4 --connection 2
+```
+
+**Example showing the live statistics table instead of a transcript:**
+
+```bash
+cargo run -- microphone --threads 4 --stats
 ```
 
 ### File Mode
@@ -147,6 +155,7 @@ Or with the built binary:
 - `--numerals` - Convert spoken numbers into digits (e.g. "nine hundred" -> "900")
 - `--eager-eot-threshold <0.3-0.9>` (alias: `--eeot`) - Enable `EagerEndOfTurn`/`TurnResumed` events at this confidence threshold (default: disabled)
 - `--connection <N>` - Which connection's transcript to print in the regular output mode (default: 0, the first connection)
+- `--stats` - Show a live statistics table for all connections instead of the selected connection's transcript
 - `--verbose` - Print full JSON responses for every connection instead of the selected connection's transcript
 
 **Example commands:**
@@ -172,6 +181,9 @@ cargo run -- file --path recording.mp3 --eager-eot-threshold 0.4
 
 # Print the transcript from connection 2 out of 4 concurrent connections
 cargo run -- file --path recording.mp3 --threads 4 --connection 2
+
+# Show the live statistics table instead of a transcript
+cargo run -- file --path recording.mp3 --threads 4 --stats
 ```
 
 ### Help
@@ -214,7 +226,8 @@ EndOfTurn: Here is some text that is being transcribed by Deepgram's Flux model.
 ```
 
 Only the selected connection's transcript is printed; other connections (when `--threads > 1`)
-still update the statistics table but produce no line output of their own.
+keep streaming and updating their counters in the background but produce no output of their own
+unless `--stats` is passed (see below).
 
 ### Verbose Mode
 
@@ -379,7 +392,8 @@ The application supports multiple concurrent connections for stress testing:
 cargo run -- file --path audio.mp3 --threads 10
 ```
 
-In microphone mode with multiple threads, a statistics table shows throughput for each connection:
+Add `--stats` (in either mode) to see a live statistics table showing throughput and Flux event
+counts for every connection, refreshed twice a second, instead of a single connection's transcript:
 
 ```text
 ┌────────┬────────────┬────────────┬─────────────┬────────┬────────────────┬─────────────┬───────────┬────────┬───────┐
