@@ -397,10 +397,21 @@ async fn fetch_deepgram_tts(
         request = request.header("Authorization", format!("Token {}", api_key));
     }
 
-    let res = request
-        .send()
-        .await
-        .context(format!("Failed to send request to Deepgram API at {}", url))?;
+    let request_details = format!(
+        "Request details:\n  Method: POST\n  URL: {}\n  Authorization: {}\n  Body: {{\"text\": {:?}}}",
+        url,
+        if api_key.is_some() {
+            "Token <redacted>"
+        } else {
+            "(none)"
+        },
+        text
+    );
+
+    let res = request.send().await.context(format!(
+        "Failed to send request to Deepgram API at {}\n\n{}",
+        url, request_details
+    ))?;
 
     // Check status and capture detailed error message if request failed
     if !res.status().is_success() {
@@ -410,9 +421,10 @@ async fn fetch_deepgram_tts(
             .await
             .unwrap_or_else(|_| "Unable to read error response".to_string());
         return Err(anyhow!(
-            "HTTP {} - Deepgram API error: {}",
+            "HTTP {} - Deepgram API error: {}\n\n{}",
             status,
-            error_body
+            error_body,
+            request_details
         ));
     }
 
