@@ -1,8 +1,9 @@
 [package]
 name = "dg-flux"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 default-run = "dg-flux"
+description = "A Rust CLI client for Deepgram's Flux streaming speech-to-text API, for turn-taking demos and load testing."
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
