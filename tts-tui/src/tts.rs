@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use claxon;
 use reqwest::{Client, Url};
 use rodio::buffer::SamplesBuffer;
-use rodio::{Decoder, OutputStream, Sink, Source};
+use rodio::{Decoder, OutputStreamHandle, Sink, Source};
 use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -137,9 +137,9 @@ pub fn play_audio_data_sync(
     data: &[u8],
     encoding: &str,
     sample_rate: u32,
-) -> Result<(Arc<Sink>, Arc<OutputStream>, u64)> {
-    let (stream, stream_handle) = OutputStream::try_default()?;
-    let sink = Sink::try_new(&stream_handle)?;
+    stream_handle: &OutputStreamHandle,
+) -> Result<(Arc<Sink>, u64)> {
+    let sink = Sink::try_new(stream_handle)?;
 
     // mulaw and alaw are returned as raw bytes by the Deepgram API with no container,
     // so rodio's Decoder cannot recognize them. Decode to linear PCM manually.
@@ -173,7 +173,7 @@ pub fn play_audio_data_sync(
         }
     };
 
-    Ok((Arc::new(sink), Arc::new(stream), duration_ms))
+    Ok((Arc::new(sink), duration_ms))
 }
 
 /// Decode a single G.711 μ-law byte to a signed 16-bit linear PCM sample.

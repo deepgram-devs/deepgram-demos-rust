@@ -161,7 +161,6 @@ fn kick_off_tts(
     if let Some(sink) = app.audio_sink.take() {
         sink.stop();
     }
-    app.audio_stream = None;
 
     app.start_loading(text.clone());
     app.set_status_message(format!("Generating audio: {}", text));
@@ -265,16 +264,30 @@ async fn run_app(
             // Play audio on main thread (not Send-safe, must stay here)
             let encoding = app.current_audio_format().encoding;
             let sample_rate = app.sample_rate;
-            match tts::play_audio_data_sync(&audio_data, encoding, sample_rate) {
-                Ok((sink, stream, duration_ms)) => {
-                    app.audio_sink = Some(sink);
-                    app.audio_stream = Some(stream);
-                    app.audio_duration_ms = duration_ms;
-                    app.playback_start_time = std::time::Instant::now();
+            match app.audio_stream_handle.clone() {
+                Some(stream_handle) => {
+                    match tts::play_audio_data_sync(
+                        &audio_data,
+                        encoding,
+                        sample_rate,
+                        &stream_handle,
+                    ) {
+                        Ok((sink, duration_ms)) => {
+                            app.audio_sink = Some(sink);
+                            app.audio_duration_ms = duration_ms;
+                            app.playback_start_time = std::time::Instant::now();
+                        }
+                        Err(e) => {
+                            app.stop_loading();
+                            app.add_log(format!("Error starting playback: {}", e));
+                        }
+                    }
                 }
-                Err(e) => {
+                None => {
                     app.stop_loading();
-                    app.add_log(format!("Error starting playback: {}", e));
+                    app.add_log(
+                        "Error starting playback: no audio output device available".to_string(),
+                    );
                 }
             }
         }

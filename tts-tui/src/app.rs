@@ -7,7 +7,7 @@ use lazy_static::lazy_static;
 use ratatui::layout::Rect;
 use ratatui::widgets::ListState;
 use ratatui::widgets::TableState;
-use rodio::OutputStream;
+use rodio::{OutputStream, OutputStreamHandle};
 use rust_decimal::Decimal;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::str::FromStr;
@@ -315,7 +315,12 @@ pub struct App {
     pub loading_text: String,
     pub spinner_index: usize,
     pub audio_sink: Option<Arc<rodio::Sink>>,
-    pub audio_stream: Option<Arc<OutputStream>>,
+    // Opened once at startup and held for the app's lifetime so playback
+    // doesn't reopen the OS audio device (and cause audible pops/static)
+    // on every play. Never read again after construction; kept alive only
+    // for its Drop impl, hence the leading underscore.
+    pub _audio_output_stream: Option<OutputStream>,
+    pub audio_stream_handle: Option<OutputStreamHandle>,
     pub tts_receiver: Option<mpsc::UnboundedReceiver<TtsResult>>,
     pub audio_duration_ms: u64,
     pub playback_start_time: std::time::Instant,
@@ -609,6 +614,24 @@ impl App {
 
         let persisted = persistence::load();
 
+        // Open the audio output device once, for the app's lifetime. Opening
+        // a fresh OutputStream on every play (the previous approach) closes
+        // and reopens the OS audio device each time, which is a known source
+        // of audible pop/click/static artifacts on many audio backends.
+        let (audio_output_stream, audio_stream_handle) = match OutputStream::try_default() {
+            Ok((stream, handle)) => (Some(stream), Some(handle)),
+            Err(e) => {
+                initial_logs.push(make_entry(
+                    LogLevel::Warning,
+                    format!(
+                        "No audio output device available ({}); playback will be disabled.",
+                        e
+                    ),
+                ));
+                (None, None)
+            }
+        };
+
         App {
             config,
             current_screen: CurrentScreen::Main,
@@ -642,7 +665,8 @@ impl App {
             loading_text: String::new(),
             spinner_index: 0,
             audio_sink: None,
-            audio_stream: None,
+            _audio_output_stream: audio_output_stream,
+            audio_stream_handle,
             tts_receiver: None,
             audio_duration_ms: 0,
             playback_start_time: std::time::Instant::now(),
@@ -1632,7 +1656,6 @@ impl App {
                 if done_by_sink || done_by_time {
                     self.stop_loading();
                     self.audio_sink = None;
-                    self.audio_stream = None;
                     if !self.playback_queue.is_empty() {
                         self.needs_queue_advance = true;
                     } else {
@@ -1647,7 +1670,6 @@ impl App {
         if let Some(sink) = self.audio_sink.take() {
             sink.stop();
         }
-        self.audio_stream = None;
         self.stop_loading();
         self.set_status_message("Playback stopped".to_string());
     }
