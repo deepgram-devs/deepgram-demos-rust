@@ -16,11 +16,12 @@ A Rust application that streams audio to the Deepgram Flux API via WebSocket for
 
 ### Transcription Display
 
-- **Incremental word printing** - words appear as they're recognized
-- **Color-coded speaker turns** - different colors for each turn_index
-- **Turn detection** - automatic line breaks when speakers change
+- **Single-connection transcript** - by default, prints the transcript from the first connection (connection 0); select another with `--connection`
+- **Message-type prefix** - every printed line is prefixed with the Flux event that produced it (`StartOfTurn`, `Update`, `EagerEndOfTurn`, `TurnResumed`, `EndOfTurn`)
+- **Confidence scores** - `EagerEndOfTurn` and `EndOfTurn` lines are suffixed with their confidence score
+- **Color-coded speaker turns** - different colors for each turn_index, applied only to the transcript text (never to the statistics table)
 - **Real-time feedback** - see transcriptions as they happen
-- **Verbose mode** - optional full JSON response output for debugging
+- **Verbose mode** - optional full JSON response output for debugging, for every connection
 
 ### Technical Features
 
@@ -87,7 +88,8 @@ Or with the built binary:
 - `--inactivity-timeout <MS>` - Inactivity timeout in milliseconds (default: 10000)
 - `--numerals` - Convert spoken numbers into digits (e.g. "nine hundred" -> "900")
 - `--eager-eot-threshold <0.3-0.9>` (alias: `--eeot`) - Enable `EagerEndOfTurn`/`TurnResumed` events at this confidence threshold (default: disabled)
-- `--verbose` - Print statistics table instead of all messages
+- `--connection <N>` - Which connection's transcript to print in the regular output mode (default: 0, the first connection)
+- `--verbose` - Print full JSON responses for every connection instead of the selected connection's transcript
 
 **Example with custom options:**
 
@@ -107,6 +109,12 @@ cargo run -- microphone --numerals
 cargo run -- microphone --eager-eot-threshold 0.4
 # or, using the short alias
 cargo run -- microphone --eeot 0.4
+```
+
+**Example printing the transcript from a specific connection (load-testing scenario):**
+
+```bash
+cargo run -- microphone --threads 4 --connection 2
 ```
 
 ### File Mode
@@ -138,7 +146,8 @@ Or with the built binary:
 - `--inactivity-timeout <MS>` - Inactivity timeout in milliseconds (default: 10000)
 - `--numerals` - Convert spoken numbers into digits (e.g. "nine hundred" -> "900")
 - `--eager-eot-threshold <0.3-0.9>` (alias: `--eeot`) - Enable `EagerEndOfTurn`/`TurnResumed` events at this confidence threshold (default: disabled)
-- `--verbose` - Print full JSON responses instead of incremental transcription
+- `--connection <N>` - Which connection's transcript to print in the regular output mode (default: 0, the first connection)
+- `--verbose` - Print full JSON responses for every connection instead of the selected connection's transcript
 
 **Example commands:**
 
@@ -160,6 +169,9 @@ cargo run -- file --path recording.mp3 --numerals
 
 # Enable eager end-of-turn detection (or use the short --eeot alias)
 cargo run -- file --path recording.mp3 --eager-eot-threshold 0.4
+
+# Print the transcript from connection 2 out of 4 concurrent connections
+cargo run -- file --path recording.mp3 --threads 4 --connection 2
 ```
 
 ### Help
@@ -174,9 +186,13 @@ cargo run -- file --help
 
 ## Output Examples
 
-### Default Mode (Incremental Transcription)
+### Default Mode (Regular Functional Mode)
 
-In default mode, words appear incrementally as they're recognized, with different colors for each speaker turn:
+In default mode, the app prints the transcript for the selected connection (connection 0 unless
+`--connection` says otherwise). Every Flux message produces one line, prefixed with the event type
+that produced it; `EagerEndOfTurn` and `EndOfTurn` lines are suffixed with their confidence score.
+All lines belonging to the same turn (`turn_index`) share a color, cycling to the next color when
+a new turn starts:
 
 ```text
 📁 Streaming file to Deepgram Flux API...
@@ -189,10 +205,16 @@ Transcription results:
 
 🎵 Streaming at real-time speed (100 ms chunks)...
 [Thread 0] 🔗 Deepgram Request ID: fd2790cb-9de9-4207-93ea-4349d1b74867
-Here is some text that is being transcribed by Deepgram's Flux model.
+StartOfTurn: Here
+Update: Here is
+Update: Here is some text
+EagerEndOfTurn: Here is some text that is being transcribed [eager_eot_confidence: 0.6200]
+Update: Here is some text that is being transcribed by
+EndOfTurn: Here is some text that is being transcribed by Deepgram's Flux model. [eot_confidence: 0.9100]
 ```
 
-Each line represents a different speaker turn, displayed in a different color in the terminal.
+Only the selected connection's transcript is printed; other connections (when `--threads > 1`)
+still update the statistics table but produce no line output of their own.
 
 ### Verbose Mode
 
@@ -226,8 +248,8 @@ With `--verbose`, see the full JSON responses from the Flux API:
 2. **Format Detection**: Sample rate, channels, and duration are automatically detected
 3. **Real-time Streaming**: Audio is chunked and streamed at real-time speed (100ms chunks by default)
 4. **WebSocket Communication**: Audio data is sent as binary messages to the Flux API
-5. **Incremental Display**: As `TurnInfo` messages arrive, new words are appended to the current line
-6. **Turn Detection**: When turn_index changes, a new line starts with a different color
+5. **Transcript Display**: Each `TurnInfo` message from the selected connection prints one line, prefixed with its event type
+6. **Turn Detection**: All lines sharing a `turn_index` are printed in the same color, cycling to the next color on a new turn
 7. **Completion**: When audio streaming completes, the connection closes gracefully
 
 ### Message Types
@@ -245,9 +267,9 @@ transition it represents:
 
 - `StartOfTurn` - The user has begun speaking for the first time in the turn
 - `Update` - Additional audio has been transcribed, but the turn state hasn't changed
-- `EagerEndOfTurn` - Moderate confidence the user has finished speaking; an opportunity to start preparing an agent reply
+- `EagerEndOfTurn` - Moderate confidence the user has finished speaking; an opportunity to start preparing an agent reply. Printed with its `end_of_turn_confidence` score as `[eager_eot_confidence: X.XXXX]`
 - `TurnResumed` - Speech is continuing after an `EagerEndOfTurn` was sent for this turn
-- `EndOfTurn` - The user has finished speaking for the turn; the client finalizes the line here
+- `EndOfTurn` - The user has finished speaking for the turn. Printed with its `end_of_turn_confidence` score as `[eot_confidence: X.XXXX]`
 
 Unlike Nova-3 streaming, Flux does not send separate `Results`, `SpeechStarted`,
 `UtteranceEnd`, or `Metadata` message types - all transcription and turn-state
@@ -265,7 +287,10 @@ updates arrive as `TurnInfo` messages distinguished by their `event` field.
 
 ### Color Scheme
 
-Different speaker turns cycle through these colors:
+Color is only ever applied to the selected connection's transcript text in the regular
+functional output mode; the statistics table (below) is always printed uncolored, even if
+a transcript line's color was still active moments before. Different speaker turns cycle
+through these colors:
 
 - Cyan
 - Green
@@ -337,12 +362,13 @@ export DEEPGRAM_API_KEY="your_api_key_here"
 - Check that the file is in a supported format (WAV, MP3, AAC)
 - Verify the file is not corrupted
 
-### No words appearing in output
+### No transcript appearing in output
 
 - Check `flux-turn-taking.log` for parsing errors
 - Try running with `--verbose` to see the raw API responses
 - Ensure your audio file contains speech
 - Verify the Flux API is returning TurnInfo events
+- With `--threads > 1`, confirm `--connection` points at a connection that's actually receiving speech
 
 ## Performance and Load Testing
 
