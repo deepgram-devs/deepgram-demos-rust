@@ -201,10 +201,28 @@ cargo run -- file --help
 ### Default Mode (Regular Functional Mode)
 
 In default mode, the app prints the transcript for the selected connection (connection 0 unless
-`--connection` says otherwise). Every Flux message produces one line, prefixed with the event type
-that produced it; `EagerEndOfTurn` and `EndOfTurn` lines are suffixed with their confidence score.
-All lines belonging to the same turn (`turn_index`) share a color, cycling to the next color when
-a new turn starts:
+`--connection` says otherwise). Each turn (`turn_index`) occupies a single terminal line: every
+Flux message for that turn redraws the line in place (erase + rewrite), rather than printing a
+new line, since Flux resends the full transcript-so-far on every message rather than just the new
+words. The line is prefixed with the event type that produced its current content
+(`StartOfTurn`, `Update`, `EagerEndOfTurn`, `TurnResumed`, `EndOfTurn`); `EagerEndOfTurn` and
+`EndOfTurn` redraws are suffixed with their confidence score. The line is only finalized (a
+newline is emitted) once the turn actually ends or a new turn begins, at which point the next
+turn starts on a fresh line in the next color.
+
+For example, over the course of one turn the line is redrawn several times in place:
+
+```text
+StartOfTurn: Here
+Update: Here is
+Update: Here is some text
+EagerEndOfTurn: Here is some text that is being transcribed [eager_eot_confidence: 0.6200]
+Update: Here is some text that is being transcribed by
+EndOfTurn: Here is some text that is being transcribed by Deepgram's Flux model. [eot_confidence: 0.9100]
+```
+
+...but since each redraw erases the previous one, what actually remains visible in the terminal
+once the turn ends is only the final line:
 
 ```text
 📁 Streaming file to Deepgram Flux API...
@@ -217,11 +235,6 @@ Transcription results:
 
 🎵 Streaming at real-time speed (100 ms chunks)...
 [Thread 0] 🔗 Deepgram Request ID: fd2790cb-9de9-4207-93ea-4349d1b74867
-StartOfTurn: Here
-Update: Here is
-Update: Here is some text
-EagerEndOfTurn: Here is some text that is being transcribed [eager_eot_confidence: 0.6200]
-Update: Here is some text that is being transcribed by
 EndOfTurn: Here is some text that is being transcribed by Deepgram's Flux model. [eot_confidence: 0.9100]
 ```
 
@@ -261,8 +274,8 @@ With `--verbose`, see the full JSON responses from the Flux API:
 2. **Format Detection**: Sample rate, channels, and duration are automatically detected
 3. **Real-time Streaming**: Audio is chunked and streamed at real-time speed (100ms chunks by default)
 4. **WebSocket Communication**: Audio data is sent as binary messages to the Flux API
-5. **Transcript Display**: Each `TurnInfo` message from the selected connection prints one line, prefixed with its event type
-6. **Turn Detection**: All lines sharing a `turn_index` are printed in the same color, cycling to the next color on a new turn
+5. **Transcript Display**: Each `TurnInfo` message from the selected connection redraws the current turn's line in place, prefixed with its event type
+6. **Turn Detection**: The line is finalized with a newline when the turn ends or changes; the next turn starts on a fresh line in the next color
 7. **Completion**: When audio streaming completes, the connection closes gracefully
 
 ### Message Types

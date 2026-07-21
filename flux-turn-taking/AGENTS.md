@@ -39,8 +39,9 @@ home position every tick).
 
 ## Transcript Line Format
 
-Each transcript line printed in the default (regular) output mode corresponds to exactly
-one Flux `TurnInfo` message from the selected connection:
+Each turn (`turn_index`) occupies exactly one terminal line in the default (regular)
+output mode. Every Flux `TurnInfo` message for that turn redraws the line in place —
+move to column 0, clear the current line, then print:
 
 ```
 <EventName>: <transcript>[ <confidence suffix>]
@@ -48,19 +49,26 @@ one Flux `TurnInfo` message from the selected connection:
 
 - `<EventName>` is the Flux `event` field, one of `StartOfTurn`, `Update`,
   `EagerEndOfTurn`, `TurnResumed`, `EndOfTurn` (see `TurnEvent` in `src/main.rs`).
-- `<transcript>` is the message's `transcript` field, not word-diffed — Flux already
-  sends the full transcript-so-far for the turn on every message, so there is no need to
-  track a "words already printed" cursor.
+- `<transcript>` is the message's `transcript` field, printed verbatim (not word-diffed)
+  — Flux resends the full transcript-so-far for the turn on every message, not just the
+  new words, so redrawing the whole line each time is both simpler and more correct than
+  trying to append only a computed delta (which would break if Flux ever revises earlier
+  words instead of purely appending).
 - The confidence suffix only appears on `EagerEndOfTurn` (`[eager_eot_confidence: X.XXXX]`)
-  and `EndOfTurn` (`[eot_confidence: X.XXXX]`) lines, sourced from the message's
+  and `EndOfTurn` (`[eot_confidence: X.XXXX]`) redraws, sourced from the message's
   `end_of_turn_confidence` field. Other event types never get a confidence suffix, even if
   Flux happens to include that field on them.
 
+The line is only finalized with a trailing newline when the turn actually ends
+(`event == EndOfTurn`) or when a new turn begins (`turn_index` changes) — do not print a
+newline after every message; that was tried and produced one scrolling line per message
+instead of a single line that updates in place per turn.
+
 Color is keyed off `turn_index % colors.len()` (not an incrementing counter), applied
-immediately before printing a transcript line and reset immediately after. Color must
-never be applied to the statistics table — `display_stats_table` defensively issues a
-`ResetColor` before drawing, specifically to guard against a transcript line's color still
-being active when the table redraws on its own timer.
+immediately before each redraw and reset immediately after. Color must never be applied
+to the statistics table — `display_stats_table` defensively issues a `ResetColor` before
+drawing, specifically to guard against a transcript line's color still being active when
+the table redraws on its own timer.
 
 ## Flux Message Schema
 
