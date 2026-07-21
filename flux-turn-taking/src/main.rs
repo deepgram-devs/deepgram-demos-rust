@@ -489,9 +489,13 @@ async fn handle_websocket_responses(
                                     // A real EndOfTurn finalizes the line. EagerEndOfTurn is
                                     // just a heads-up that the turn might be ending (a
                                     // TurnResumed may follow), so the line stays open until
-                                    // EndOfTurn arrives.
+                                    // EndOfTurn arrives. Clearing current_turn_index here means
+                                    // the next turn's first message won't also print a newline
+                                    // via the "new turn" check above, which would otherwise
+                                    // leave a blank line between every turn.
                                     if response.event == Some(TurnEvent::EndOfTurn) {
                                         println!();
+                                        current_turn_index = None;
                                     }
                                 }
                                 Err(e) => {
