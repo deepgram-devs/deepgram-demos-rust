@@ -2,17 +2,15 @@
 
 ## 0.9.1 - 2026-07-21
 
-### Fixes
-
-- Fixed audible static/pop artifacts during playback by opening the audio output device (`rodio::OutputStream`) once at startup and reusing it for every play, instead of closing and reopening it on each individual playback. Only a lightweight `Sink` is created per play now.
-
-## 0.9.0 - 2026-07-21
-
 ### Features
 
 - Added support for Deepgram's early-access Flux TTS model, including all 12 `flux-*-en` voices, selectable alongside Aura and Aura-2 in the Voices panel.
-- Automatically routed requests for Flux voices to `/v2/speak` instead of `/v1/speak` on the `deepgram` provider, with no configuration changes required.
 - Omitted the `speed` and `normalize_volume` query parameters for Flux requests, since Flux does not document support for them, and logged a note when either setting was active but ignored.
+
+### Fixes
+
+- Fixed audible static/pop artifacts during playback by opening the audio output device (`rodio::OutputStream`) once at startup and reusing it for every play, instead of closing and reopening it on each individual playback. Only a lightweight `Sink` is created per play now.
+- Included full request details (URL, headers, body) in Deepgram and SageMaker TTS error messages to make failures easier to diagnose.
 
 ### Documentation
 
