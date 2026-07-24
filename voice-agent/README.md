@@ -14,6 +14,24 @@ This is a Rust application that demonstrates bidirectional conversation using De
 - **Audio Response Handling**: Receives and plays back audio responses from the agent using rodio
 - **Smart Microphone Control**: Automatically disables microphone during agent speech and re-enables 600ms after silence (prevents feedback)
 - **Silent Packet Injection**: Sends silent audio frames while muted to keep the WebSocket connection alive
+- **Sample Function Calling**: Optionally register sample client-side tools (`--enable-sample-functions`) to exercise the agent's function-calling flow
+
+## Function Calling
+
+Pass `--enable-sample-functions` to register three client-side tools in `agent.think.functions`:
+
+- `get_current_time` — returns the current UTC time
+- `roll_dice` — rolls a die with an optional `sides` argument (default 6)
+- `get_weather` — returns mock weather data for a given `location`
+
+When the agent emits a `FunctionCallRequest` for one of these, the CLI computes a canned/mock
+result locally and replies with a `FunctionCallResponse` automatically — no server endpoint is
+involved. This is meant for exercising and debugging the function-calling round trip (e.g. with
+different `--think-type` providers), not as a real weather/time/dice integration.
+
+```bash
+cargo run -- --enable-sample-functions --verbose
+```
 
 ## Prerequisites
 
@@ -90,6 +108,7 @@ cargo run
 | `--prompt <TEXT>` | Concise responses | System prompt / instructions for the agent; overrides the default concise-response prompt |
 | `--verbose` | _(off)_ | Print full Settings JSON at startup and the Voice Agent request ID after connecting |
 | `--no-mic-mute` | _(off)_ | Disable mic muting during playback |
+| `--enable-sample-functions` | _(off)_ | Register sample client-side functions (`get_current_time`, `roll_dice`, `get_weather`) so the agent can call tools mid-conversation |
 
 ## Example Commands
 

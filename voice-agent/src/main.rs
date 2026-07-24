@@ -292,6 +292,11 @@ struct LaunchOptions {
     /// Disable microphone muting during agent audio playback
     #[arg(long)]
     no_mic_mute: bool,
+
+    /// Register a set of sample client-side functions (get_current_time, roll_dice,
+    /// get_weather) so the agent can call tools mid-conversation
+    #[arg(long)]
+    enable_sample_functions: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -346,8 +351,115 @@ struct ThinkConfig {
     provider: ThinkProviderConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    functions: Vec<FunctionDefinition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     endpoint: Option<ThinkEndpointConfig>,
+}
+
+/// A client-side function/tool definition sent in `agent.think.functions`.
+///
+/// Omitting `endpoint` (as this demo always does) marks the function as
+/// client-side: the agent emits a `FunctionCallRequest` over the WebSocket
+/// and expects this client to reply with a `FunctionCallResponse`, rather
+/// than the server invoking a webhook itself.
+#[derive(Debug, Serialize, Deserialize)]
+struct FunctionDefinition {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+}
+
+/// Sample client-side function definitions used to demonstrate and test
+/// tool-calling. Enabled with `--enable-sample-functions`.
+fn sample_functions() -> Vec<FunctionDefinition> {
+    vec![
+        FunctionDefinition {
+            name: "get_current_time".to_string(),
+            description: "Get the current date and time in UTC".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {},
+            }),
+        },
+        FunctionDefinition {
+            name: "roll_dice".to_string(),
+            description: "Roll a die with a given number of sides and return the result"
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "sides": {
+                        "type": "integer",
+                        "description": "Number of sides on the die (default 6)"
+                    }
+                },
+                "required": []
+            }),
+        },
+        FunctionDefinition {
+            name: "get_weather".to_string(),
+            description: "Get the current weather conditions for a location".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "City and state/country, e.g. 'Austin, TX'"
+                    }
+                },
+                "required": ["location"]
+            }),
+        },
+    ]
+}
+
+/// Produces a canned JSON result for one of the [`sample_functions`] by name.
+///
+/// These are stubs for demonstrating and testing the function-calling round
+/// trip, not real integrations: `get_weather` always returns mock data,
+/// `roll_dice` uses the system clock as a source of pseudo-randomness (this
+/// crate has no `rand` dependency), and `get_current_time` has no timezone
+/// support.
+fn execute_sample_function(name: &str, arguments_json: &str) -> String {
+    let arguments: serde_json::Value =
+        serde_json::from_str(arguments_json).unwrap_or(serde_json::Value::Null);
+
+    match name {
+        "get_current_time" => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            serde_json::json!({ "unix_time": now.as_secs(), "timezone": "UTC" }).to_string()
+        }
+        "roll_dice" => {
+            let sides = arguments
+                .get("sides")
+                .and_then(|v| v.as_u64())
+                .filter(|&sides| sides > 0)
+                .unwrap_or(6);
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos() as u64;
+            let result = (nanos % sides) + 1;
+            serde_json::json!({ "sides": sides, "result": result }).to_string()
+        }
+        "get_weather" => {
+            let location = arguments
+                .get("location")
+                .and_then(|v| v.as_str())
+                .unwrap_or("an unknown location");
+            serde_json::json!({
+                "location": location,
+                "conditions": "partly cloudy",
+                "temperature_f": 72,
+                "note": "This is mock data from the voice-agent CLI's sample functions."
+            })
+            .to_string()
+        }
+        other => serde_json::json!({ "error": format!("Unknown function: {other}") }).to_string(),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -752,6 +864,7 @@ fn create_agent_config(
     think_aws_secret_access_key: Option<&str>,
     think_aws_session_token: Option<&str>,
     prompt: Option<&str>,
+    enable_sample_functions: bool,
 ) -> VoiceAgentConfig {
     // Parse think headers from "key=value" format
     let mut headers = std::collections::HashMap::new();
@@ -766,6 +879,22 @@ fn create_agent_config(
         url: url.to_string(),
         headers,
     });
+
+    // Custom Google endpoints must not carry a model in the settings JSON — the
+    // model belongs in the endpoint URL path (e.g. ".../models/<model>:streamGenerateContent"),
+    // and Stem rejects Settings that specify both.
+    if think_type == "google" && think_endpoint.is_some() && !think_model.is_empty() {
+        log::warn!(
+            "--think-model is ignored for a custom Google endpoint; include the model in --think-endpoint instead (e.g. '.../models/{think_model}:streamGenerateContent?alt=sse')"
+        );
+    }
+    let think_model_for_settings = if think_type == "google" && think_endpoint.is_some() {
+        None
+    } else if think_model.is_empty() {
+        None
+    } else {
+        Some(think_model.to_string())
+    };
 
     // Build speak config based on provider type
     let speak_config = match speak.provider {
@@ -834,11 +963,7 @@ fn create_agent_config(
             think: ThinkConfig {
                 provider: ThinkProviderConfig {
                     provider_type: think_type.to_string(),
-                    model: if think_model.is_empty() {
-                        None
-                    } else {
-                        Some(think_model.to_string())
-                    },
+                    model: think_model_for_settings,
                     temperature: think_temperature,
                     credentials: think_credentials_type
                         .or(think_aws_region)
@@ -856,6 +981,11 @@ fn create_agent_config(
                         }),
                 },
                 prompt: Some(prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT).to_string()),
+                functions: if enable_sample_functions {
+                    sample_functions()
+                } else {
+                    Vec::new()
+                },
                 endpoint: endpoint_config,
             },
             speak: speak_config,
@@ -902,6 +1032,7 @@ fn config_from_options(
         options.think_aws_secret_access_key.as_deref(),
         options.think_aws_session_token.as_deref(),
         options.prompt.as_deref(),
+        options.enable_sample_functions,
     )
 }
 
@@ -1362,6 +1493,7 @@ async fn handle_voice_agent_responses(
     mic_enabled: Arc<AtomicBool>,
     mute_on_playback: bool,
     verbose: bool,
+    function_response_tx: mpsc::UnboundedSender<String>,
 ) {
     while let Some(message) = ws_receiver.next().await {
         match message {
@@ -1438,6 +1570,60 @@ async fn handle_voice_agent_responses(
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("");
                             log::warn!("⚠️ Agent warning [{}]: {}", code, desc);
+                        }
+                        "FunctionCallRequest" => {
+                            let functions = response
+                                .data
+                                .get("functions")
+                                .and_then(|f| f.as_array())
+                                .cloned()
+                                .unwrap_or_default();
+
+                            for function in functions {
+                                let id = function
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .to_string();
+                                let name = function
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .to_string();
+                                let arguments = function
+                                    .get("arguments")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("{}");
+                                let client_side = function
+                                    .get("client_side")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+
+                                if !client_side {
+                                    debug!("Ignoring server-side function call request: {}", name);
+                                    continue;
+                                }
+
+                                info!("🔧 Function call: {}({})", name, arguments);
+                                let content = execute_sample_function(&name, arguments);
+
+                                let function_response = serde_json::json!({
+                                    "type": "FunctionCallResponse",
+                                    "id": id,
+                                    "name": name,
+                                    "content": content,
+                                });
+                                match serde_json::to_string(&function_response) {
+                                    Ok(text) => {
+                                        if let Err(e) = function_response_tx.send(text) {
+                                            error!("Failed to queue function call response: {}", e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to serialize function call response: {}", e);
+                                    }
+                                }
+                            }
                         }
                         _ => {
                             debug!(
@@ -1581,6 +1767,10 @@ async fn run_voice_agent(
     let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let (playback_tx, playback_rx) = std_mpsc::channel::<Vec<u8>>();
 
+    // Channel for outbound text messages (e.g. FunctionCallResponse) generated
+    // while handling WebSocket responses, forwarded to the socket alongside audio.
+    let (function_response_tx, mut function_response_rx) = mpsc::unbounded_channel::<String>();
+
     let mute_on_playback = !args.no_mic_mute;
     if !mute_on_playback {
         info!("Microphone muting during playback is disabled");
@@ -1652,6 +1842,7 @@ async fn run_voice_agent(
             mic_enabled_for_ws,
             mute_on_playback,
             args.verbose,
+            function_response_tx,
         )
         .await;
     });
@@ -1662,19 +1853,37 @@ async fn run_voice_agent(
 
     let audio_handle = tokio::spawn(async move {
         let mut packet_count = 0u64;
+        let mut function_responses_closed = false;
 
-        while let Some(audio_data) = audio_rx.recv().await {
-            packet_count += 1;
+        loop {
+            tokio::select! {
+                audio_data = audio_rx.recv() => {
+                    let Some(audio_data) = audio_data else { break };
+                    packet_count += 1;
 
-            // Send audio data as binary message
-            if let Err(e) = ws_sender.send(Message::Binary(audio_data.into())).await {
-                error!("❌ Failed to send audio data to WebSocket: {}", e);
-                break;
-            }
+                    // Send audio data as binary message
+                    if let Err(e) = ws_sender.send(Message::Binary(audio_data.into())).await {
+                        error!("❌ Failed to send audio data to WebSocket: {}", e);
+                        break;
+                    }
 
-            // Log every 100 packets to avoid spam
-            if packet_count % 100 == 0 {
-                debug!("📤 Sent {} audio packets to WebSocket", packet_count);
+                    // Log every 100 packets to avoid spam
+                    if packet_count % 100 == 0 {
+                        debug!("📤 Sent {} audio packets to WebSocket", packet_count);
+                    }
+                }
+                function_response = function_response_rx.recv(), if !function_responses_closed => {
+                    match function_response {
+                        Some(text) => {
+                            debug!("📤 Sending function call response: {}", text);
+                            if let Err(e) = ws_sender.send(Message::Text(text.into())).await {
+                                error!("❌ Failed to send function call response: {}", e);
+                                break;
+                            }
+                        }
+                        None => function_responses_closed = true,
+                    }
+                }
             }
         }
     });
@@ -1739,6 +1948,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         );
 
         serde_json::to_value(config).expect("settings config should serialize")
