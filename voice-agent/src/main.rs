@@ -237,6 +237,18 @@ struct LaunchOptions {
     #[arg(long, num_args = 0..=1, default_missing_value = "true")]
     listen_smart_format: Option<bool>,
 
+    /// Audio encoding sent to the Voice Agent listen provider
+    #[arg(long, value_parser = ["linear16", "linear32", "mulaw", "alaw"], default_value = "linear16")]
+    audio_encoding: String,
+
+    /// Microphone capture and input audio sample rate in Hz
+    #[arg(
+        long,
+        default_value_t = 24000,
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    audio_sample_rate: u32,
+
     /// Eleven Labs voice ID (used in the endpoint URL)
     #[arg(long)]
     speak_voice_id: Option<String>,
@@ -555,7 +567,7 @@ struct AudioCapture {
 }
 
 impl AudioCapture {
-    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    fn new(sample_rate: u32) -> Result<Self, Box<dyn std::error::Error>> {
         let host = cpal::default_host();
         let device = host
             .default_input_device()
@@ -563,11 +575,31 @@ impl AudioCapture {
 
         debug!("Input device: {}", device.name()?);
 
-        let supported_config = device.default_input_config()?;
-        debug!("Default input config: {:?}", supported_config);
+        let default_config = device.default_input_config()?;
+        debug!("Default input config: {:?}", default_config);
+
+        let supported_config = device
+            .supported_input_configs()?
+            .find(|config| {
+                config.channels() == default_config.channels()
+                    && config.sample_format() == default_config.sample_format()
+                    && config.min_sample_rate().0 <= sample_rate
+                    && config.max_sample_rate().0 >= sample_rate
+            })
+            .ok_or_else(|| {
+                format!(
+                    "Input device does not support {} Hz with its default channel count ({}) and sample format ({:?})",
+                    sample_rate,
+                    default_config.channels(),
+                    default_config.sample_format()
+                )
+            })?;
 
         let sample_format = supported_config.sample_format();
-        let config: StreamConfig = supported_config.into();
+        let config: StreamConfig = supported_config
+            .with_sample_rate(cpal::SampleRate(sample_rate))
+            .into();
+        debug!("Selected input config: {:?}", config);
 
         Ok(AudioCapture {
             device,
@@ -580,13 +612,15 @@ impl AudioCapture {
         &self,
         tx: mpsc::UnboundedSender<Vec<u8>>,
         mic_enabled: Arc<AtomicBool>,
+        encoding: &str,
     ) -> Result<Stream, Box<dyn std::error::Error>> {
         let config = self.config.clone();
+        let encoding = encoding.to_string();
 
         let stream = match self.sample_format {
-            SampleFormat::F32 => self.build_stream::<f32>(config, tx, mic_enabled)?,
-            SampleFormat::I16 => self.build_stream::<i16>(config, tx, mic_enabled)?,
-            SampleFormat::U16 => self.build_stream::<u16>(config, tx, mic_enabled)?,
+            SampleFormat::F32 => self.build_stream::<f32>(config, tx, mic_enabled, &encoding)?,
+            SampleFormat::I16 => self.build_stream::<i16>(config, tx, mic_enabled, &encoding)?,
+            SampleFormat::U16 => self.build_stream::<u16>(config, tx, mic_enabled, &encoding)?,
             _ => return Err("Unsupported sample format".into()),
         };
 
@@ -599,26 +633,21 @@ impl AudioCapture {
         config: StreamConfig,
         tx: mpsc::UnboundedSender<Vec<u8>>,
         mic_enabled: Arc<AtomicBool>,
+        encoding: &str,
     ) -> Result<Stream, Box<dyn std::error::Error>>
     where
         T: cpal::Sample + cpal::SizedSample + Send + 'static,
         f32: cpal::FromSample<T>,
     {
+        let encoding = encoding.to_string();
         let stream = self.device.build_input_stream(
             &config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
                 let audio_data = if mic_enabled.load(Ordering::Relaxed) {
-                    // Convert real mic samples to linear16 for Deepgram
-                    let mut buf = Vec::with_capacity(data.len() * 2);
-                    for &sample in data.iter() {
-                        let f32_sample: f32 = cpal::Sample::from_sample(sample);
-                        let i16_sample = (f32_sample * i16::MAX as f32) as i16;
-                        buf.extend_from_slice(&i16_sample.to_le_bytes());
-                    }
-                    buf
+                    encode_audio_samples(data, &encoding)
                 } else {
                     // Mic is muted — send silence to keep the connection alive
-                    vec![0u8; data.len() * 2]
+                    vec![0u8; data.len() * encoded_sample_width(&encoding)]
                 };
 
                 if let Err(_e) = tx.send(audio_data) {
@@ -630,6 +659,60 @@ impl AudioCapture {
         )?;
 
         Ok(stream)
+    }
+}
+
+fn encoded_sample_width(encoding: &str) -> usize {
+    match encoding {
+        "linear16" => 2,
+        "linear32" => 4,
+        "mulaw" | "alaw" => 1,
+        _ => unreachable!("audio encoding is validated by clap"),
+    }
+}
+
+fn encode_audio_samples<T>(samples: &[T], encoding: &str) -> Vec<u8>
+where
+    T: cpal::Sample,
+    f32: cpal::FromSample<T>,
+{
+    let mut buf = Vec::with_capacity(samples.len() * encoded_sample_width(encoding));
+    for &sample in samples {
+        let sample: f32 = cpal::Sample::from_sample(sample);
+        match encoding {
+            "linear16" => buf.extend_from_slice(
+                &((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16).to_le_bytes(),
+            ),
+            "linear32" => buf.extend_from_slice(
+                &((sample.clamp(-1.0, 1.0) * i32::MAX as f32) as i32).to_le_bytes(),
+            ),
+            "mulaw" => buf.push(encode_mulaw(sample)),
+            "alaw" => buf.push(encode_alaw(sample)),
+            _ => unreachable!("audio encoding is validated by clap"),
+        }
+    }
+    buf
+}
+
+fn encode_mulaw(sample: f32) -> u8 {
+    let sample = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
+    let sign = if sample < 0 { 0x80 } else { 0 };
+    let magnitude = sample.unsigned_abs().min(32635) + 132;
+    let exponent = (15 - magnitude.leading_zeros()).min(7) as u8;
+    let mantissa = ((magnitude >> (exponent + 3)) & 0x0f) as u8;
+    !(sign | (exponent << 4) | mantissa)
+}
+
+fn encode_alaw(sample: f32) -> u8 {
+    let sample = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
+    let sign = if sample < 0 { 0x80 } else { 0 };
+    let magnitude = sample.unsigned_abs().min(32767);
+    if magnitude < 256 {
+        (sign | ((magnitude >> 4) as u8)) ^ 0x55
+    } else {
+        let exponent = (15 - magnitude.leading_zeros()).min(7) as u8;
+        let mantissa = ((magnitude >> (exponent - 3)) & 0x0f) as u8;
+        (sign | ((exponent << 4) | mantissa)) ^ 0x55
     }
 }
 
@@ -849,8 +932,8 @@ fn cleaned_values(values: &[String]) -> Vec<String> {
 }
 
 fn create_agent_config(
+    audio_encoding: &str,
     sample_rate: u32,
-    _channels: u16,
     listen: ListenArgs<'_>,
     speak: SpeakArgs<'_>,
     think_type: &str,
@@ -937,7 +1020,7 @@ fn create_agent_config(
         tags: vec!["demo".to_string(), "voice_agent".to_string()],
         audio: AudioSettings {
             input: AudioInputConfig {
-                encoding: "linear16".to_string(),
+                encoding: audio_encoding.to_string(),
                 sample_rate,
             },
             output: AudioOutputConfig {
@@ -995,13 +1078,11 @@ fn create_agent_config(
 
 fn config_from_options(
     options: &LaunchOptions,
-    sample_rate: u32,
-    channels: u16,
     eleven_labs_api_key: Option<String>,
 ) -> VoiceAgentConfig {
     create_agent_config(
-        sample_rate,
-        channels,
+        &options.audio_encoding,
+        options.audio_sample_rate,
         ListenArgs {
             provider: &options.listen_provider,
             model: &options.listen_model,
@@ -1711,13 +1792,8 @@ async fn create_agent_configuration(
     let project_id =
         resolve_project_id(&api_key, args.project_id.as_deref(), args.launch.verbose).await?;
     let eleven_labs_api_key = load_eleven_labs_api_key(&args.launch)?;
-    let audio_capture = AudioCapture::new()?;
-    let config = config_from_options(
-        &args.launch,
-        audio_capture.config.sample_rate.0,
-        audio_capture.config.channels,
-        eleven_labs_api_key,
-    );
+    let _audio_capture = AudioCapture::new(args.launch.audio_sample_rate)?;
+    let config = config_from_options(&args.launch, eleven_labs_api_key);
     let agent_id = create_reusable_agent_config(
         &api_key,
         &project_id,
@@ -1751,13 +1827,12 @@ async fn run_voice_agent(
     debug!("Using endpoint: {}", args.endpoint);
 
     // Initialize audio capture
-    let audio_capture = AudioCapture::new()?;
-    let sample_rate = audio_capture.config.sample_rate.0;
+    let audio_capture = AudioCapture::new(args.audio_sample_rate)?;
     let channels = audio_capture.config.channels;
 
     debug!(
-        "Audio config - Sample rate: {}, Channels: {}",
-        sample_rate, channels
+        "Audio config - Sample rate: {} Hz, Channels: {}",
+        args.audio_sample_rate, channels
     );
 
     // Create microphone control flag - start with mic enabled
@@ -1796,10 +1871,11 @@ async fn run_voice_agent(
 
     // Start audio capture with microphone control
     let mic_enabled_for_capture = Arc::clone(&mic_enabled);
-    let _stream = audio_capture.start_capture(audio_tx, mic_enabled_for_capture)?;
+    let _stream =
+        audio_capture.start_capture(audio_tx, mic_enabled_for_capture, &args.audio_encoding)?;
     debug!("Audio capture started");
 
-    let mut config = config_from_options(&args, sample_rate, channels, eleven_labs_api_key);
+    let mut config = config_from_options(&args, eleven_labs_api_key);
     if let Some(agent_id) = agent_config_id {
         config.agent = AgentConfiguration::Reference(agent_id.to_string());
     }
@@ -1808,7 +1884,7 @@ async fn run_voice_agent(
     let ws_stream = connect_to_voice_agent(
         &api_key,
         &args.endpoint,
-        sample_rate,
+        args.audio_sample_rate,
         channels,
         args.verbose,
     )
@@ -1916,8 +1992,8 @@ mod tests {
     ) -> serde_json::Value {
         let keyterms: Vec<String> = Vec::new();
         let config = create_agent_config(
+            "linear16",
             16000,
-            1,
             ListenArgs {
                 provider: "deepgram",
                 model,
@@ -2009,6 +2085,29 @@ mod tests {
             .expect("language hint CSV should parse");
 
         assert_eq!(args.launch.language_hints, vec!["en", "es"]);
+    }
+
+    #[test]
+    fn audio_options_accept_supported_encoding_and_sample_rate() {
+        let args = Args::try_parse_from([
+            "voice-agent",
+            "--audio-encoding",
+            "mulaw",
+            "--audio-sample-rate",
+            "8000",
+        ])
+        .expect("audio options should parse");
+
+        assert_eq!(args.launch.audio_encoding, "mulaw");
+        assert_eq!(args.launch.audio_sample_rate, 8000);
+    }
+
+    #[test]
+    fn audio_encoding_uses_expected_sample_width() {
+        assert_eq!(encoded_sample_width("linear16"), 2);
+        assert_eq!(encoded_sample_width("linear32"), 4);
+        assert_eq!(encoded_sample_width("mulaw"), 1);
+        assert_eq!(encoded_sample_width("alaw"), 1);
     }
 
     #[test]

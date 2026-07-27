@@ -94,6 +94,8 @@ cargo run
 | `--listen-eot-threshold <VALUE>` | _(none)_ | End-of-turn threshold for `agent.listen.provider.eot_threshold` |
 | `--listen-eager-eot-threshold <VALUE>` | _(none)_ | Eager end-of-turn threshold for `agent.listen.provider.eager_eot_threshold` |
 | `--listen-smart-format [true\|false]` | _(none)_ | Optional smart formatting for `agent.listen.provider.smart_format`; omitted from Settings JSON when unspecified |
+| `--audio-encoding <ENCODING>` | `linear16` | Microphone encoding for Voice Agent audio input: `linear16`, `linear32`, `mulaw`, or `alaw` |
+| `--audio-sample-rate <HZ>` | `24000` | Microphone capture and Voice Agent audio input sample rate; the device must support this rate |
 | `--speak-model <MODEL>` | `aura-2-thalia-en` | TTS model for agent voice |
 | `--think-type <TYPE>` | `open_ai` | LLM provider type |
 | `--think-model <MODEL>` | `gpt-4o-mini` | LLM model |
@@ -138,6 +140,9 @@ cargo run -- --listen-model nova-3 \
              --listen-eager-eot-threshold 0.4 \
              --listen-smart-format \
              --verbose
+
+# Capture and send microphone audio as 8-bit mu-law at 8 kHz
+cargo run -- --audio-encoding mulaw --audio-sample-rate 8000
 
 # Use Claude via a custom endpoint
 cargo run -- --think-type anthropic \

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+- Added `--audio-encoding` support for `linear16`, `linear32`, `mulaw`, and `alaw` microphone audio.
+- Added `--audio-sample-rate` to configure microphone capture and Voice Agent input audio sample rate.
+
 ## [0.1.3] - 2026-07-14
 
 ### Changed
