@@ -10,14 +10,14 @@ use indicatif::{ProgressBar, ProgressStyle};
 use serde::Deserialize;
 use std::env;
 use std::fs::{File, OpenOptions};
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{Cursor, Write};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{CODEC_TYPE_NULL, CodecType, DecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::FormatOptions;
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use tokio::sync::{mpsc, oneshot};
@@ -53,7 +53,9 @@ fn api_key_for_endpoint(
 
 #[cfg(test)]
 mod tests {
-    use super::hosted_deepgram_endpoint;
+    use super::{
+        hosted_deepgram_endpoint, repair_wav_header, wav_data_len, DeepgramResponse,
+    };
 
     #[test]
     fn default_and_hosted_endpoints_require_deepgram_auth() {
@@ -69,6 +71,42 @@ mod tests {
         assert!(!hosted_deepgram_endpoint(Some(
             "https://stt.internal.example.com"
         )));
+    }
+
+    #[test]
+    fn response_parser_accepts_message_specific_channel_shapes() {
+        let results: DeepgramResponse = serde_json::from_str(
+            r#"{"type":"Results","channel":{"alternatives":[]}}"#,
+        )
+        .unwrap();
+        assert!(results.channel.unwrap().is_object());
+
+        let speech_started: DeepgramResponse =
+            serde_json::from_str(r#"{"type":"SpeechStarted","channel":0}"#).unwrap();
+        assert_eq!(speech_started.channel.unwrap(), serde_json::json!(0));
+
+        let utterance_end: DeepgramResponse = serde_json::from_str(
+            r#"{"type":"UtteranceEnd","channel":[0,1],"last_word_end":1.2}"#,
+        )
+        .unwrap();
+        assert_eq!(utterance_end.channel.unwrap(), serde_json::json!([0, 1]));
+    }
+
+    #[test]
+    fn wav_data_len_uses_bytes_when_declared_chunk_size_is_zero() {
+        let mut wav = b"RIFF\0\0\0\0WAVEdata\0\0\0\0".to_vec();
+        wav.extend_from_slice(&[0; 8]);
+
+        assert_eq!(wav_data_len(&wav), Some(8));
+    }
+
+    #[test]
+    fn malformed_wav_header_is_repaired_for_streaming() {
+        let mut wav = b"RIFF\0\0\0\0WAVEdata\0\0\0\0".to_vec();
+        wav.extend_from_slice(&[0; 8]);
+
+        let repaired = repair_wav_header(wav).unwrap();
+        assert_eq!(&repaired[16..20], &8u32.to_le_bytes());
     }
 }
 
@@ -119,7 +157,11 @@ enum Commands {
 struct DeepgramResponse {
     #[serde(rename = "type")]
     message_type: String,
-    channel: Option<Channel>,
+    // Deepgram uses different channel shapes for Results and control events:
+    // Results uses an object, while SpeechStarted/UtteranceEnd may use a scalar
+    // or an array. Keep this raw until the message type is known.
+    #[serde(default)]
+    channel: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -292,6 +334,112 @@ struct AudioFileReader {
     path: PathBuf,
 }
 
+/// Return the number of bytes in a WAV data chunk.
+///
+/// Some recording tools leave the data chunk length as zero while appending
+/// the actual samples to the file. In that case, use the bytes available after
+/// the chunk header instead of trusting the invalid declared length.
+fn wav_data_len(bytes: &[u8]) -> Option<u64> {
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+
+    let mut offset = 12usize;
+    while offset.checked_add(8)? <= bytes.len() {
+        let chunk_size = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().ok()?) as u64;
+        let data_start = offset + 8;
+        let available = bytes.len().saturating_sub(data_start) as u64;
+
+        if &bytes[offset..offset + 4] == b"data" {
+            return Some(if chunk_size == 0 || chunk_size > available {
+                available
+            } else {
+                chunk_size
+            });
+        }
+
+        let next = data_start
+            .checked_add(chunk_size as usize)?
+            .checked_add((chunk_size as usize) & 1)?;
+        if next > bytes.len() {
+            break;
+        }
+        offset = next;
+    }
+
+    None
+}
+
+/// Repair a malformed WAV data chunk in memory so Symphonia can stream it.
+/// Returns `None` when the file is valid or is not a WAV file.
+fn repair_wav_header(mut bytes: Vec<u8>) -> Option<Vec<u8>> {
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+
+    let mut offset = 12usize;
+    while offset.checked_add(8)? <= bytes.len() {
+        let chunk_size = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().ok()?) as u64;
+        let data_start = offset + 8;
+        let available = bytes.len().saturating_sub(data_start) as u64;
+
+        if &bytes[offset..offset + 4] == b"data" {
+            if chunk_size != 0 && chunk_size <= available {
+                return None;
+            }
+            let data_len = u32::try_from(available).ok()?;
+            bytes[offset + 4..offset + 8].copy_from_slice(&data_len.to_le_bytes());
+            let riff_len = u32::try_from(bytes.len().saturating_sub(8)).ok()?;
+            bytes[4..8].copy_from_slice(&riff_len.to_le_bytes());
+            return Some(bytes);
+        }
+
+        let next = data_start
+            .checked_add(chunk_size as usize)?
+            .checked_add((chunk_size as usize) & 1)?;
+        if next > bytes.len() {
+            break;
+        }
+        offset = next;
+    }
+
+    None
+}
+
+fn fallback_wav_frame_count(path: &Path, codec_params: &symphonia::core::codecs::CodecParameters) -> Option<u64> {
+    use symphonia::core::codecs::*;
+
+    let is_pcm = matches!(
+        codec_params.codec,
+        CODEC_TYPE_PCM_S16LE
+            | CODEC_TYPE_PCM_S16BE
+            | CODEC_TYPE_PCM_S24LE
+            | CODEC_TYPE_PCM_S24BE
+            | CODEC_TYPE_PCM_S32LE
+            | CODEC_TYPE_PCM_S32BE
+            | CODEC_TYPE_PCM_F32LE
+            | CODEC_TYPE_PCM_F32BE
+            | CODEC_TYPE_PCM_F64LE
+            | CODEC_TYPE_PCM_F64BE
+            | CODEC_TYPE_PCM_ALAW
+            | CODEC_TYPE_PCM_MULAW
+    );
+    if !is_pcm
+        || !path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+    {
+        return None;
+    }
+
+    let channels = codec_params.channels?.count() as u64;
+    let bits_per_sample = codec_params.bits_per_sample? as u64;
+    let bytes_per_frame = channels.checked_mul((bits_per_sample + 7) / 8)?;
+    let data_len = wav_data_len(&std::fs::read(path).ok()?)?;
+    Some(data_len / bytes_per_frame)
+}
+
 impl AudioFileReader {
     fn new(path: PathBuf) -> Self {
         AudioFileReader { path }
@@ -304,8 +452,21 @@ impl AudioFileReader {
         ready_rx: Option<oneshot::Receiver<()>>,
         fast_mode: bool,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let file = File::open(&self.path)?;
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        let repaired_wav = if self
+            .path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+        {
+            std::fs::read(&self.path).ok().and_then(repair_wav_header)
+        } else {
+            None
+        };
+        let source: Box<dyn MediaSource> = match repaired_wav {
+            Some(bytes) => Box::new(Cursor::new(bytes)),
+            None => Box::new(File::open(&self.path)?),
+        };
+        let mss = MediaSourceStream::new(source, Default::default());
 
         let mut hint = Hint::new();
         if let Some(ext) = self.path.extension() {
@@ -330,7 +491,10 @@ impl AudioFileReader {
 
         let sample_rate = codec_params.sample_rate.ok_or("Sample rate not found")?;
         let channels = codec_params.channels.ok_or("Channels not found")?.count() as u16;
-        let total_frames = codec_params.n_frames;
+        let total_frames = codec_params
+            .n_frames
+            .filter(|frames| *frames > 0)
+            .or_else(|| fallback_wav_frame_count(&self.path, codec_params));
 
         // --- File metadata ---
         let codec_str = codec_name(codec_params.codec);
@@ -507,9 +671,9 @@ async fn run_deepgram_client(
 ) -> StreamResult {
     let prefix = connection_prefix(connection_id, connection_count);
 
-    // Validate utterance_end dependencies
-    if config.utterance_end.is_some() && (!config.interim_results || !config.vad_events) {
-        return Err("--utterance-end requires --interim-results true and --vad-events".into());
+    // UtteranceEnd relies on interim results to detect the gap after the last finalized word.
+    if config.utterance_end.is_some() && !config.interim_results {
+        return Err("--utterance-end requires --interim-results".into());
     }
 
     // Use custom endpoint or default to Deepgram API
@@ -741,7 +905,10 @@ async fn run_deepgram_client(
                             match serde_json::from_str::<DeepgramResponse>(&text) {
                                 Ok(response) => {
                                     if response.message_type == "Results" {
-                                        if let Some(channel) = response.channel {
+                                        let channel = response.channel.and_then(|channel| {
+                                            serde_json::from_value::<Channel>(channel).ok()
+                                        });
+                                        if let Some(channel) = channel {
                                             for alternative in channel.alternatives {
                                                 if !alternative.transcript.trim().is_empty() && !silent {
                                                     if diarize && !alternative.words.is_empty() {
@@ -964,6 +1131,8 @@ async fn run_microphone_mode(
     model: Option<String>,
     redact: Option<String>,
     language: Option<String>,
+    endpointing: Option<u32>,
+    utterance_end: Option<u32>,
     keyterm: Option<String>,
     keywords: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1010,8 +1179,8 @@ async fn run_microphone_mode(
         model,
         redact,
         language,
-        endpointing: None,
-        utterance_end: None,
+        endpointing,
+        utterance_end,
         keyterm,
         keywords,
     };
@@ -1234,6 +1403,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 model,
                 redact,
                 language,
+                endpointing,
+                utterance_end,
                 keyterm,
                 keywords,
             } => {
@@ -1260,6 +1431,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     model,
                     redact,
                     language,
+                    endpointing,
+                    utterance_end,
                     keyterm,
                     keywords,
                 )
