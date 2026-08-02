@@ -85,6 +85,15 @@ pub enum StreamSource {
         #[arg(long)]
         language: Option<String>,
 
+        /// Time in milliseconds of silence before Deepgram finalizes a transcript segment.
+        #[arg(long)]
+        endpointing: Option<u32>,
+
+        /// Time in milliseconds of silence after the last finalized word before Deepgram
+        /// sends an UtteranceEnd message. Requires --interim-results.
+        #[arg(long)]
+        utterance_end: Option<u32>,
+
         /// Comma-separated keyterms to boost recognition for (nova-3+ only, e.g. --keyterm "Deepgram,nova-3,speech AI")
         #[arg(long, conflicts_with = "keywords")]
         keyterm: Option<String>,
@@ -191,7 +200,7 @@ pub enum StreamSource {
 
         /// Utterance end timeout in milliseconds (e.g., 1000). Deepgram sends an UtteranceEnd
         /// message after this many ms of silence, signaling the end of an utterance.
-        /// Requires --interim-results and --vad-events to also be specified.
+        /// Requires --interim-results.
         #[arg(long)]
         utterance_end: Option<u32>,
 

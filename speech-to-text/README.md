@@ -155,8 +155,8 @@ cargo run -- transcribe --file path/to/audio.mp3
 | `--connections <N>` | Open N parallel Deepgram streaming WebSocket connections fed by the same microphone or file audio |
 | `--keyterm <TERMS>` | Comma-separated keyterms for nova-3+ (e.g., `"Deepgram,nova-3"`) |
 | `--keywords <TERMS>` | Comma-separated keywords for nova-2 and older, with optional intensifier (e.g., `"Deepgram:2,API"`) |
-| `--endpointing <MS>` | Endpointing sensitivity in ms (file mode; e.g., `300`) |
-| `--utterance-end <MS>` | Utterance end timeout in ms (file mode; requires `--interim-results` and `--vad-events`) |
+| `--endpointing <MS>` | Endpointing silence threshold in ms (e.g., `300`) |
+| `--utterance-end <MS>` | Utterance end timeout in ms; sends `UtteranceEnd` after the configured gap (requires `--interim-results`) |
 | `--fast` | Stream file as fast as possible instead of real-time (file mode only) |
 | `--callback <URL>` | Send results to a webhook URL |
 | `--silent` | Suppress console output (useful with `--callback`) |
@@ -209,10 +209,13 @@ cargo run -- stream file --file podcast.mp3 --fast
 cargo run -- stream file --file interview.m4a --diarize
 
 # Transcribe with utterance-end detection
-cargo run -- stream file --file audio.wav --interim-results --vad-events --utterance-end 1000
+cargo run -- stream file --file audio.wav --interim-results --utterance-end 1000
 
 # Transcribe with custom endpointing
 cargo run -- stream file --file audio.wav --endpointing 300
+
+# Microphone with endpointing and utterance-end detection
+cargo run -- stream microphone --interim-results --endpointing 300 --utterance-end 1000
 
 # Transcribe against a self-hosted streaming endpoint without DEEPGRAM_API_KEY
 cargo run -- stream file --file audio.wav --endpoint ws://localhost:8119
@@ -373,7 +376,7 @@ On some systems, you may need to grant microphone permissions to the terminal or
 
 ### Utterance End Not Working
 
-`--utterance-end` requires both `--interim-results` and `--vad-events` to be specified. The CLI will report an error if these are missing.
+`--utterance-end` requires `--interim-results` to be specified. The CLI will report an error if it is missing.
 
 ## License
 

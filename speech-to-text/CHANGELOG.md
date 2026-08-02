@@ -1,5 +1,12 @@
 # Changelog for Deepgram Rust Speech-to-Text (STT) CLI
 
+## 2026-07-30
+
+* Added `--endpointing` and `--utterance-end` to both microphone and file streaming modes.
+* `--utterance-end` now matches Deepgram's streaming requirements and only requires `--interim-results`.
+* Made streaming response parsing tolerant of message-specific `channel` shapes in control events.
+* Added WAV duration and streaming fallbacks for files with an incorrect zero-length `data` chunk header.
+
 ## 2026-05-01
 
 * Added `--connections <N>` to `stream microphone` and `stream file` so the same input audio can be fanned out to multiple parallel Deepgram streaming WebSocket connections.

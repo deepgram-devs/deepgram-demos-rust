@@ -30,6 +30,17 @@ The `--` delimiter causes any following options to be passed to the Rust applica
 cargo run --bin dg-tts -- --help
 ```
 
+## Install on Windows with Scoop
+
+Windows users can add this repository as a custom Scoop bucket and, after an application's first GitHub release, install it by name:
+
+```powershell
+scoop bucket add dg https://github.com/deepgram-devs/deepgram-demos-rust
+scoop install dg/dg-stt
+```
+
+The bucket contains `audio-recorder`, `dg-flux`, `dg-stt`, `dg-tts`, `dgpodcaster`, `tts-tui`, `voice-agent`, and `velocity`. Scoop downloads the precompiled Windows release ZIP matching the computer's architecture and verifies its SHA256 hash; no local Rust toolchain is required. See [the Scoop bucket guide](scoop/README.md) for the full package list, verification, and release process.
+
 ## Application Ideas
 
 Use these ideas to inspire business and application ideas you could build with Deepgram.

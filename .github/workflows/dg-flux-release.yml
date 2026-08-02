@@ -1,0 +1,26 @@
+name: dg-flux Release
+
+on:
+  push:
+    tags: ["dg-flux-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing dg-flux tag to build and publish
+        required: true
+        default: dg-flux-v0.3.0
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: ./.github/workflows/reusable-rust-release.yml
+    with:
+      app: dg-flux
+      binary: dg-flux
+      cargo_package: dg-flux
+      source_directory: flux-turn-taking
+      tag: ${{ inputs.tag || github.ref_name }}
+      description: Deepgram Flux turn-taking command-line client.
+      homepage: https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/flux-turn-taking

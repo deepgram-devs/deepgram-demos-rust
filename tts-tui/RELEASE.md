@@ -1,6 +1,6 @@
 # TTS TUI Release Checklist
 
-The current release is `0.8.2` (2026-07-13).
+The current release is `0.9.3` (2026-08-02).
 
 ## Required Release Files
 
@@ -35,16 +35,20 @@ The TTS TUI release should include binaries for:
 
 | Platform | Target triple | Artifact name |
 |----------|---------------|---------------|
-| macOS Apple silicon | `aarch64-apple-darwin` | `tts-tui-aarch64-apple-darwin.tar.gz` |
-| macOS Intel | `x86_64-apple-darwin` | `tts-tui-x86_64-apple-darwin.tar.gz` |
-| Linux x86_64 | `x86_64-unknown-linux-gnu` | `tts-tui-x86_64-unknown-linux-gnu.tar.gz` |
-| Windows x86_64 | `x86_64-pc-windows-msvc` | `tts-tui-x86_64-pc-windows-msvc.zip` |
+| macOS Apple silicon | `aarch64-apple-darwin` | `tts-tui-<version>-aarch64-apple-darwin.tar.gz` |
+| macOS Intel | `x86_64-apple-darwin` | `tts-tui-<version>-x86_64-apple-darwin.tar.gz` |
+| Linux ARM64 | `aarch64-unknown-linux-gnu` | `tts-tui-<version>-aarch64-unknown-linux-gnu.tar.gz` |
+| Linux x86_64 | `x86_64-unknown-linux-gnu` | `tts-tui-<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| Windows ARM64 | `aarch64-pc-windows-msvc` | `tts-tui-<version>-windows-arm64.zip` |
+| Windows x86_64 | `x86_64-pc-windows-msvc` | `tts-tui-<version>-windows-x64.zip` |
 
 ## GitHub Actions Release Workflow
 
-Use `.github/workflows/tts-tui-release.yml` for release builds. It runs on native
-GitHub-hosted runners for all four targets, packages each binary, uploads the
-artifacts between jobs, generates `SHA256SUMS.txt`, and creates the GitHub release.
+Use `.github/workflows/tts-tui-release.yml` for release builds. It invokes the
+shared `.github/workflows/reusable-rust-release.yml` workflow, which runs on native
+GitHub-hosted runners for all six targets, packages each binary with its version in
+the filename, uploads the artifacts between jobs, generates `SHA256SUMS.txt`,
+creates the GitHub release, and updates the `dg/tts-tui` Scoop manifest.
 
 After updating the version in `Cargo.toml`, push an annotated tag matching it:
 
@@ -53,7 +57,7 @@ git tag -a tts-tui-v<version> -m "tts-tui v<version>"
 git push origin tts-tui-v<version>
 ```
 
-The workflow is triggered by tags matching `tts-tui-v*`. Confirm all four build
+The workflow is triggered by tags matching `tts-tui-v*`. Confirm all six build
 jobs and the publish job succeed before announcing the release.
 
 ## Packaging
@@ -74,7 +78,7 @@ For each platform artifact:
 
 - Run `tts-tui --help` and verify the provider, endpoint, audio format, sample rate, SageMaker endpoint name, and AWS region options are listed.
 - Launch the TUI and verify the terminal enters and exits alternate screen mode cleanly.
-- Verify `~/.config/deepgram-tts-client.toml` is created or read without parse errors.
+- Verify `~/.config/deepgram/deepgram-tts-client.toml` is created or read without parse errors.
 
 For at least one platform:
 

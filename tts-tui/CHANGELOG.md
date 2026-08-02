@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.9.3 - 2026-08-02
+
+### Fixes
+
+- Fixed Windows startup configuration so `DEEPGRAM_API_KEY` is applied when the native `USERPROFILE` environment variable is available but `HOME` is not.
+
+### Release
+
+- Standardized release artifact names to include the version and added automatic updates for the precompiled Scoop package manifest.
+
+## 0.9.2 - 2026-08-02
+
+### Changes
+
+- Removed the `--normalize-volume` startup option. Toggle volume normalization from the TUI with `v`; the shortcut is available in the Help screen and Command Palette.
+- Added a `w` toggle for Deepgram WebSocket TTS streaming and a `c` shortcut to cycle 10-word, sentence, and punctuation chunking. Streams authenticate with `Sec-WebSocket-Protocol`, send a final `Flush`, wait for `Flushed`, and drain all received audio before completing playback.
+- Explicitly select Rustls' ring cryptographic provider at startup, preventing a WebSocket streaming panic when multiple Rustls providers are enabled in the workspace.
+- Moved the TOML configuration file to `~/.config/deepgram/deepgram-tts-client.toml`; existing configurations at the previous path are migrated automatically.
+- Added persistent rotating logs at `~/.config/deepgram/tts-tui.log`, with a 1 MiB active-file limit and three retained files by default. WebSocket `Speak` chunks are logged after successful sends.
+- Log Deepgram request IDs for hosted batch responses and WebSocket streaming metadata.
+- Added Flux TTS WebSocket streaming through `/v2/speak`, including Flux authentication and graceful `Flushed`/`SpeechMetadata`/`SessionMetadata` handling.
+
+## 0.9.1 - 2026-07-21
+
+### Features
+
+- Added support for Deepgram's early-access Flux TTS model, including all 12 `flux-*-en` voices, selectable alongside Aura and Aura-2 in the Voices panel.
+- Omitted the `speed` and `normalize_volume` query parameters for Flux requests, since Flux does not document support for them, and logged a note when either setting was active but ignored.
+
+### Fixes
+
+- Fixed audible static/pop artifacts during playback by opening the audio output device (`rodio::OutputStream`) once at startup and reusing it for every play, instead of closing and reopening it on each individual playback. Only a lightweight `Sink` is created per play now.
+- Included full request details (URL, headers, body) in Deepgram and SageMaker TTS error messages to make failures easier to diagnose.
+
+### Documentation
+
+- Documented the full Flux voice catalog and `/v2/speak` routing behavior in the README.
+
 ## 0.8.2 - 2026-07-13
 
 ### Features

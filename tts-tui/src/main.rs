@@ -1,9 +1,11 @@
 mod app;
 mod config;
+mod logging;
 mod persistence;
 mod sagemaker;
 mod theme;
 mod tts;
+mod tts_streaming;
 mod ui;
 
 use anyhow::Result;
@@ -23,6 +25,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{io, time::Duration};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Parser, Debug)]
 #[command(name = "tts-tui")]
@@ -55,19 +58,22 @@ struct Args {
     #[arg(long, env = "DEEPGRAM_SAMPLE_RATE")]
     sample_rate: Option<u32>,
 
-    /// Normalize the volume of generated audio (overrides config file and env var)
-    #[arg(
-        long,
-        env = "DEEPGRAM_NORMALIZE_VOLUME",
-        num_args = 0..=1,
-        default_missing_value = "true"
-    )]
-    normalize_volume: Option<bool>,
+    /// Maximum active log size in bytes before rotation (overrides config file and env var)
+    #[arg(long, env = "TTS_TUI_LOG_MAX_SIZE_BYTES")]
+    log_max_size_bytes: Option<u64>,
+
+    /// Maximum number of log files to retain, including the active log (overrides config file and env var)
+    #[arg(long, env = "TTS_TUI_LOG_MAX_FILES")]
+    log_max_files: Option<usize>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
+    // The workspace enables Rustls through multiple networking clients. Select
+    // the ring provider explicitly before any HTTP or WebSocket TLS connection
+    // is constructed so Rustls does not panic over ambiguous providers.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let args = Args::parse();
     // Setup terminal
     enable_raw_mode()?;
@@ -100,6 +106,13 @@ async fn main() -> Result<()> {
     if let Some(region) = args.aws_region {
         app_config.sagemaker.region = Some(region);
     }
+    if let Some(size) = args.log_max_size_bytes {
+        app_config.logging.max_size_bytes = size.max(1);
+    }
+    if let Some(count) = args.log_max_files {
+        app_config.logging.max_files = count.max(1);
+    }
+    logging::init(&app_config.logging);
     let endpoint = args
         .endpoint
         .or_else(|| app_config.api.endpoint.clone())
@@ -120,12 +133,8 @@ async fn main() -> Result<()> {
         .or(app_config.audio.sample_rate)
         .unwrap_or_else(|| AUDIO_FORMATS[format_index].default_sample_rate);
 
-    // Resolve volume normalization: CLI > env > config > default (false).
-    if let Some(normalize_volume) = args.normalize_volume {
-        app_config.audio.normalize_volume = normalize_volume;
-    }
-
     let mut app = App::new(endpoint, format_index, sample_rate, app_config);
+    app.persist_existing_logs();
     let res = run_app(&mut terminal, &mut app).await;
 
     // Restore terminal
@@ -157,17 +166,89 @@ fn kick_off_tts(
     backend: tts::TtsBackend,
     force_regenerate: bool,
 ) {
-    // Stop any existing audio
-    if let Some(sink) = app.audio_sink.take() {
-        sink.stop();
-    }
-    app.audio_stream = None;
+    // Stop any existing audio and signal an in-flight WebSocket stream to close.
+    app.stop_audio_playback();
 
     app.start_loading(text.clone());
     app.set_status_message(format!("Generating audio: {}", text));
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     app.tts_receiver = Some(rx);
+
+    if app.websocket_streaming_enabled {
+        let (api_key, voice_id) = match backend {
+            tts::TtsBackend::Deepgram {
+                api_key: Some(api_key),
+                ..
+            } => (api_key, voice_id),
+            tts::TtsBackend::Deepgram { .. } => {
+                app.handle_tts_error(
+                    "WebSocket streaming requires a Deepgram API key. Press 'k' to enter one."
+                        .to_string(),
+                );
+                return;
+            }
+            tts::TtsBackend::SageMaker { .. } => {
+                app.handle_tts_error(
+                    "WebSocket streaming is available only with the hosted Deepgram provider."
+                        .to_string(),
+                );
+                return;
+            }
+        };
+
+        let sample_rate = tts_streaming::streaming_sample_rate(app.sample_rate);
+        if sample_rate != app.sample_rate {
+            app.add_log(format!(
+                "WebSocket streaming uses Linear16 at {} Hz (the selected format's rate is unsupported)",
+                sample_rate
+            ));
+        }
+        if app.config.audio.normalize_volume {
+            app.add_log("WebSocket streaming ignores volume normalization.".to_string());
+        }
+        let speed = app.playback_speed;
+        let strategy = app.streaming_chunking_strategy;
+        let protocol = if voice_id.starts_with("flux-") {
+            tts_streaming::StreamingProtocol::Flux
+        } else {
+            tts_streaming::StreamingProtocol::Aura
+        };
+        let cancellation = CancellationToken::new();
+        app.start_streaming_playback(cancellation.clone());
+        let status = match protocol {
+            tts_streaming::StreamingProtocol::Aura => {
+                format!("Streaming {} chunks: {}", strategy.label(), text)
+            }
+            tts_streaming::StreamingProtocol::Flux => {
+                format!("Streaming Flux turn: {}", text)
+            }
+        };
+        app.set_status_message(status);
+
+        tokio::spawn(async move {
+            let result = tts_streaming::stream_speech(
+                tts_streaming::StreamingRequest {
+                    api_key: &api_key,
+                    voice_id: &voice_id,
+                    protocol,
+                    speed,
+                    sample_rate,
+                    chunking_strategy: strategy,
+                    text: &text,
+                },
+                cancellation,
+                tx.clone(),
+            )
+            .await;
+            if let Err(error) = result {
+                let _ = tx.send(app::TtsResult::Error(format!(
+                    "WebSocket streaming failed: {error:#}"
+                )));
+            }
+        });
+        return;
+    }
 
     let speed = app.playback_speed;
     let sample_rate = app.sample_rate;
@@ -191,10 +272,11 @@ fn kick_off_tts(
         )
         .await
         {
-            Ok((msg, audio_data, is_cached)) => app::TtsResult::Success {
+            Ok((msg, audio_data, is_cached, request_id)) => app::TtsResult::Success {
                 message: msg,
                 audio_data,
                 is_cached,
+                request_id,
             },
             Err(e) => {
                 let mut error_msg = format!("Error fetching audio: {:#}", e);
@@ -260,22 +342,105 @@ async fn run_app(
         // Update spinner animation
         app.update_spinner();
 
-        // Check for TTS result from background task
-        if let Some(audio_data) = app.check_tts_result() {
-            // Play audio on main thread (not Send-safe, must stay here)
-            let encoding = app.current_audio_format().encoding;
-            let sample_rate = app.sample_rate;
-            match tts::play_audio_data_sync(&audio_data, encoding, sample_rate) {
-                Ok((sink, stream, duration_ms)) => {
-                    app.audio_sink = Some(sink);
-                    app.audio_stream = Some(stream);
-                    app.audio_duration_ms = duration_ms;
-                    app.playback_start_time = std::time::Instant::now();
+        // Drain TTS events from background tasks. Streaming binary chunks are
+        // appended to the active sink immediately, while HTTP results still
+        // arrive as one complete buffer.
+        for result in app.take_tts_results() {
+            match result {
+                app::TtsResult::Success {
+                    message,
+                    audio_data,
+                    is_cached,
+                    request_id,
+                } => {
+                    app.record_cached_tts_result(message, is_cached);
+                    if let Some(request_id) = request_id {
+                        app.add_log(format!("Deepgram request ID: {request_id}"));
+                    }
+                    let encoding = app.current_audio_format().encoding;
+                    let sample_rate = app.sample_rate;
+                    match app.audio_stream_handle.clone() {
+                        Some(stream_handle) => match tts::play_audio_data_sync(
+                            &audio_data,
+                            encoding,
+                            sample_rate,
+                            &stream_handle,
+                        ) {
+                            Ok((sink, duration_ms)) => {
+                                app.audio_sink = Some(sink);
+                                app.audio_duration_ms = duration_ms;
+                                app.playback_start_time = std::time::Instant::now();
+                            }
+                            Err(error) => {
+                                app.handle_tts_error(format!("Error starting playback: {error}"))
+                            }
+                        },
+                        None => app.handle_tts_error(
+                            "Error starting playback: no audio output device available".to_string(),
+                        ),
+                    }
                 }
-                Err(e) => {
-                    app.stop_loading();
-                    app.add_log(format!("Error starting playback: {}", e));
+                app::TtsResult::StreamingStarted {
+                    chunk_count,
+                    sample_rate,
+                } => {
+                    app.add_log(format!(
+                        "Deepgram WebSocket connected: {} chunks, Linear16 at {} Hz",
+                        chunk_count, sample_rate
+                    ));
                 }
+                app::TtsResult::StreamingAudio(audio_data) => {
+                    let sample_rate = tts_streaming::streaming_sample_rate(app.sample_rate);
+                    match app.audio_stream_handle.clone() {
+                        Some(stream_handle) => {
+                            let playback = match app.audio_sink.as_ref() {
+                                Some(sink) => tts::append_linear16_streaming_audio(
+                                    sink,
+                                    &audio_data,
+                                    sample_rate,
+                                )
+                                .map(|duration| (sink.clone(), duration)),
+                                None => tts::create_linear16_streaming_sink(
+                                    &audio_data,
+                                    sample_rate,
+                                    &stream_handle,
+                                ),
+                            };
+                            match playback {
+                                Ok((sink, duration_ms)) => {
+                                    if app.audio_sink.is_none() {
+                                        app.audio_sink = Some(sink);
+                                        app.playback_start_time = std::time::Instant::now();
+                                    }
+                                    app.audio_duration_ms =
+                                        app.audio_duration_ms.saturating_add(duration_ms);
+                                }
+                                Err(error) => app.handle_tts_error(format!(
+                                    "Error playing streaming audio: {error}"
+                                )),
+                            }
+                        }
+                        None => app.handle_tts_error(
+                            "Error starting playback: no audio output device available".to_string(),
+                        ),
+                    }
+                }
+                app::TtsResult::StreamingChunk { index, total, text } => {
+                    app.add_log(format!(
+                        "Deepgram WebSocket Speak chunk {index}/{total}: {text}"
+                    ));
+                }
+                app::TtsResult::StreamingRequestId(request_id) => {
+                    app.add_log(format!("Deepgram request ID: {request_id}"));
+                }
+                app::TtsResult::StreamingWarning(warning) => {
+                    app.add_log_with_level(
+                        app::LogLevel::Warning,
+                        format!("Deepgram streaming warning: {warning}"),
+                    );
+                }
+                app::TtsResult::StreamingFlushed => app.mark_streaming_generation_complete(),
+                app::TtsResult::Error(error) => app.handle_tts_error(error),
             }
         }
 
@@ -322,7 +487,7 @@ async fn run_app(
             mouse_captured = true;
         }
 
-        if event::poll(Duration::from_millis(250))? {
+        if event::poll(Duration::from_millis(50))? {
             match event::read()? {
                 CrosstermEvent::Paste(content) => match app.current_screen {
                     CurrentScreen::Editing => {
@@ -423,6 +588,12 @@ async fn run_app(
                             }
                             KeyCode::Char('v') | KeyCode::Char('V') => {
                                 app.toggle_volume_normalization();
+                            }
+                            KeyCode::Char('w') | KeyCode::Char('W') => {
+                                app.toggle_websocket_streaming();
+                            }
+                            KeyCode::Char('c') | KeyCode::Char('C') => {
+                                app.cycle_streaming_chunking_strategy();
                             }
                             KeyCode::Down => {
                                 if key.modifiers.contains(KeyModifiers::CONTROL)

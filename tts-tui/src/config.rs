@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 pub const DEFAULT_TTS_PROVIDER: &str = "deepgram";
 
-/// Top-level application configuration loaded from ~/.config/deepgram-tts-client.toml.
+/// Top-level application configuration loaded from ~/.config/deepgram/deepgram-tts-client.toml.
 /// Priority order (highest to lowest): CLI args > env vars > TOML config > defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -16,6 +16,9 @@ pub struct AppConfig {
 
     #[serde(default)]
     pub audio: AudioConfig,
+
+    #[serde(default)]
+    pub logging: LoggingConfig,
 
     #[serde(default)]
     pub experimental: ExperimentalFlags,
@@ -73,7 +76,7 @@ pub struct AudioConfig {
 
     /// Normalize the volume of generated audio.
     /// Valid values: true or false.
-    /// Overridden by --normalize-volume or DEEPGRAM_NORMALIZE_VOLUME.
+    /// Overridden by DEEPGRAM_NORMALIZE_VOLUME or toggled at runtime with the 'v' key.
     /// Default: false
     #[serde(default)]
     pub normalize_volume: bool,
@@ -89,13 +92,38 @@ impl Default for AudioConfig {
     }
 }
 
+/// Persistent application log settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    /// Maximum size in bytes of the active log before rotation.
+    /// Valid values: positive integer. Overridden by --log-max-size-bytes or TTS_TUI_LOG_MAX_SIZE_BYTES.
+    /// Default: 1048576 (1 MiB)
+    #[serde(default = "default_log_max_size_bytes")]
+    pub max_size_bytes: u64,
+
+    /// Maximum number of log files to retain, including the active log.
+    /// Valid values: positive integer. Overridden by --log-max-files or TTS_TUI_LOG_MAX_FILES.
+    /// Default: 3
+    #[serde(default = "default_log_max_files")]
+    pub max_files: usize,
+}
+
+const fn default_log_max_size_bytes() -> u64 {
+    1024 * 1024
+}
+
+const fn default_log_max_files() -> usize {
+    3
+}
+
 /// Feature flags for in-development functionality.
 /// Set a flag to `true` to opt in. Flagged features may be incomplete or unstable.
 /// Each flag can also be overridden by an environment variable:
 ///   TTS_TUI_FEATURE_<FLAG_NAME_UPPERCASE>=true|false
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentalFlags {
-    /// Stream audio playback as bytes arrive instead of waiting for the full download.
+    /// Enable Deepgram WebSocket TTS streaming on startup.
+    /// Toggle this at runtime with the 'w' key; hosted Deepgram voices and an API key are required.
     /// Env var override: TTS_TUI_FEATURE_STREAMING_PLAYBACK=true|false
     /// Default: false
     pub streaming_playback: bool,
@@ -112,6 +140,7 @@ impl Default for AppConfig {
             api: ApiConfig::default(),
             sagemaker: SageMakerConfig::default(),
             audio: AudioConfig::default(),
+            logging: LoggingConfig::default(),
             experimental: ExperimentalFlags::default(),
         }
     }
@@ -136,6 +165,15 @@ impl Default for SageMakerConfig {
     }
 }
 
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            max_size_bytes: default_log_max_size_bytes(),
+            max_files: default_log_max_files(),
+        }
+    }
+}
+
 impl Default for ExperimentalFlags {
     fn default() -> Self {
         Self {
@@ -148,7 +186,7 @@ impl Default for ExperimentalFlags {
 /// The default config file content, written on first run.
 /// Written as a string so comments are preserved in the file.
 const DEFAULT_CONFIG: &str = r#"# tts-tui configuration
-# Located at ~/.config/deepgram-tts-client.toml
+# Located at ~/.config/deepgram/deepgram-tts-client.toml
 #
 # Priority order for all settings (highest wins):
 #   CLI arguments > environment variables > this file > built-in defaults
@@ -210,9 +248,22 @@ const DEFAULT_CONFIG: &str = r#"# tts-tui configuration
 
 # Normalize the volume of generated audio through the Deepgram TTS API.
 # Valid values: true or false.
-# Can also be set via --normalize-volume or DEEPGRAM_NORMALIZE_VOLUME=true.
+# Can also be set via DEEPGRAM_NORMALIZE_VOLUME=true, or toggled while the app runs with 'v'.
 # Default: false
 normalize_volume = false
+
+
+# [logging] — Persistent application log settings
+[logging]
+# Maximum size of the active tts-tui log in bytes before rotation.
+# Valid values: positive integer. Can also be set via --log-max-size-bytes or
+# TTS_TUI_LOG_MAX_SIZE_BYTES. Default: 1048576 (1 MiB).
+max_size_bytes = 1048576
+
+# Maximum number of tts-tui log files to retain, including the active log.
+# Valid values: positive integer. Can also be set via --log-max-files or
+# TTS_TUI_LOG_MAX_FILES. Default: 3.
+max_files = 3
 
 
 # [experimental] — Feature flags for in-development functionality.
@@ -220,7 +271,8 @@ normalize_volume = false
 # Each flag can also be overridden by an environment variable:
 #   TTS_TUI_FEATURE_<FLAG_NAME_UPPERCASE>=true|false
 [experimental]
-# Stream audio playback as bytes arrive instead of waiting for the full download.
+# Enable Deepgram WebSocket TTS streaming on startup.
+# Hosted Aura voices and a Deepgram API key are required. Toggle it at runtime with 'w'.
 # Env var: TTS_TUI_FEATURE_STREAMING_PLAYBACK=true|false
 streaming_playback = false
 
@@ -229,49 +281,106 @@ streaming_playback = false
 ssml_support = false
 "#;
 
+const CONFIG_FILE_NAME: &str = "deepgram-tts-client.toml";
+
 fn get_config_path() -> Option<PathBuf> {
-    // Use the system home directory directly; ~/.config is the conventional XDG location
-    std::env::var("HOME").ok().map(|h| {
-        PathBuf::from(h)
-            .join(".config")
-            .join("deepgram-tts-client.toml")
-    })
+    home_directory().map(config_path_from_home)
 }
 
-/// Load the application config from ~/.config/deepgram-tts-client.toml.
+pub fn config_directory() -> Option<PathBuf> {
+    home_directory().map(|home| home.join(".config").join("deepgram"))
+}
+
+fn config_path_from_home(home: PathBuf) -> PathBuf {
+    home.join(".config").join("deepgram").join(CONFIG_FILE_NAME)
+}
+
+fn get_legacy_config_path() -> Option<PathBuf> {
+    home_directory().map(|home| home.join(".config").join(CONFIG_FILE_NAME))
+}
+
+/// Resolve the user's home directory across Unix shells and native Windows.
+/// Windows applications normally receive USERPROFILE rather than HOME.
+fn home_directory() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .or_else(|| {
+            let drive = std::env::var_os("HOMEDRIVE")?;
+            let path = std::env::var_os("HOMEPATH")?;
+            Some(std::ffi::OsString::from(format!(
+                "{}{}",
+                drive.to_string_lossy(),
+                path.to_string_lossy()
+            )))
+        })
+        .map(PathBuf::from)
+}
+
+fn migrate_legacy_config(path: &PathBuf) {
+    let Some(legacy_path) = get_legacy_config_path() else {
+        return;
+    };
+    if path.exists() || !legacy_path.exists() {
+        return;
+    }
+
+    if let Some(parent) = path.parent() {
+        if let Err(error) = fs::create_dir_all(parent) {
+            eprintln!(
+                "Warning: failed to create config directory {}: {}",
+                parent.display(),
+                error
+            );
+            return;
+        }
+    }
+    if let Err(error) = fs::rename(&legacy_path, path) {
+        eprintln!(
+            "Warning: failed to move legacy config {} to {}: {}. Keeping the legacy file.",
+            legacy_path.display(),
+            path.display(),
+            error
+        );
+    }
+}
+
+/// Load the application config from ~/.config/deepgram/deepgram-tts-client.toml.
 /// Creates the file with defaults and comments if it does not exist.
 /// Applies environment variable overrides after loading.
 pub fn load() -> AppConfig {
-    let path = match get_config_path() {
-        Some(p) => p,
-        None => return AppConfig::default(),
-    };
+    let mut config = if let Some(path) = get_config_path() {
+        migrate_legacy_config(&path);
 
-    // Create default config file on first run
-    if !path.exists() {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
+        // Create default config file on first run
+        if !path.exists() {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let _ = fs::write(&path, DEFAULT_CONFIG);
         }
-        let _ = fs::write(&path, DEFAULT_CONFIG);
-    }
 
-    let mut config = match fs::read_to_string(&path) {
-        Ok(contents) => toml::from_str::<AppConfig>(&contents).unwrap_or_else(|e| {
-            eprintln!(
-                "Warning: failed to parse {}: {}. Using defaults.",
-                path.display(),
-                e
-            );
-            AppConfig::default()
-        }),
-        Err(e) => {
-            eprintln!(
-                "Warning: failed to read {}: {}. Using defaults.",
-                path.display(),
-                e
-            );
-            AppConfig::default()
+        match fs::read_to_string(&path) {
+            Ok(contents) => toml::from_str::<AppConfig>(&contents).unwrap_or_else(|e| {
+                eprintln!(
+                    "Warning: failed to parse {}: {}. Using defaults.",
+                    path.display(),
+                    e
+                );
+                AppConfig::default()
+            }),
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to read {}: {}. Using defaults.",
+                    path.display(),
+                    e
+                );
+                AppConfig::default()
+            }
         }
+    } else {
+        // Still apply environment variables when the platform does not expose
+        // a usable home directory (for example, a restricted Windows process).
+        AppConfig::default()
     };
 
     apply_env_overrides(&mut config);
@@ -296,6 +405,16 @@ fn apply_env_overrides(config: &mut AppConfig) {
     }
     if let Ok(val) = std::env::var("DEEPGRAM_NORMALIZE_VOLUME") {
         config.audio.normalize_volume = parse_bool_env(&val);
+    }
+    if let Ok(val) = std::env::var("TTS_TUI_LOG_MAX_SIZE_BYTES") {
+        if let Ok(size) = val.parse::<u64>() {
+            config.logging.max_size_bytes = size.max(1);
+        }
+    }
+    if let Ok(val) = std::env::var("TTS_TUI_LOG_MAX_FILES") {
+        if let Ok(count) = val.parse::<usize>() {
+            config.logging.max_files = count.max(1);
+        }
     }
     if let Ok(val) = std::env::var("TTS_TUI_FEATURE_STREAMING_PLAYBACK") {
         config.experimental.streaming_playback = parse_bool_env(&val);
@@ -348,7 +467,7 @@ fn parse_bool_env(val: &str) -> bool {
 pub fn config_path_display() -> String {
     get_config_path()
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "~/.config/deepgram-tts-client.toml".to_string())
+        .unwrap_or_else(|| "~/.config/deepgram/deepgram-tts-client.toml".to_string())
 }
 
 #[cfg(test)]
@@ -365,6 +484,13 @@ mod tests {
     #[test]
     fn default_audio_config_disables_volume_normalization() {
         assert!(!AudioConfig::default().normalize_volume);
+    }
+
+    #[test]
+    fn default_logging_config_rotates_one_megabyte_across_three_files() {
+        let logging = LoggingConfig::default();
+        assert_eq!(logging.max_size_bytes, 1024 * 1024);
+        assert_eq!(logging.max_files, 3);
     }
 
     #[test]
@@ -386,6 +512,14 @@ mod tests {
             result.is_ok(),
             "Default config template must parse cleanly: {:?}",
             result.err()
+        );
+    }
+
+    #[test]
+    fn config_path_is_scoped_to_deepgram_directory() {
+        assert_eq!(
+            config_path_from_home(PathBuf::from("/example/home")),
+            PathBuf::from("/example/home/.config/deepgram/deepgram-tts-client.toml")
         );
     }
 
