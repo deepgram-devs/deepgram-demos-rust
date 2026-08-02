@@ -1,0 +1,18 @@
+{
+  "version": "0.9.3",
+  "description": "Terminal user interface for Deepgram text-to-speech.",
+  "homepage": "https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/tts-tui",
+  "license": "ISC",
+  "notes": "Installed from the tts-tui-v0.9.3 GitHub release.",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/tts-tui-v0.9.3/tts-tui-0.9.3-windows-x64.zip",
+      "hash": "0f90d6ff9c5bdc853f17050b573c40733f7e569dc2e7a7282e7946dbb9304c43"
+    },
+    "arm64": {
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/tts-tui-v0.9.3/tts-tui-0.9.3-windows-arm64.zip",
+      "hash": "68becde52ea0418480d861d33a06e3177130b50dde0ed282f1d016e24616873d"
+    }
+  },
+  "bin": "tts-tui.exe"
+}
