@@ -124,10 +124,18 @@ Three ways to supply your Deepgram API key, in priority order:
 # 2. Environment variable
 export DEEPGRAM_API_KEY="your-api-key"
 
+# Windows PowerShell
+$env:DEEPGRAM_API_KEY = "your-api-key"
+
+# Windows Command Prompt
+set DEEPGRAM_API_KEY=your-api-key
+
 # 3. Config file (~/.config/deepgram/deepgram-tts-client.toml)
 # [api]
 # key = "your-api-key"
 ```
+
+On Windows, `tts-tui` also checks `USERPROFILE` when resolving its configuration directory, so environment-variable overrides work even when `HOME` is not defined. Set the variable before launching `tts-tui` from the same terminal session.
 
 API keys are only used in `deepgram` provider mode, which includes hosted and self-hosted Deepgram-compatible HTTP endpoints. If no key is configured, `tts-tui` sends the request without an `Authorization` header. SageMaker mode authenticates with AWS credentials from the standard AWS SDK chain, such as environment variables, shared AWS config files, SSO, or an IAM role.
 

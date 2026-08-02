@@ -284,16 +284,11 @@ ssml_support = false
 const CONFIG_FILE_NAME: &str = "deepgram-tts-client.toml";
 
 fn get_config_path() -> Option<PathBuf> {
-    // Use the system home directory directly; ~/.config is the conventional XDG location.
-    std::env::var("HOME")
-        .ok()
-        .map(|home| config_path_from_home(PathBuf::from(home)))
+    home_directory().map(config_path_from_home)
 }
 
 pub fn config_directory() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(|home| PathBuf::from(home).join(".config").join("deepgram"))
+    home_directory().map(|home| home.join(".config").join("deepgram"))
 }
 
 fn config_path_from_home(home: PathBuf) -> PathBuf {
@@ -301,9 +296,24 @@ fn config_path_from_home(home: PathBuf) -> PathBuf {
 }
 
 fn get_legacy_config_path() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(|home| PathBuf::from(home).join(".config").join(CONFIG_FILE_NAME))
+    home_directory().map(|home| home.join(".config").join(CONFIG_FILE_NAME))
+}
+
+/// Resolve the user's home directory across Unix shells and native Windows.
+/// Windows applications normally receive USERPROFILE rather than HOME.
+fn home_directory() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .or_else(|| {
+            let drive = std::env::var_os("HOMEDRIVE")?;
+            let path = std::env::var_os("HOMEPATH")?;
+            Some(std::ffi::OsString::from(format!(
+                "{}{}",
+                drive.to_string_lossy(),
+                path.to_string_lossy()
+            )))
+        })
+        .map(PathBuf::from)
 }
 
 fn migrate_legacy_config(path: &PathBuf) {
@@ -338,38 +348,39 @@ fn migrate_legacy_config(path: &PathBuf) {
 /// Creates the file with defaults and comments if it does not exist.
 /// Applies environment variable overrides after loading.
 pub fn load() -> AppConfig {
-    let path = match get_config_path() {
-        Some(p) => p,
-        None => return AppConfig::default(),
-    };
+    let mut config = if let Some(path) = get_config_path() {
+        migrate_legacy_config(&path);
 
-    migrate_legacy_config(&path);
-
-    // Create default config file on first run
-    if !path.exists() {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
+        // Create default config file on first run
+        if !path.exists() {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let _ = fs::write(&path, DEFAULT_CONFIG);
         }
-        let _ = fs::write(&path, DEFAULT_CONFIG);
-    }
 
-    let mut config = match fs::read_to_string(&path) {
-        Ok(contents) => toml::from_str::<AppConfig>(&contents).unwrap_or_else(|e| {
-            eprintln!(
-                "Warning: failed to parse {}: {}. Using defaults.",
-                path.display(),
-                e
-            );
-            AppConfig::default()
-        }),
-        Err(e) => {
-            eprintln!(
-                "Warning: failed to read {}: {}. Using defaults.",
-                path.display(),
-                e
-            );
-            AppConfig::default()
+        match fs::read_to_string(&path) {
+            Ok(contents) => toml::from_str::<AppConfig>(&contents).unwrap_or_else(|e| {
+                eprintln!(
+                    "Warning: failed to parse {}: {}. Using defaults.",
+                    path.display(),
+                    e
+                );
+                AppConfig::default()
+            }),
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to read {}: {}. Using defaults.",
+                    path.display(),
+                    e
+                );
+                AppConfig::default()
+            }
         }
+    } else {
+        // Still apply environment variables when the platform does not expose
+        // a usable home directory (for example, a restricted Windows process).
+        AppConfig::default()
     };
 
     apply_env_overrides(&mut config);
