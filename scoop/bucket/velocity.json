@@ -1,0 +1,24 @@
+{
+  "version": "0.5.1",
+  "description": "Windows 11 voice dictation using Deepgram Voice AI.",
+  "homepage": "https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/velocity",
+  "license": "ISC",
+  "notes": "Installed from the velocity-v0.5.1 GitHub release.",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/velocity-v0.5.1/velocity-0.5.1-windows-x64.zip",
+      "hash": "0dfd6e06d0138763b3f055c206b5706512ffa543b9d7a5136d03498a1fcf4461"
+    },
+    "arm64": {
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/velocity-v0.5.1/velocity-0.5.1-windows-arm64.zip",
+      "hash": "f14c9bf00ebd2e164a8b4b82098ac556a5d650e6265684fa1589b17dcfc83d97"
+    }
+  },
+  "bin": "velocity.exe",
+  "shortcuts": [
+    [
+      "velocity.exe",
+      "Velocity"
+    ]
+  ]
+}
