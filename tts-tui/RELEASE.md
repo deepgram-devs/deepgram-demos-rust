@@ -37,13 +37,15 @@ The TTS TUI release should include binaries for:
 |----------|---------------|---------------|
 | macOS Apple silicon | `aarch64-apple-darwin` | `tts-tui-aarch64-apple-darwin.tar.gz` |
 | macOS Intel | `x86_64-apple-darwin` | `tts-tui-x86_64-apple-darwin.tar.gz` |
+| Linux ARM64 | `aarch64-unknown-linux-gnu` | `tts-tui-aarch64-unknown-linux-gnu.tar.gz` |
 | Linux x86_64 | `x86_64-unknown-linux-gnu` | `tts-tui-x86_64-unknown-linux-gnu.tar.gz` |
+| Windows ARM64 | `aarch64-pc-windows-msvc` | `tts-tui-aarch64-pc-windows-msvc.zip` |
 | Windows x86_64 | `x86_64-pc-windows-msvc` | `tts-tui-x86_64-pc-windows-msvc.zip` |
 
 ## GitHub Actions Release Workflow
 
 Use `.github/workflows/tts-tui-release.yml` for release builds. It runs on native
-GitHub-hosted runners for all four targets, packages each binary, uploads the
+GitHub-hosted runners for all six targets, packages each binary, uploads the
 artifacts between jobs, generates `SHA256SUMS.txt`, and creates the GitHub release.
 
 After updating the version in `Cargo.toml`, push an annotated tag matching it:
@@ -53,7 +55,7 @@ git tag -a tts-tui-v<version> -m "tts-tui v<version>"
 git push origin tts-tui-v<version>
 ```
 
-The workflow is triggered by tags matching `tts-tui-v*`. Confirm all four build
+The workflow is triggered by tags matching `tts-tui-v*`. Confirm all six build
 jobs and the publish job succeed before announcing the release.
 
 ## Packaging

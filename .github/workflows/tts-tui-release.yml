@@ -9,7 +9,7 @@ on:
       tag:
         description: "Existing tts-tui tag to build and publish"
         required: true
-        default: "tts-tui-v0.8.2"
+        default: "tts-tui-v0.9.3"
 
 permissions:
   contents: read
@@ -31,13 +31,19 @@ jobs:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             archive: tts-tui-x86_64-unknown-linux-gnu.tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: tts-tui-aarch64-unknown-linux-gnu.tar.gz
           - os: windows-2025
             target: x86_64-pc-windows-msvc
             archive: tts-tui-x86_64-pc-windows-msvc.zip
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive: tts-tui-aarch64-pc-windows-msvc.zip
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
@@ -99,7 +105,7 @@ jobs:
       contents: write
     steps:
       - name: Check out source
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
