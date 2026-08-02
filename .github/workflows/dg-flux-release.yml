@@ -1,15 +1,15 @@
-name: TTS TUI Release
+name: dg-flux Release
 
 on:
   push:
     tags:
-      - "tts-tui-v*"
+      - "dg-flux-v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tts-tui tag to build and publish"
+        description: "Existing dg-flux tag to build and publish"
         required: true
-        default: "tts-tui-v0.9.3"
+        default: "dg-flux-v0.3.0"
 
 permissions:
   contents: read
@@ -24,26 +24,20 @@ jobs:
         include:
           - os: macos-14
             target: aarch64-apple-darwin
-            archive: tts-tui-aarch64-apple-darwin.tar.gz
+            archive: dg-flux-aarch64-apple-darwin.tar.gz
           - os: macos-15-intel
             target: x86_64-apple-darwin
-            archive: tts-tui-x86_64-apple-darwin.tar.gz
+            archive: dg-flux-x86_64-apple-darwin.tar.gz
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-            archive: tts-tui-x86_64-unknown-linux-gnu.tar.gz
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            archive: tts-tui-aarch64-unknown-linux-gnu.tar.gz
+            archive: dg-flux-x86_64-unknown-linux-gnu.tar.gz
           - os: windows-2025
             target: x86_64-pc-windows-msvc
-            archive: tts-tui-x86_64-pc-windows-msvc.zip
-          - os: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            archive: tts-tui-aarch64-pc-windows-msvc.zip
+            archive: dg-flux-x86_64-pc-windows-msvc.zip
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
@@ -59,7 +53,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --locked --release --package tts-tui --target ${{ matrix.target }}
+        run: cargo build --locked --release --package dg-flux --target ${{ matrix.target }}
 
       - name: Package Unix artifact
         if: runner.os != 'Windows'
@@ -71,9 +65,9 @@ jobs:
           set -euo pipefail
           package_dir="package"
           mkdir "$package_dir"
-          cp "target/$TARGET/release/tts-tui" "$package_dir/tts-tui"
-          cp tts-tui/README.md tts-tui/CHANGELOG.md tts-tui/TESTPLAN.md LICENSE.md "$package_dir/"
-          chmod +x "$package_dir/tts-tui"
+          cp "target/$TARGET/release/dg-flux" "$package_dir/dg-flux"
+          cp flux-turn-taking/README.md flux-turn-taking/CHANGELOG.md LICENSE.md "$package_dir/"
+          chmod +x "$package_dir/dg-flux"
           tar -czf "$ARCHIVE" -C "$package_dir" .
 
       - name: Package Windows artifact
@@ -85,14 +79,14 @@ jobs:
         run: |
           $packageDir = "package"
           New-Item -ItemType Directory -Path $packageDir | Out-Null
-          Copy-Item "target/$env:TARGET/release/tts-tui.exe" "$packageDir/tts-tui.exe"
-          Copy-Item tts-tui/README.md, tts-tui/CHANGELOG.md, tts-tui/TESTPLAN.md, LICENSE.md $packageDir
+          Copy-Item "target/$env:TARGET/release/dg-flux.exe" "$packageDir/dg-flux.exe"
+          Copy-Item flux-turn-taking/README.md, flux-turn-taking/CHANGELOG.md, LICENSE.md $packageDir
           Compress-Archive -Path "$packageDir/*" -DestinationPath $env:ARCHIVE
 
       - name: Upload packaged artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v5
         with:
-          name: tts-tui-${{ matrix.target }}
+          name: dg-flux-${{ matrix.target }}
           path: ${{ matrix.archive }}
           if-no-files-found: error
           retention-days: 7
@@ -105,12 +99,12 @@ jobs:
       contents: write
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
       - name: Download packaged artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v5
         with:
           path: release-assets
           merge-multiple: true
@@ -121,12 +115,12 @@ jobs:
           set -euo pipefail
           sha256sum release-assets/* > release-assets/SHA256SUMS.txt
           release_tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          version="${release_tag#tts-tui-v}"
+          version="${release_tag#dg-flux-v}"
           awk -v version="$version" '
-            $0 ~ "^## " version "([[:space:]]|$)" { in_section = 1 }
-            in_section && /^## / && $0 !~ "^## " version "([[:space:]]|$)" { exit }
+            $0 ~ "^## \\[" version "\\]" { in_section = 1 }
+            in_section && /^## / && $0 !~ "^## \\[" version "\\]" { exit }
             in_section { print }
-          ' tts-tui/CHANGELOG.md > release-notes.md
+          ' flux-turn-taking/CHANGELOG.md > release-notes.md
           test -s release-notes.md
 
       - name: Create GitHub release from artifacts
@@ -145,6 +139,6 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
-              --title "tts-tui v${RELEASE_TAG#tts-tui-v}" \
+              --title "dg-flux v${RELEASE_TAG#dg-flux-v}" \
               --notes-file release-notes.md
           fi

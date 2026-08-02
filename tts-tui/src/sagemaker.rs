@@ -18,6 +18,9 @@ pub async fn fetch_sagemaker_tts(
     let body = serde_json::to_vec(&json!({ "text": text }))
         .context("Failed to serialize SageMaker TTS request body")?;
 
+    let custom_attributes =
+        build_custom_attributes(voice_id, speed, sample_rate, encoding, normalize_volume);
+
     let sdk_config = aws_config::defaults(BehaviorVersion::latest())
         .region(Region::new(region.to_string()))
         .load()
@@ -29,20 +32,23 @@ pub async fn fetch_sagemaker_tts(
         .endpoint_name(endpoint_name)
         .content_type("application/json")
         .accept(accept_mime_type(encoding))
-        .custom_attributes(build_custom_attributes(
-            voice_id,
-            speed,
-            sample_rate,
-            encoding,
-            normalize_volume,
-        ))
+        .custom_attributes(&custom_attributes)
         .body(Blob::new(body))
         .send()
         .await
         .with_context(|| {
             format!(
-                "Failed to invoke SageMaker endpoint '{}' in region '{}'",
-                endpoint_name, region
+                "Failed to invoke SageMaker endpoint '{}' in region '{}'\n\n\
+                 Request details:\n  \
+                 ContentType: application/json\n  \
+                 Accept: {}\n  \
+                 CustomAttributes: {}\n  \
+                 Body: {{\"text\": {:?}}}",
+                endpoint_name,
+                region,
+                accept_mime_type(encoding),
+                custom_attributes,
+                text
             )
         })?;
 

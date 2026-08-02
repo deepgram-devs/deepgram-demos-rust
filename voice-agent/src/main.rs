@@ -237,6 +237,18 @@ struct LaunchOptions {
     #[arg(long, num_args = 0..=1, default_missing_value = "true")]
     listen_smart_format: Option<bool>,
 
+    /// Audio encoding sent to the Voice Agent listen provider
+    #[arg(long, value_parser = ["linear16", "linear32", "mulaw", "alaw"], default_value = "linear16")]
+    audio_encoding: String,
+
+    /// Microphone capture and input audio sample rate in Hz
+    #[arg(
+        long,
+        default_value_t = 24000,
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    audio_sample_rate: u32,
+
     /// Eleven Labs voice ID (used in the endpoint URL)
     #[arg(long)]
     speak_voice_id: Option<String>,
@@ -292,6 +304,11 @@ struct LaunchOptions {
     /// Disable microphone muting during agent audio playback
     #[arg(long)]
     no_mic_mute: bool,
+
+    /// Register a set of sample client-side functions (get_current_time, roll_dice,
+    /// get_weather) so the agent can call tools mid-conversation
+    #[arg(long)]
+    enable_sample_functions: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -346,8 +363,115 @@ struct ThinkConfig {
     provider: ThinkProviderConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    functions: Vec<FunctionDefinition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     endpoint: Option<ThinkEndpointConfig>,
+}
+
+/// A client-side function/tool definition sent in `agent.think.functions`.
+///
+/// Omitting `endpoint` (as this demo always does) marks the function as
+/// client-side: the agent emits a `FunctionCallRequest` over the WebSocket
+/// and expects this client to reply with a `FunctionCallResponse`, rather
+/// than the server invoking a webhook itself.
+#[derive(Debug, Serialize, Deserialize)]
+struct FunctionDefinition {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+}
+
+/// Sample client-side function definitions used to demonstrate and test
+/// tool-calling. Enabled with `--enable-sample-functions`.
+fn sample_functions() -> Vec<FunctionDefinition> {
+    vec![
+        FunctionDefinition {
+            name: "get_current_time".to_string(),
+            description: "Get the current date and time in UTC".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {},
+            }),
+        },
+        FunctionDefinition {
+            name: "roll_dice".to_string(),
+            description: "Roll a die with a given number of sides and return the result"
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "sides": {
+                        "type": "integer",
+                        "description": "Number of sides on the die (default 6)"
+                    }
+                },
+                "required": []
+            }),
+        },
+        FunctionDefinition {
+            name: "get_weather".to_string(),
+            description: "Get the current weather conditions for a location".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "City and state/country, e.g. 'Austin, TX'"
+                    }
+                },
+                "required": ["location"]
+            }),
+        },
+    ]
+}
+
+/// Produces a canned JSON result for one of the [`sample_functions`] by name.
+///
+/// These are stubs for demonstrating and testing the function-calling round
+/// trip, not real integrations: `get_weather` always returns mock data,
+/// `roll_dice` uses the system clock as a source of pseudo-randomness (this
+/// crate has no `rand` dependency), and `get_current_time` has no timezone
+/// support.
+fn execute_sample_function(name: &str, arguments_json: &str) -> String {
+    let arguments: serde_json::Value =
+        serde_json::from_str(arguments_json).unwrap_or(serde_json::Value::Null);
+
+    match name {
+        "get_current_time" => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            serde_json::json!({ "unix_time": now.as_secs(), "timezone": "UTC" }).to_string()
+        }
+        "roll_dice" => {
+            let sides = arguments
+                .get("sides")
+                .and_then(|v| v.as_u64())
+                .filter(|&sides| sides > 0)
+                .unwrap_or(6);
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos() as u64;
+            let result = (nanos % sides) + 1;
+            serde_json::json!({ "sides": sides, "result": result }).to_string()
+        }
+        "get_weather" => {
+            let location = arguments
+                .get("location")
+                .and_then(|v| v.as_str())
+                .unwrap_or("an unknown location");
+            serde_json::json!({
+                "location": location,
+                "conditions": "partly cloudy",
+                "temperature_f": 72,
+                "note": "This is mock data from the voice-agent CLI's sample functions."
+            })
+            .to_string()
+        }
+        other => serde_json::json!({ "error": format!("Unknown function: {other}") }).to_string(),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -443,7 +567,7 @@ struct AudioCapture {
 }
 
 impl AudioCapture {
-    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    fn new(sample_rate: u32) -> Result<Self, Box<dyn std::error::Error>> {
         let host = cpal::default_host();
         let device = host
             .default_input_device()
@@ -451,11 +575,31 @@ impl AudioCapture {
 
         debug!("Input device: {}", device.name()?);
 
-        let supported_config = device.default_input_config()?;
-        debug!("Default input config: {:?}", supported_config);
+        let default_config = device.default_input_config()?;
+        debug!("Default input config: {:?}", default_config);
+
+        let supported_config = device
+            .supported_input_configs()?
+            .find(|config| {
+                config.channels() == default_config.channels()
+                    && config.sample_format() == default_config.sample_format()
+                    && config.min_sample_rate().0 <= sample_rate
+                    && config.max_sample_rate().0 >= sample_rate
+            })
+            .ok_or_else(|| {
+                format!(
+                    "Input device does not support {} Hz with its default channel count ({}) and sample format ({:?})",
+                    sample_rate,
+                    default_config.channels(),
+                    default_config.sample_format()
+                )
+            })?;
 
         let sample_format = supported_config.sample_format();
-        let config: StreamConfig = supported_config.into();
+        let config: StreamConfig = supported_config
+            .with_sample_rate(cpal::SampleRate(sample_rate))
+            .into();
+        debug!("Selected input config: {:?}", config);
 
         Ok(AudioCapture {
             device,
@@ -468,13 +612,15 @@ impl AudioCapture {
         &self,
         tx: mpsc::UnboundedSender<Vec<u8>>,
         mic_enabled: Arc<AtomicBool>,
+        encoding: &str,
     ) -> Result<Stream, Box<dyn std::error::Error>> {
         let config = self.config.clone();
+        let encoding = encoding.to_string();
 
         let stream = match self.sample_format {
-            SampleFormat::F32 => self.build_stream::<f32>(config, tx, mic_enabled)?,
-            SampleFormat::I16 => self.build_stream::<i16>(config, tx, mic_enabled)?,
-            SampleFormat::U16 => self.build_stream::<u16>(config, tx, mic_enabled)?,
+            SampleFormat::F32 => self.build_stream::<f32>(config, tx, mic_enabled, &encoding)?,
+            SampleFormat::I16 => self.build_stream::<i16>(config, tx, mic_enabled, &encoding)?,
+            SampleFormat::U16 => self.build_stream::<u16>(config, tx, mic_enabled, &encoding)?,
             _ => return Err("Unsupported sample format".into()),
         };
 
@@ -487,26 +633,21 @@ impl AudioCapture {
         config: StreamConfig,
         tx: mpsc::UnboundedSender<Vec<u8>>,
         mic_enabled: Arc<AtomicBool>,
+        encoding: &str,
     ) -> Result<Stream, Box<dyn std::error::Error>>
     where
         T: cpal::Sample + cpal::SizedSample + Send + 'static,
         f32: cpal::FromSample<T>,
     {
+        let encoding = encoding.to_string();
         let stream = self.device.build_input_stream(
             &config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
                 let audio_data = if mic_enabled.load(Ordering::Relaxed) {
-                    // Convert real mic samples to linear16 for Deepgram
-                    let mut buf = Vec::with_capacity(data.len() * 2);
-                    for &sample in data.iter() {
-                        let f32_sample: f32 = cpal::Sample::from_sample(sample);
-                        let i16_sample = (f32_sample * i16::MAX as f32) as i16;
-                        buf.extend_from_slice(&i16_sample.to_le_bytes());
-                    }
-                    buf
+                    encode_audio_samples(data, &encoding)
                 } else {
                     // Mic is muted — send silence to keep the connection alive
-                    vec![0u8; data.len() * 2]
+                    vec![0u8; data.len() * encoded_sample_width(&encoding)]
                 };
 
                 if let Err(_e) = tx.send(audio_data) {
@@ -518,6 +659,60 @@ impl AudioCapture {
         )?;
 
         Ok(stream)
+    }
+}
+
+fn encoded_sample_width(encoding: &str) -> usize {
+    match encoding {
+        "linear16" => 2,
+        "linear32" => 4,
+        "mulaw" | "alaw" => 1,
+        _ => unreachable!("audio encoding is validated by clap"),
+    }
+}
+
+fn encode_audio_samples<T>(samples: &[T], encoding: &str) -> Vec<u8>
+where
+    T: cpal::Sample,
+    f32: cpal::FromSample<T>,
+{
+    let mut buf = Vec::with_capacity(samples.len() * encoded_sample_width(encoding));
+    for &sample in samples {
+        let sample: f32 = cpal::Sample::from_sample(sample);
+        match encoding {
+            "linear16" => buf.extend_from_slice(
+                &((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16).to_le_bytes(),
+            ),
+            "linear32" => buf.extend_from_slice(
+                &((sample.clamp(-1.0, 1.0) * i32::MAX as f32) as i32).to_le_bytes(),
+            ),
+            "mulaw" => buf.push(encode_mulaw(sample)),
+            "alaw" => buf.push(encode_alaw(sample)),
+            _ => unreachable!("audio encoding is validated by clap"),
+        }
+    }
+    buf
+}
+
+fn encode_mulaw(sample: f32) -> u8 {
+    let sample = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
+    let sign = if sample < 0 { 0x80 } else { 0 };
+    let magnitude = sample.unsigned_abs().min(32635) + 132;
+    let exponent = (15 - magnitude.leading_zeros()).min(7) as u8;
+    let mantissa = ((magnitude >> (exponent + 3)) & 0x0f) as u8;
+    !(sign | (exponent << 4) | mantissa)
+}
+
+fn encode_alaw(sample: f32) -> u8 {
+    let sample = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
+    let sign = if sample < 0 { 0x80 } else { 0 };
+    let magnitude = sample.unsigned_abs().min(32767);
+    if magnitude < 256 {
+        (sign | ((magnitude >> 4) as u8)) ^ 0x55
+    } else {
+        let exponent = (15 - magnitude.leading_zeros()).min(7) as u8;
+        let mantissa = ((magnitude >> (exponent - 3)) & 0x0f) as u8;
+        (sign | ((exponent << 4) | mantissa)) ^ 0x55
     }
 }
 
@@ -737,8 +932,8 @@ fn cleaned_values(values: &[String]) -> Vec<String> {
 }
 
 fn create_agent_config(
+    audio_encoding: &str,
     sample_rate: u32,
-    _channels: u16,
     listen: ListenArgs<'_>,
     speak: SpeakArgs<'_>,
     think_type: &str,
@@ -752,6 +947,7 @@ fn create_agent_config(
     think_aws_secret_access_key: Option<&str>,
     think_aws_session_token: Option<&str>,
     prompt: Option<&str>,
+    enable_sample_functions: bool,
 ) -> VoiceAgentConfig {
     // Parse think headers from "key=value" format
     let mut headers = std::collections::HashMap::new();
@@ -766,6 +962,22 @@ fn create_agent_config(
         url: url.to_string(),
         headers,
     });
+
+    // Custom Google endpoints must not carry a model in the settings JSON — the
+    // model belongs in the endpoint URL path (e.g. ".../models/<model>:streamGenerateContent"),
+    // and Stem rejects Settings that specify both.
+    if think_type == "google" && think_endpoint.is_some() && !think_model.is_empty() {
+        log::warn!(
+            "--think-model is ignored for a custom Google endpoint; include the model in --think-endpoint instead (e.g. '.../models/{think_model}:streamGenerateContent?alt=sse')"
+        );
+    }
+    let think_model_for_settings = if think_type == "google" && think_endpoint.is_some() {
+        None
+    } else if think_model.is_empty() {
+        None
+    } else {
+        Some(think_model.to_string())
+    };
 
     // Build speak config based on provider type
     let speak_config = match speak.provider {
@@ -808,7 +1020,7 @@ fn create_agent_config(
         tags: vec!["demo".to_string(), "voice_agent".to_string()],
         audio: AudioSettings {
             input: AudioInputConfig {
-                encoding: "linear16".to_string(),
+                encoding: audio_encoding.to_string(),
                 sample_rate,
             },
             output: AudioOutputConfig {
@@ -834,11 +1046,7 @@ fn create_agent_config(
             think: ThinkConfig {
                 provider: ThinkProviderConfig {
                     provider_type: think_type.to_string(),
-                    model: if think_model.is_empty() {
-                        None
-                    } else {
-                        Some(think_model.to_string())
-                    },
+                    model: think_model_for_settings,
                     temperature: think_temperature,
                     credentials: think_credentials_type
                         .or(think_aws_region)
@@ -856,6 +1064,11 @@ fn create_agent_config(
                         }),
                 },
                 prompt: Some(prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT).to_string()),
+                functions: if enable_sample_functions {
+                    sample_functions()
+                } else {
+                    Vec::new()
+                },
                 endpoint: endpoint_config,
             },
             speak: speak_config,
@@ -865,13 +1078,11 @@ fn create_agent_config(
 
 fn config_from_options(
     options: &LaunchOptions,
-    sample_rate: u32,
-    channels: u16,
     eleven_labs_api_key: Option<String>,
 ) -> VoiceAgentConfig {
     create_agent_config(
-        sample_rate,
-        channels,
+        &options.audio_encoding,
+        options.audio_sample_rate,
         ListenArgs {
             provider: &options.listen_provider,
             model: &options.listen_model,
@@ -902,6 +1113,7 @@ fn config_from_options(
         options.think_aws_secret_access_key.as_deref(),
         options.think_aws_session_token.as_deref(),
         options.prompt.as_deref(),
+        options.enable_sample_functions,
     )
 }
 
@@ -1362,6 +1574,7 @@ async fn handle_voice_agent_responses(
     mic_enabled: Arc<AtomicBool>,
     mute_on_playback: bool,
     verbose: bool,
+    function_response_tx: mpsc::UnboundedSender<String>,
 ) {
     while let Some(message) = ws_receiver.next().await {
         match message {
@@ -1438,6 +1651,60 @@ async fn handle_voice_agent_responses(
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("");
                             log::warn!("⚠️ Agent warning [{}]: {}", code, desc);
+                        }
+                        "FunctionCallRequest" => {
+                            let functions = response
+                                .data
+                                .get("functions")
+                                .and_then(|f| f.as_array())
+                                .cloned()
+                                .unwrap_or_default();
+
+                            for function in functions {
+                                let id = function
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .to_string();
+                                let name = function
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .to_string();
+                                let arguments = function
+                                    .get("arguments")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("{}");
+                                let client_side = function
+                                    .get("client_side")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+
+                                if !client_side {
+                                    debug!("Ignoring server-side function call request: {}", name);
+                                    continue;
+                                }
+
+                                info!("🔧 Function call: {}({})", name, arguments);
+                                let content = execute_sample_function(&name, arguments);
+
+                                let function_response = serde_json::json!({
+                                    "type": "FunctionCallResponse",
+                                    "id": id,
+                                    "name": name,
+                                    "content": content,
+                                });
+                                match serde_json::to_string(&function_response) {
+                                    Ok(text) => {
+                                        if let Err(e) = function_response_tx.send(text) {
+                                            error!("Failed to queue function call response: {}", e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to serialize function call response: {}", e);
+                                    }
+                                }
+                            }
                         }
                         _ => {
                             debug!(
@@ -1525,13 +1792,8 @@ async fn create_agent_configuration(
     let project_id =
         resolve_project_id(&api_key, args.project_id.as_deref(), args.launch.verbose).await?;
     let eleven_labs_api_key = load_eleven_labs_api_key(&args.launch)?;
-    let audio_capture = AudioCapture::new()?;
-    let config = config_from_options(
-        &args.launch,
-        audio_capture.config.sample_rate.0,
-        audio_capture.config.channels,
-        eleven_labs_api_key,
-    );
+    let _audio_capture = AudioCapture::new(args.launch.audio_sample_rate)?;
+    let config = config_from_options(&args.launch, eleven_labs_api_key);
     let agent_id = create_reusable_agent_config(
         &api_key,
         &project_id,
@@ -1565,13 +1827,12 @@ async fn run_voice_agent(
     debug!("Using endpoint: {}", args.endpoint);
 
     // Initialize audio capture
-    let audio_capture = AudioCapture::new()?;
-    let sample_rate = audio_capture.config.sample_rate.0;
+    let audio_capture = AudioCapture::new(args.audio_sample_rate)?;
     let channels = audio_capture.config.channels;
 
     debug!(
-        "Audio config - Sample rate: {}, Channels: {}",
-        sample_rate, channels
+        "Audio config - Sample rate: {} Hz, Channels: {}",
+        args.audio_sample_rate, channels
     );
 
     // Create microphone control flag - start with mic enabled
@@ -1580,6 +1841,10 @@ async fn run_voice_agent(
     // Create channels for audio data
     let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let (playback_tx, playback_rx) = std_mpsc::channel::<Vec<u8>>();
+
+    // Channel for outbound text messages (e.g. FunctionCallResponse) generated
+    // while handling WebSocket responses, forwarded to the socket alongside audio.
+    let (function_response_tx, mut function_response_rx) = mpsc::unbounded_channel::<String>();
 
     let mute_on_playback = !args.no_mic_mute;
     if !mute_on_playback {
@@ -1606,10 +1871,11 @@ async fn run_voice_agent(
 
     // Start audio capture with microphone control
     let mic_enabled_for_capture = Arc::clone(&mic_enabled);
-    let _stream = audio_capture.start_capture(audio_tx, mic_enabled_for_capture)?;
+    let _stream =
+        audio_capture.start_capture(audio_tx, mic_enabled_for_capture, &args.audio_encoding)?;
     debug!("Audio capture started");
 
-    let mut config = config_from_options(&args, sample_rate, channels, eleven_labs_api_key);
+    let mut config = config_from_options(&args, eleven_labs_api_key);
     if let Some(agent_id) = agent_config_id {
         config.agent = AgentConfiguration::Reference(agent_id.to_string());
     }
@@ -1618,7 +1884,7 @@ async fn run_voice_agent(
     let ws_stream = connect_to_voice_agent(
         &api_key,
         &args.endpoint,
-        sample_rate,
+        args.audio_sample_rate,
         channels,
         args.verbose,
     )
@@ -1652,6 +1918,7 @@ async fn run_voice_agent(
             mic_enabled_for_ws,
             mute_on_playback,
             args.verbose,
+            function_response_tx,
         )
         .await;
     });
@@ -1662,19 +1929,37 @@ async fn run_voice_agent(
 
     let audio_handle = tokio::spawn(async move {
         let mut packet_count = 0u64;
+        let mut function_responses_closed = false;
 
-        while let Some(audio_data) = audio_rx.recv().await {
-            packet_count += 1;
+        loop {
+            tokio::select! {
+                audio_data = audio_rx.recv() => {
+                    let Some(audio_data) = audio_data else { break };
+                    packet_count += 1;
 
-            // Send audio data as binary message
-            if let Err(e) = ws_sender.send(Message::Binary(audio_data.into())).await {
-                error!("❌ Failed to send audio data to WebSocket: {}", e);
-                break;
-            }
+                    // Send audio data as binary message
+                    if let Err(e) = ws_sender.send(Message::Binary(audio_data.into())).await {
+                        error!("❌ Failed to send audio data to WebSocket: {}", e);
+                        break;
+                    }
 
-            // Log every 100 packets to avoid spam
-            if packet_count % 100 == 0 {
-                debug!("📤 Sent {} audio packets to WebSocket", packet_count);
+                    // Log every 100 packets to avoid spam
+                    if packet_count % 100 == 0 {
+                        debug!("📤 Sent {} audio packets to WebSocket", packet_count);
+                    }
+                }
+                function_response = function_response_rx.recv(), if !function_responses_closed => {
+                    match function_response {
+                        Some(text) => {
+                            debug!("📤 Sending function call response: {}", text);
+                            if let Err(e) = ws_sender.send(Message::Text(text.into())).await {
+                                error!("❌ Failed to send function call response: {}", e);
+                                break;
+                            }
+                        }
+                        None => function_responses_closed = true,
+                    }
+                }
             }
         }
     });
@@ -1707,8 +1992,8 @@ mod tests {
     ) -> serde_json::Value {
         let keyterms: Vec<String> = Vec::new();
         let config = create_agent_config(
+            "linear16",
             16000,
-            1,
             ListenArgs {
                 provider: "deepgram",
                 model,
@@ -1739,6 +2024,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         );
 
         serde_json::to_value(config).expect("settings config should serialize")
@@ -1799,6 +2085,29 @@ mod tests {
             .expect("language hint CSV should parse");
 
         assert_eq!(args.launch.language_hints, vec!["en", "es"]);
+    }
+
+    #[test]
+    fn audio_options_accept_supported_encoding_and_sample_rate() {
+        let args = Args::try_parse_from([
+            "voice-agent",
+            "--audio-encoding",
+            "mulaw",
+            "--audio-sample-rate",
+            "8000",
+        ])
+        .expect("audio options should parse");
+
+        assert_eq!(args.launch.audio_encoding, "mulaw");
+        assert_eq!(args.launch.audio_sample_rate, 8000);
+    }
+
+    #[test]
+    fn audio_encoding_uses_expected_sample_width() {
+        assert_eq!(encoded_sample_width("linear16"), 2);
+        assert_eq!(encoded_sample_width("linear32"), 4);
+        assert_eq!(encoded_sample_width("mulaw"), 1);
+        assert_eq!(encoded_sample_width("alaw"), 1);
     }
 
     #[test]

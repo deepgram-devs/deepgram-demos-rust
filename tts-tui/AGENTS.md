@@ -1,9 +1,15 @@
 # AGENTS.md
 
-- Ensure releases include Windows, Linux, and macOS (Intel and Apple ARM) binaries.
-- The README always needs to reflect the current application capabilities.
-- When updating `tts-tui`, update `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, `README.md`, and `TESTPLAN.md` as appropriate.
-- Publish releases through `.github/workflows/tts-tui-release.yml`. Do not rely on local cross-compilation for release artifacts.
-- After merging an application update, push an annotated tag named `tts-tui-v<version>` (matching `Cargo.toml`). The workflow builds native artifacts on GitHub Actions runners and creates the GitHub release from those artifacts.
-- Verify the workflow completes all four targets before considering the release complete: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, and `x86_64-pc-windows-msvc`.
-- GitHub release descriptions must contain the bullet points from the matching version section of `CHANGELOG.md`; do not put binary checksums in the description because GitHub exposes checksums for release assets separately.
+- Keep the AGENTS.md file updated with new or changed functional requirements for the application
+
+## Releases
+
+- Ensure releases include Windows, Linux, and macOS binaries
+- Include Intel and ARM CPU binaries for all target operating systems
+- The README is designed to be human-readable and always needs to reflect the current application capabilities
+- When updating `tts-tui`, update `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, `README.md`, and `TESTPLAN.md` as appropriate
+- Publish releases through `.github/workflows/tts-tui-release.yml`. Do not rely on local cross-compilation for release artifacts
+- After merging an application update, push an annotated tag named `tts-tui-v<version>` (matching `Cargo.toml`). The workflow builds native artifacts on GitHub Actions runners and creates the GitHub release from those artifacts
+- Verify the workflow completes all six targets before considering the release complete: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, `aarch64-pc-windows-msvc`, and `x86_64-pc-windows-msvc`
+- GitHub release descriptions must contain the bullet points from the matching version section of `CHANGELOG.md`; do not put binary checksums in the description because GitHub exposes checksums for release assets separately
+- Ensure GitHub Actions workflow actions are using the latest major versions available, if the newest major version has been available for more than 45 days

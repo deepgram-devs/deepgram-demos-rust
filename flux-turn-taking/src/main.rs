@@ -40,32 +40,29 @@ impl Write for ThreadSafeWriter {
 struct DeepgramResponse {
     #[serde(rename = "type")]
     message_type: Option<String>,
-    event: Option<String>,
+    event: Option<TurnEvent>,
     #[serde(flatten)]
     data: serde_json::Value,
 }
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct ResultsResponse {
-    channel: Channel,
-    #[serde(default)]
-    is_final: bool,
-    #[serde(default)]
-    speech_final: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Channel {
-    alternatives: Vec<Alternative>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Alternative {
-    transcript: String,
-    confidence: Option<f64>,
+/// The sub-state reported by the `event` field of a Flux `TurnInfo` message.
+/// See https://developers.deepgram.com/reference/speech-to-text/listen-flux
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+enum TurnEvent {
+    /// Additional audio has been transcribed, but the turn state hasn't changed.
+    Update,
+    /// The user has begun speaking for the first time in the turn.
+    StartOfTurn,
+    /// Moderate confidence the user has finished speaking; an opportunity to
+    /// begin preparing an agent reply.
+    EagerEndOfTurn,
+    /// Speech was detected as continuing after an EagerEndOfTurn was sent.
+    TurnResumed,
+    /// The user has finished speaking for the turn.
+    EndOfTurn,
+    /// Any event value not yet known to this client.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,24 +70,9 @@ struct FluxResponse {
     #[serde(default)]
     turn_index: Option<usize>,
     #[serde(default)]
-    words: Vec<Word>,
-    #[serde(default)]
-    #[allow(dead_code)]
     transcript: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Word {
-    word: String,
-    #[allow(dead_code)]
-    confidence: f64,
-}
-
-// State for tracking incremental word printing
-struct TranscriptionState {
-    current_turn: Option<usize>,
-    words_printed: usize,
-    color_index: usize,
+    #[serde(default)]
+    end_of_turn_confidence: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Tabled)]
@@ -101,14 +83,18 @@ struct ThreadStats {
     bytes_sent: u64,
     #[tabled(rename = "Bytes Recv")]
     bytes_received: u64,
-    #[tabled(rename = "Results")]
-    results_count: u64,
-    #[tabled(rename = "SpeechStarted")]
-    speech_started_count: u64,
-    #[tabled(rename = "UtteranceEnd")]
-    utterance_end_count: u64,
-    #[tabled(rename = "Metadata")]
-    metadata_count: u64,
+    #[tabled(rename = "StartOfTurn")]
+    start_of_turn_count: u64,
+    #[tabled(rename = "Update")]
+    update_count: u64,
+    #[tabled(rename = "EagerEndOfTurn")]
+    eager_end_of_turn_count: u64,
+    #[tabled(rename = "TurnResumed")]
+    turn_resumed_count: u64,
+    #[tabled(rename = "EndOfTurn")]
+    end_of_turn_count: u64,
+    #[tabled(rename = "Errors")]
+    error_count: u64,
     #[tabled(rename = "Other")]
     other_count: u64,
 }
@@ -147,7 +133,31 @@ enum Commands {
         #[arg(long, default_value = "10000")]
         inactivity_timeout: u64,
 
-        /// Print all response messages instead of statistics table
+        /// Convert spoken numbers into numerical digits (e.g. "nine hundred" -> "900").
+        /// Must be set at connection time; Flux does not support toggling this mid-stream.
+        #[arg(long)]
+        numerals: bool,
+
+        /// Confidence threshold (0.3-0.9) for EagerEndOfTurn events, which give an early,
+        /// lower-confidence signal that the turn may be ending so an agent reply can start
+        /// preparing. A TurnResumed event follows if speech continues after all. Omit to
+        /// disable eager end-of-turn detection (the default).
+        #[arg(long, visible_alias = "eeot")]
+        eager_eot_threshold: Option<f64>,
+
+        /// Which connection's transcript to print in the regular (non-verbose,
+        /// non-stats) output mode. Connections are zero-indexed; the first
+        /// connection (0) is used by default.
+        #[arg(long, default_value = "0")]
+        connection: usize,
+
+        /// Show a live statistics table for all connections instead of the
+        /// selected connection's transcript.
+        #[arg(long)]
+        stats: bool,
+
+        /// Print all raw response messages for every connection instead of the
+        /// selected connection's transcript
         #[arg(long, short = 'v')]
         verbose: bool,
     },
@@ -177,7 +187,31 @@ enum Commands {
         #[arg(long, default_value = "10000")]
         inactivity_timeout: u64,
 
-        /// Print full JSON responses instead of incremental transcription
+        /// Convert spoken numbers into numerical digits (e.g. "nine hundred" -> "900").
+        /// Must be set at connection time; Flux does not support toggling this mid-stream.
+        #[arg(long)]
+        numerals: bool,
+
+        /// Confidence threshold (0.3-0.9) for EagerEndOfTurn events, which give an early,
+        /// lower-confidence signal that the turn may be ending so an agent reply can start
+        /// preparing. A TurnResumed event follows if speech continues after all. Omit to
+        /// disable eager end-of-turn detection (the default).
+        #[arg(long, visible_alias = "eeot")]
+        eager_eot_threshold: Option<f64>,
+
+        /// Which connection's transcript to print in the regular (non-verbose,
+        /// non-stats) output mode. Connections are zero-indexed; the first
+        /// connection (0) is used by default.
+        #[arg(long, default_value = "0")]
+        connection: usize,
+
+        /// Show a live statistics table for all connections instead of the
+        /// selected connection's transcript.
+        #[arg(long)]
+        stats: bool,
+
+        /// Print all raw response messages for every connection instead of the
+        /// selected connection's transcript
         #[arg(long, short = 'v')]
         verbose: bool,
     },
@@ -257,6 +291,8 @@ async fn connect_to_deepgram(
     endpoint: Option<&str>,
     sample_rate: u32,
     encoding: &str,
+    numerals: bool,
+    eager_eot_threshold: Option<f64>,
 ) -> Result<
     (
         tokio_tungstenite::WebSocketStream<
@@ -271,10 +307,14 @@ async fn connect_to_deepgram(
     // Remove trailing slashes from base_url to avoid double slashes
     let base_url = base_url.trim_end_matches('/');
 
-    let url = format!(
-        "{}/v2/listen?model=flux-general-en&sample_rate={}&encoding={}",
-        base_url, sample_rate, encoding
+    let mut url = format!(
+        "{}/v2/listen?model=flux-general-en&sample_rate={}&encoding={}&numerals={}",
+        base_url, sample_rate, encoding, numerals
     );
+
+    if let Some(threshold) = eager_eot_threshold {
+        url.push_str(&format!("&eager_eot_threshold={}", threshold));
+    }
 
     let url = Url::parse(&url)?;
 
@@ -297,6 +337,8 @@ async fn connect_to_deepgram(
 
 async fn handle_websocket_responses(
     thread_id: usize,
+    is_selected_connection: bool,
+    stats_mode: bool,
     mut ws_receiver: futures_util::stream::SplitStream<
         tokio_tungstenite::WebSocketStream<
             tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -309,7 +351,7 @@ async fn handle_websocket_responses(
     use crossterm::style::{Color, SetForegroundColor, ResetColor};
     use std::io::Write as IoWrite;
 
-    let colors = vec![
+    let colors = [
         Color::Cyan,
         Color::Green,
         Color::Yellow,
@@ -318,11 +360,11 @@ async fn handle_websocket_responses(
         Color::White,
     ];
 
-    let mut transcription_state = TranscriptionState {
-        current_turn: None,
-        words_printed: 0,
-        color_index: 0,
-    };
+    // Tracks which turn is currently being drawn on the terminal's current line, so the
+    // selected connection's transcript can be redrawn in place (one line per turn) rather
+    // than printing a new line for every message.
+    let mut current_turn_index: Option<usize> = None;
+
     let inactivity_timeout = tokio::time::Duration::from_millis(inactivity_timeout_ms);
 
     loop {
@@ -354,20 +396,27 @@ async fn handle_websocket_responses(
 
                 match serde_json::from_str::<DeepgramResponse>(&text) {
                     Ok(response) => {
-                        let msg_type = response.message_type.as_deref()
-                            .or(response.event.as_deref())
-                            .unwrap_or("Unknown");
+                        // Flux always reports "TurnInfo" as the top-level message type;
+                        // the actual turn state lives in the nested "event" field.
+                        let msg_type = response.message_type.as_deref().unwrap_or("Unknown");
 
-                        info!("[Thread {}] Received message type: '{}', verbose: {}", thread_id, msg_type, verbose);
+                        info!(
+                            "[Thread {}] Received message type: '{}', event: {:?}, verbose: {}",
+                            thread_id, msg_type, response.event, verbose
+                        );
 
                         // Update message type counts
                         if let Ok(mut stats_map) = stats.lock() {
                             if let Some(thread_stats) = stats_map.get_mut(&thread_id) {
-                                match msg_type {
-                                    "TurnInfo" | "Results" | "Update" => thread_stats.results_count += 1,
-                                    "SpeechStarted" => thread_stats.speech_started_count += 1,
-                                    "UtteranceEnd" | "EndOfTurn" => thread_stats.utterance_end_count += 1,
-                                    "Metadata" => thread_stats.metadata_count += 1,
+                                match (msg_type, response.event) {
+                                    ("TurnInfo", Some(TurnEvent::StartOfTurn)) => thread_stats.start_of_turn_count += 1,
+                                    ("TurnInfo", Some(TurnEvent::Update)) => thread_stats.update_count += 1,
+                                    ("TurnInfo", Some(TurnEvent::EagerEndOfTurn)) => thread_stats.eager_end_of_turn_count += 1,
+                                    ("TurnInfo", Some(TurnEvent::TurnResumed)) => thread_stats.turn_resumed_count += 1,
+                                    ("TurnInfo", Some(TurnEvent::EndOfTurn)) => thread_stats.end_of_turn_count += 1,
+                                    ("Error", _) => thread_stats.error_count += 1,
+                                    // Connected, ConfigureSuccess, ConfigureFailure, and any
+                                    // unrecognized TurnInfo event fall back to "Other".
                                     _ => thread_stats.other_count += 1,
                                 }
                             }
@@ -375,72 +424,91 @@ async fn handle_websocket_responses(
 
                         if verbose {
                             // Verbose mode: print full JSON
-                            println!("[Thread {}] 📨 Event: {}", thread_id, msg_type);
+                            println!(
+                                "[Thread {}] 📨 Type: {}{}",
+                                thread_id,
+                                msg_type,
+                                response.event.map(|e| format!(" (event: {:?})", e)).unwrap_or_default()
+                            );
                             println!(
                                 "[Thread {}] 📄 Response Data: {}",
                                 thread_id,
                                 serde_json::to_string_pretty(&response.data).unwrap_or_default()
                             );
                             println!("---");
-                        } else {
-                            // Normal mode: print incremental words
-                            info!("[Thread {}] Checking if msg_type '{}' matches TurnInfo/Results/Update/EndOfTurn", thread_id, msg_type);
-                            if msg_type == "TurnInfo" || msg_type == "Results" || msg_type == "Update" || msg_type == "EndOfTurn" {
-                                info!("[Thread {}] Matched! Attempting to parse FluxResponse", thread_id);
-                                match serde_json::from_value::<FluxResponse>(response.data.clone()) {
-                                    Ok(flux_response) => {
-                                        info!(
-                                            "[Thread {}] Parsed Flux response - turn_index: {:?}, words count: {}",
-                                            thread_id,
-                                            flux_response.turn_index,
-                                            flux_response.words.len()
-                                        );
+                        } else if msg_type == "TurnInfo" && is_selected_connection && !stats_mode {
+                            // Regular functional mode: print the transcript for the selected
+                            // connection only. Flux resends the full transcript-so-far on
+                            // every message rather than just the new words, so each message
+                            // redraws the current line in place (erase + rewrite) instead of
+                            // appending a new line. The line is only finalized with a newline
+                            // once the turn actually ends or a new turn begins. Color is scoped
+                            // to this single line (set immediately before printing, reset
+                            // immediately after) so it never bleeds into the stats table.
+                            match serde_json::from_value::<FluxResponse>(response.data.clone()) {
+                                Ok(flux_response) => {
+                                    info!(
+                                        "[Thread {}] Parsed Flux response - turn_index: {:?}, event: {:?}",
+                                        thread_id, flux_response.turn_index, response.event
+                                    );
 
-                                        // Use turn_index if present, otherwise default to 0
-                                        let turn_index = flux_response.turn_index.unwrap_or(0);
+                                    let turn_index = flux_response.turn_index.unwrap_or(0);
+                                    let color = colors[turn_index % colors.len()];
+                                    let event_name = response
+                                        .event
+                                        .map(|e| format!("{:?}", e))
+                                        .unwrap_or_else(|| "Unknown".to_string());
 
-                                        if transcription_state.current_turn != Some(turn_index) {
-                                            // New turn: print newline and change color
-                                            if transcription_state.current_turn.is_some() {
-                                                println!(); // End previous turn
-                                            }
-                                            transcription_state.current_turn = Some(turn_index);
-                                            transcription_state.words_printed = 0;
-                                            transcription_state.color_index =
-                                                (transcription_state.color_index + 1) % colors.len();
-
-                                            // Set new color
-                                            let _ = std::io::stdout()
-                                                .execute(SetForegroundColor(colors[transcription_state.color_index]));
-
-                                            info!("[Thread {}] Starting new turn {} with color index {}",
-                                                thread_id, turn_index, transcription_state.color_index);
+                                    let confidence_suffix = match (response.event, flux_response.end_of_turn_confidence) {
+                                        (Some(TurnEvent::EagerEndOfTurn), Some(confidence)) => {
+                                            format!(" [eager_eot_confidence: {:.4}]", confidence)
                                         }
-
-                                        // Print new words
-                                        if flux_response.words.len() > transcription_state.words_printed {
-                                            let new_words = &flux_response.words[transcription_state.words_printed..];
-                                            info!("[Thread {}] Printing {} new words", thread_id, new_words.len());
-                                            for word in new_words {
-                                                print!("{} ", word.word);
-                                                let _ = std::io::stdout().flush();
-                                            }
-                                            transcription_state.words_printed = flux_response.words.len();
+                                        (Some(TurnEvent::EndOfTurn), Some(confidence)) => {
+                                            format!(" [eot_confidence: {:.4}]", confidence)
                                         }
+                                        _ => String::new(),
+                                    };
 
-                                        // If EndOfTurn, finalize the line
-                                        if msg_type == "EndOfTurn" {
-                                            let _ = std::io::stdout().execute(ResetColor);
+                                    // A new turn starts a fresh line; finalize whatever was
+                                    // left of the previous turn's line first.
+                                    if current_turn_index != Some(turn_index) {
+                                        if current_turn_index.is_some() {
                                             println!();
-                                            info!("[Thread {}] EndOfTurn - resetting for next turn", thread_id);
                                         }
+                                        current_turn_index = Some(turn_index);
                                     }
-                                    Err(e) => {
-                                        error!("[Thread {}] Failed to parse Flux response: {}", thread_id, e);
-                                        error!("[Thread {}] Raw data: {}", thread_id, serde_json::to_string_pretty(&response.data).unwrap_or_default());
+
+                                    let mut stdout = std::io::stdout();
+                                    let _ = stdout.execute(cursor::MoveToColumn(0));
+                                    let _ = stdout.execute(terminal::Clear(terminal::ClearType::CurrentLine));
+                                    let _ = stdout.execute(SetForegroundColor(color));
+                                    print!("{}: {}{}", event_name, flux_response.transcript, confidence_suffix);
+                                    let _ = stdout.execute(ResetColor);
+                                    let _ = stdout.flush();
+
+                                    // A real EndOfTurn finalizes the line. EagerEndOfTurn is
+                                    // just a heads-up that the turn might be ending (a
+                                    // TurnResumed may follow), so the line stays open until
+                                    // EndOfTurn arrives. Clearing current_turn_index here means
+                                    // the next turn's first message won't also print a newline
+                                    // via the "new turn" check above, which would otherwise
+                                    // leave a blank line between every turn.
+                                    if response.event == Some(TurnEvent::EndOfTurn) {
+                                        println!();
+                                        current_turn_index = None;
                                     }
                                 }
+                                Err(e) => {
+                                    error!("[Thread {}] Failed to parse Flux response: {}", thread_id, e);
+                                    error!("[Thread {}] Raw data: {}", thread_id, serde_json::to_string_pretty(&response.data).unwrap_or_default());
+                                }
                             }
+                        } else if msg_type == "Error" {
+                            error!(
+                                "[Thread {}] Fatal error from Flux: {}",
+                                thread_id,
+                                serde_json::to_string_pretty(&response.data).unwrap_or_default()
+                            );
                         }
                     }
                     Err(e) => {
@@ -501,11 +569,15 @@ async fn handle_websocket_responses(
 
 fn run_thread_worker(
     thread_id: usize,
+    connection: usize,
+    stats_mode: bool,
     mut audio_rx: broadcast::Receiver<Vec<u8>>,
     api_key: String,
     endpoint: Option<String>,
     sample_rate: u32,
     encoding: String,
+    numerals: bool,
+    eager_eot_threshold: Option<f64>,
     stats: StatsMap,
     verbose: bool,
     inactivity_timeout_ms: u64,
@@ -518,7 +590,7 @@ fn run_thread_worker(
         // Connect to Deepgram WebSocket
         info!("[Thread {}] Connecting to Deepgram WebSocket...", thread_id);
 
-        let (ws_stream, response) = match connect_to_deepgram(&api_key, endpoint.as_deref(), sample_rate, &encoding).await {
+        let (ws_stream, response) = match connect_to_deepgram(&api_key, endpoint.as_deref(), sample_rate, &encoding, numerals, eager_eot_threshold).await {
             Ok(result) => {
                 info!("[Thread {}] Connected successfully", thread_id);
                 result
@@ -549,8 +621,9 @@ fn run_thread_worker(
 
         // Spawn response handler task
         let stats_clone = stats.clone();
+        let is_selected_connection = thread_id == connection;
         let response_handle = tokio::spawn(async move {
-            handle_websocket_responses(thread_id, ws_receiver, stats_clone, verbose, inactivity_timeout_ms).await;
+            handle_websocket_responses(thread_id, is_selected_connection, stats_mode, ws_receiver, stats_clone, verbose, inactivity_timeout_ms).await;
         });
 
         // Main loop: receive audio from broadcast and send to WebSocket
@@ -628,8 +701,15 @@ async fn run_microphone(
     encoding: String,
     threads: usize,
     inactivity_timeout_ms: u64,
+    numerals: bool,
+    eager_eot_threshold: Option<f64>,
+    connection: usize,
+    stats_mode: bool,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    validate_eager_eot_threshold(eager_eot_threshold)?;
+    validate_connection(connection, threads)?;
+
     // Get API key from environment variable
     let api_key =
         env::var("DEEPGRAM_API_KEY").map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
@@ -662,8 +742,8 @@ async fn run_microphone(
     println!("Spawning {} worker thread(s)...", threads);
     println!("📝 Writing logs to: flux-turn-taking.log");
     println!("Press Ctrl+C to stop");
-    if !verbose {
-        println!("Use --verbose to see all messages");
+    if !verbose && !stats_mode {
+        println!("Printing transcript for connection {} (use --connection to change, --stats for a live statistics table, --verbose for raw messages)", connection);
     }
     println!("===");
 
@@ -680,11 +760,15 @@ async fn run_microphone(
         let handle = std::thread::spawn(move || {
             run_thread_worker(
                 thread_id,
+                connection,
+                stats_mode,
                 audio_rx,
                 api_key_clone,
                 endpoint_clone,
                 sample_rate,
                 encoding_clone,
+                numerals,
+                eager_eot_threshold,
                 stats_clone,
                 verbose,
                 inactivity_timeout_ms,
@@ -694,8 +778,8 @@ async fn run_microphone(
         thread_handles.push(handle);
     }
 
-    // Spawn stats display task if not in verbose mode
-    let display_task = if !verbose {
+    // Spawn stats display task only when --stats is passed
+    let display_task = if stats_mode {
         let stats_clone = stats.clone();
         Some(tokio::spawn(async move {
             loop {
@@ -709,73 +793,26 @@ async fn run_microphone(
 
     // Wait for Ctrl+C
     tokio::signal::ctrl_c().await?;
-    info!("Received Ctrl+C, shutting down...");
-
-    // Reset terminal colors
-    let _ = std::io::stdout().execute(crossterm::style::ResetColor);
-
-    // Stop audio capture first
-    drop(stream);
-
-    // Drop the audio_tx to signal all threads to exit
-    drop(audio_tx);
+    info!("Received Ctrl+C, shutting down immediately...");
 
     // Cancel display task if it exists
     if let Some(task) = display_task {
         task.abort();
     }
 
-    // Wait for all threads to finish with 2 second timeout
-    println!("\nWaiting for worker threads to finish (2 second timeout)...");
-
-    let shutdown_timeout = tokio::time::Duration::from_secs(2);
-    let thread_count = thread_handles.len();
-
-    // Spawn tasks to wait for each thread
-    let mut join_tasks = Vec::new();
-    for (thread_id, handle) in thread_handles.into_iter().enumerate() {
-        let task = tokio::task::spawn_blocking(move || {
-            (thread_id, handle.join())
-        });
-        join_tasks.push(task);
-    }
-
-    // Wait for all threads with timeout
-    match tokio::time::timeout(shutdown_timeout, async {
-        for task in join_tasks {
-            if let Ok((thread_id, join_result)) = task.await {
-                match join_result {
-                    Ok(Ok(())) => {
-                        info!("Thread {} exited successfully", thread_id);
-                    }
-                    Ok(Err(e)) => {
-                        error!("Thread {} exited with error: {}", thread_id, e);
-                    }
-                    Err(e) => {
-                        error!("Thread {} panicked: {:?}", thread_id, e);
-                    }
-                }
-            }
-        }
-    }).await {
-        Ok(_) => {
-            info!("All {} threads exited successfully", thread_count);
-        }
-        Err(_) => {
-            error!("Shutdown timeout exceeded after 2 seconds, forcing exit");
-            // Reset terminal colors before forced exit
-            let _ = std::io::stdout().execute(crossterm::style::ResetColor);
-            println!("🛑 Application stopped (forced)");
-            std::process::exit(0);
-        }
-    }
+    // Stop audio capture and drop the sender so worker threads observe the
+    // channel closing, but don't wait for them to join: on Ctrl+C the user
+    // wants the process to exit now, not after the inactivity timeout.
+    drop(stream);
+    drop(audio_tx);
+    drop(thread_handles);
 
     // Reset terminal colors before exit
     let _ = std::io::stdout().execute(crossterm::style::ResetColor);
 
     println!("🛑 Application stopped");
 
-    // Force exit to ensure immediate termination
+    // Force exit immediately; worker threads are detached and will not be waited on.
     std::process::exit(0);
 }
 
@@ -880,8 +917,15 @@ async fn run_file(
     encoding: String,
     threads: usize,
     inactivity_timeout_ms: u64,
+    numerals: bool,
+    eager_eot_threshold: Option<f64>,
+    connection: usize,
+    stats_mode: bool,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    validate_eager_eot_threshold(eager_eot_threshold)?;
+    validate_connection(connection, threads)?;
+
     // Get API key from environment variable
     let api_key =
         env::var("DEEPGRAM_API_KEY").map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
@@ -939,6 +983,9 @@ async fn run_file(
     );
     println!("Spawning {} worker thread(s)...", threads);
     println!("📝 Writing logs to: flux-turn-taking.log");
+    if !verbose && !stats_mode {
+        println!("Printing transcript for connection {} (use --connection to change, --stats for a live statistics table, --verbose for raw messages)", connection);
+    }
     println!("===");
     println!("Transcription results:");
     println!();
@@ -956,11 +1003,15 @@ async fn run_file(
         let handle = std::thread::spawn(move || {
             run_thread_worker(
                 thread_id,
+                connection,
+                stats_mode,
                 audio_rx,
                 api_key_clone,
                 endpoint_clone,
                 actual_sample_rate,
                 encoding_clone,
+                numerals,
+                eager_eot_threshold,
                 stats_clone,
                 verbose,
                 inactivity_timeout_ms,
@@ -969,6 +1020,19 @@ async fn run_file(
 
         thread_handles.push(handle);
     }
+
+    // Spawn stats display task only when --stats is passed
+    let display_task = if stats_mode {
+        let stats_clone = stats.clone();
+        Some(tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                display_stats_table(&stats_clone);
+            }
+        }))
+    } else {
+        None
+    };
 
     // Calculate chunk size and delay for real-time streaming
     // Each sample is 2 bytes (16-bit), and we want chunks of approximately 100ms
@@ -1019,6 +1083,11 @@ async fn run_file(
     }
 
     println!("✅ File streaming complete: {} chunks sent ({} total bytes)", chunk_count, total_bytes_sent);
+
+    // Cancel the stats display task, if it was running
+    if let Some(task) = display_task {
+        task.abort();
+    }
 
     // Reset terminal colors
     let _ = std::io::stdout().execute(crossterm::style::ResetColor);
@@ -1092,14 +1161,45 @@ fn display_stats_table(stats: &StatsMap) {
                 .with(Style::sharp())
                 .to_string();
 
-            // Clear screen and move cursor to top
             let mut stdout = std::io::stdout();
+
+            // Table mode never uses color. Reset defensively in case a transcript
+            // line's SetForegroundColor is still active when this redraws.
+            let _ = stdout.execute(crossterm::style::ResetColor);
             let _ = stdout.execute(cursor::MoveTo(0, 0));
             let _ = stdout.execute(terminal::Clear(terminal::ClearType::FromCursorDown));
 
             println!("{}", table);
         }
     }
+}
+
+/// Flux accepts eager_eot_threshold values in the range 0.3-0.9; reject anything
+/// outside that range up front instead of letting Deepgram reject the connection.
+fn validate_eager_eot_threshold(threshold: Option<f64>) -> Result<(), Box<dyn std::error::Error>> {
+    match threshold {
+        Some(value) if !(0.3..=0.9).contains(&value) => Err(format!(
+            "--eager-eot-threshold must be between 0.3 and 0.9, got {}",
+            value
+        )
+        .into()),
+        _ => Ok(()),
+    }
+}
+
+/// The selected connection must refer to one of the threads that will actually
+/// be spawned.
+fn validate_connection(connection: usize, threads: usize) -> Result<(), Box<dyn std::error::Error>> {
+    if connection >= threads {
+        return Err(format!(
+            "--connection {} is out of range: only {} connection(s) (0-{}) will be spawned",
+            connection,
+            threads,
+            threads - 1
+        )
+        .into());
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -1121,11 +1221,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Microphone { endpoint, sample_rate, encoding, threads, inactivity_timeout, verbose } => {
-            run_microphone(endpoint, sample_rate, encoding, threads, inactivity_timeout, verbose).await?;
+        Commands::Microphone { endpoint, sample_rate, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, connection, stats, verbose } => {
+            run_microphone(endpoint, sample_rate, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, connection, stats, verbose).await?;
         }
-        Commands::File { path, endpoint, _sample_rate, encoding, threads, inactivity_timeout, verbose } => {
-            run_file(path, endpoint, encoding, threads, inactivity_timeout, verbose).await?;
+        Commands::File { path, endpoint, _sample_rate, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, connection, stats, verbose } => {
+            run_file(path, endpoint, encoding, threads, inactivity_timeout, numerals, eager_eot_threshold, connection, stats, verbose).await?;
         }
     }
 
