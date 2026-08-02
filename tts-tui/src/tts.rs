@@ -46,7 +46,7 @@ pub async fn fetch_audio_for_playback(
     extension: &str,
     cache_dir: &str,
     force_regenerate: bool,
-) -> Result<(String, Vec<u8>, bool)> {
+) -> Result<(String, Vec<u8>, bool, Option<String>)> {
     let cache_file_path = get_cache_file_path(
         cache_dir,
         &backend.cache_namespace(),
@@ -61,6 +61,7 @@ pub async fn fetch_audio_for_playback(
     let message;
     let audio_data;
     let is_cached;
+    let request_id;
 
     let short_name = cache_file_path
         .file_name()
@@ -79,13 +80,14 @@ pub async fn fetch_audio_for_playback(
         message = format!("Playing from cache: {}", short_name);
         audio_data = tokio::fs::read(&cache_file_path).await?;
         is_cached = true;
+        request_id = None;
     } else {
         message = if force_regenerate {
             format!("Regenerating (bypassing cache): {}", short_name)
         } else {
             format!("Fetching from Deepgram, caching as: {}", short_name)
         };
-        audio_data = match backend {
+        let fetched_audio = match backend {
             TtsBackend::Deepgram { api_key, endpoint } => {
                 fetch_deepgram_tts(
                     api_key.as_deref(),
@@ -103,7 +105,7 @@ pub async fn fetch_audio_for_playback(
                 endpoint_name,
                 region,
             } => {
-                crate::sagemaker::fetch_sagemaker_tts(
+                let audio_data = crate::sagemaker::fetch_sagemaker_tts(
                     endpoint_name,
                     region,
                     text,
@@ -113,9 +115,12 @@ pub async fn fetch_audio_for_playback(
                     encoding,
                     normalize_volume,
                 )
-                .await?
+                .await?;
+                (audio_data, None)
             }
         };
+        audio_data = fetched_audio.0;
+        request_id = fetched_audio.1;
         save_audio_to_cache(&cache_file_path, &audio_data).await?;
         is_cached = false;
     }
@@ -130,7 +135,7 @@ pub async fn fetch_audio_for_playback(
         message
     };
 
-    Ok((message, audio_data, is_cached))
+    Ok((message, audio_data, is_cached, request_id))
 }
 
 pub fn play_audio_data_sync(
@@ -174,6 +179,38 @@ pub fn play_audio_data_sync(
     };
 
     Ok((Arc::new(sink), duration_ms))
+}
+
+/// Append raw little-endian Linear16 audio received from the TTS WebSocket.
+/// The streaming endpoint only supports raw encodings, so this bypasses container
+/// decoders and lets playback begin as soon as the first binary message arrives.
+pub fn append_linear16_streaming_audio(
+    sink: &Arc<Sink>,
+    data: &[u8],
+    sample_rate: u32,
+) -> Result<u64> {
+    if data.len() % 2 != 0 {
+        return Err(anyhow!(
+            "Deepgram streaming audio chunk has an odd number of Linear16 bytes"
+        ));
+    }
+    let samples = data
+        .chunks_exact(2)
+        .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
+        .collect::<Vec<_>>();
+    let duration_ms = samples.len() as u64 * 1000 / sample_rate as u64;
+    sink.append(SamplesBuffer::new(1, sample_rate, samples));
+    Ok(duration_ms)
+}
+
+pub fn create_linear16_streaming_sink(
+    data: &[u8],
+    sample_rate: u32,
+    stream_handle: &OutputStreamHandle,
+) -> Result<(Arc<Sink>, u64)> {
+    let sink = Arc::new(Sink::try_new(stream_handle)?);
+    let duration_ms = append_linear16_streaming_audio(&sink, data, sample_rate)?;
+    Ok((sink, duration_ms))
 }
 
 /// Decode a single G.711 μ-law byte to a signed 16-bit linear PCM sample.
@@ -377,7 +414,7 @@ async fn fetch_deepgram_tts(
     encoding: &str,
     normalize_volume: bool,
     endpoint: &str,
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, Option<String>)> {
     let client = Client::new();
     let url = build_deepgram_tts_url(
         endpoint,
@@ -428,12 +465,20 @@ async fn fetch_deepgram_tts(
         ));
     }
 
+    let request_id = deepgram_request_id(res.headers());
     let audio_data = res
         .bytes()
         .await
         .context("Failed to read audio data from response")?
         .to_vec();
-    Ok(audio_data)
+    Ok((audio_data, request_id))
+}
+
+fn deepgram_request_id(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    headers
+        .get("dg-request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string)
 }
 
 fn build_deepgram_tts_url(
@@ -657,6 +702,19 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "https://selfhosted.example.com/custom/route?model=flux-jack-en&encoding=mp3"
+        );
+    }
+
+    #[test]
+    fn extracts_deepgram_request_id_from_response_headers() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "dg-request-id",
+            reqwest::header::HeaderValue::from_static("request-123"),
+        );
+        assert_eq!(
+            deepgram_request_id(&headers).as_deref(),
+            Some("request-123")
         );
     }
 }

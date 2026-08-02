@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Gender {
@@ -60,6 +61,8 @@ pub enum CommandAction {
     MoveTextDown,
     ToggleFavoriteVoice,
     ToggleVolumeNormalization,
+    ToggleWebSocketStreaming,
+    CycleStreamingChunking,
     FilterVoices,
     FilterTexts,
     SetApiKey,
@@ -135,6 +138,16 @@ pub static ALL_COMMANDS: &[AppCommand] = &[
         name: "Toggle Volume Normalization",
         shortcut: Some("v"),
         action: CommandAction::ToggleVolumeNormalization,
+    },
+    AppCommand {
+        name: "Toggle WebSocket Streaming",
+        shortcut: Some("w"),
+        action: CommandAction::ToggleWebSocketStreaming,
+    },
+    AppCommand {
+        name: "Cycle Streaming Chunking",
+        shortcut: Some("c"),
+        action: CommandAction::CycleStreamingChunking,
     },
     AppCommand {
         name: "Filter Voices",
@@ -311,6 +324,11 @@ pub struct App {
     pub sample_rate: u32,
     pub sample_rate_menu_state: ListState,
     pub playback_speed: Decimal, // Range: 0.7 to 1.5
+    pub websocket_streaming_enabled: bool,
+    pub streaming_chunking_strategy: crate::tts_streaming::ChunkingStrategy,
+    pub streaming_playback_active: bool,
+    pub streaming_generation_complete: bool,
+    pub streaming_cancellation: Option<CancellationToken>,
     pub is_loading: bool,
     pub loading_text: String,
     pub spinner_index: usize,
@@ -353,7 +371,21 @@ pub enum TtsResult {
         message: String,
         audio_data: Vec<u8>,
         is_cached: bool,
+        request_id: Option<String>,
     },
+    StreamingStarted {
+        chunk_count: usize,
+        sample_rate: u32,
+    },
+    StreamingAudio(Vec<u8>),
+    StreamingChunk {
+        index: usize,
+        total: usize,
+        text: String,
+    },
+    StreamingRequestId(String),
+    StreamingWarning(String),
+    StreamingFlushed,
     Error(String),
 }
 
@@ -512,6 +544,7 @@ impl App {
         ));
 
         let provider = config::normalized_tts_provider(config.api.provider.as_deref());
+        let websocket_streaming_enabled = config.experimental.streaming_playback;
         initial_logs.push(make_entry(
             LogLevel::Info,
             format!("TTS provider: {}", provider),
@@ -566,7 +599,7 @@ impl App {
         if flags.streaming_playback {
             initial_logs.push(make_entry(
                 LogLevel::Info,
-                "[experimental] streaming_playback enabled".to_string(),
+                "WebSocket streaming TTS enabled".to_string(),
             ));
         }
         if flags.ssml_support {
@@ -661,6 +694,11 @@ impl App {
             sample_rate,
             sample_rate_menu_state,
             playback_speed: Decimal::from_str("1.0").unwrap(),
+            websocket_streaming_enabled,
+            streaming_chunking_strategy: crate::tts_streaming::ChunkingStrategy::TenWords,
+            streaming_playback_active: false,
+            streaming_generation_complete: false,
+            streaming_cancellation: None,
             is_loading: false,
             loading_text: String::new(),
             spinner_index: 0,
@@ -965,6 +1003,24 @@ impl App {
         self.set_status_message(format!("Volume normalization {}", state));
     }
 
+    pub fn toggle_websocket_streaming(&mut self) {
+        self.websocket_streaming_enabled = !self.websocket_streaming_enabled;
+        let state = if self.websocket_streaming_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        self.add_log(format!("WebSocket streaming TTS {}", state));
+        self.set_status_message(format!("WebSocket streaming TTS {}", state));
+    }
+
+    pub fn cycle_streaming_chunking_strategy(&mut self) {
+        self.streaming_chunking_strategy = self.streaming_chunking_strategy.next();
+        let label = self.streaming_chunking_strategy.label();
+        self.add_log(format!("Streaming chunking: {}", label));
+        self.set_status_message(format!("Streaming chunking: {}", label));
+    }
+
     // ── Playback Queue ────────────────────────────────────────────────────────
 
     pub fn enqueue_current(&mut self) {
@@ -1096,6 +1152,8 @@ impl App {
                 CommandAction::MoveTextDown => self.move_text_down(),
                 CommandAction::ToggleFavoriteVoice => self.toggle_favorite_voice(),
                 CommandAction::ToggleVolumeNormalization => self.toggle_volume_normalization(),
+                CommandAction::ToggleWebSocketStreaming => self.toggle_websocket_streaming(),
+                CommandAction::CycleStreamingChunking => self.cycle_streaming_chunking_strategy(),
                 CommandAction::FilterVoices => self.enter_voice_filter_mode(),
                 CommandAction::FilterTexts => self.enter_text_filter_mode(),
                 CommandAction::SetApiKey => self.enter_api_key_mode(),
@@ -1119,6 +1177,7 @@ impl App {
     }
 
     pub fn add_log_with_level(&mut self, level: LogLevel, message: String) {
+        crate::logging::write(log_level_name(&level), &message);
         self.logs.push(LogEntry {
             level,
             message,
@@ -1129,6 +1188,12 @@ impl App {
         }
         // Reset scroll to show newest entry
         self.log_scroll_offset = 0;
+    }
+
+    pub fn persist_existing_logs(&self) {
+        for entry in &self.logs {
+            crate::logging::write(log_level_name(&entry.level), &entry.message);
+        }
     }
 
     /// Scroll the log panel. direction: -1 = scroll toward older, +1 = scroll toward newer.
@@ -1627,11 +1692,29 @@ impl App {
         self.spinner_index = 0;
         self.audio_duration_ms = 0;
         self.playback_start_time = std::time::Instant::now();
+        self.streaming_playback_active = false;
+        self.streaming_generation_complete = false;
+        self.streaming_cancellation = None;
+    }
+
+    pub fn start_streaming_playback(&mut self, cancellation: CancellationToken) {
+        self.streaming_playback_active = true;
+        self.streaming_generation_complete = false;
+        self.streaming_cancellation = Some(cancellation);
+    }
+
+    pub fn mark_streaming_generation_complete(&mut self) {
+        self.streaming_generation_complete = true;
+        self.streaming_cancellation = None;
+        self.set_status_message("Streaming audio complete; finishing playback".to_string());
     }
 
     pub fn stop_loading(&mut self) {
         self.is_loading = false;
         self.loading_text.clear();
+        self.streaming_playback_active = false;
+        self.streaming_generation_complete = false;
+        self.streaming_cancellation = None;
     }
 
     pub fn update_spinner(&mut self) {
@@ -1646,13 +1729,20 @@ impl App {
 
     pub fn check_audio_playback(&mut self) {
         if self.is_loading {
+            if self.streaming_playback_active && !self.streaming_generation_complete {
+                return;
+            }
             if let Some(sink) = &self.audio_sink {
                 let elapsed_ms = self.playback_start_time.elapsed().as_millis() as u64;
                 let done_by_sink = sink.empty();
                 // Also treat elapsed >= duration as done: covers the gap between the
-                // duration expiring and the 250 ms poll interval catching sink.empty().
-                let done_by_time =
-                    self.audio_duration_ms > 0 && elapsed_ms >= self.audio_duration_ms;
+                // duration expiring and the next event-loop poll catching sink.empty().
+                // Streaming starts before all audio is generated, so wall-clock time
+                // includes WebSocket generation latency and cannot safely determine
+                // completion. The sink is authoritative once Flushed has arrived.
+                let done_by_time = !self.streaming_playback_active
+                    && self.audio_duration_ms > 0
+                    && elapsed_ms >= self.audio_duration_ms;
                 if done_by_sink || done_by_time {
                     self.stop_loading();
                     self.audio_sink = None;
@@ -1667,6 +1757,10 @@ impl App {
     }
 
     pub fn stop_audio_playback(&mut self) {
+        if let Some(cancellation) = self.streaming_cancellation.take() {
+            cancellation.cancel();
+        }
+        self.tts_receiver = None;
         if let Some(sink) = self.audio_sink.take() {
             sink.stop();
         }
@@ -1684,36 +1778,49 @@ impl App {
         }
     }
 
-    pub fn check_tts_result(&mut self) -> Option<Vec<u8>> {
+    pub fn take_tts_results(&mut self) -> Vec<TtsResult> {
+        let mut results = Vec::new();
         if let Some(receiver) = &mut self.tts_receiver {
-            // Non-blocking check for TTS result
-            if let Ok(result) = receiver.try_recv() {
+            while let Ok(result) = receiver.try_recv() {
+                results.push(result);
+            }
+            if receiver.is_closed() {
                 self.tts_receiver = None;
-                match result {
-                    TtsResult::Success {
-                        message,
-                        audio_data,
-                        is_cached,
-                    } => {
-                        let log_level = if is_cached {
-                            LogLevel::Success
-                        } else {
-                            LogLevel::Info
-                        };
-                        self.add_log_with_level(log_level, message.clone());
-                        if let Some(text) = self.get_selected_text() {
-                            self.audio_cache_info.insert(text, is_cached);
-                        }
-                        return Some(audio_data);
-                    }
-                    TtsResult::Error(error) => {
-                        self.stop_loading();
-                        self.add_log_with_level(LogLevel::Error, format!("Error: {}", error));
-                        self.set_status_message("Error occurred during TTS".to_string());
-                    }
-                }
             }
         }
-        None
+        results
+    }
+
+    pub fn record_cached_tts_result(&mut self, message: String, is_cached: bool) {
+        let log_level = if is_cached {
+            LogLevel::Success
+        } else {
+            LogLevel::Info
+        };
+        self.add_log_with_level(log_level, message);
+        if let Some(text) = self.get_selected_text() {
+            self.audio_cache_info.insert(text, is_cached);
+        }
+    }
+
+    pub fn handle_tts_error(&mut self, error: String) {
+        if let Some(sink) = self.audio_sink.take() {
+            sink.stop();
+        }
+        if let Some(cancellation) = self.streaming_cancellation.take() {
+            cancellation.cancel();
+        }
+        self.stop_loading();
+        self.add_log_with_level(LogLevel::Error, format!("Error: {}", error));
+        self.set_status_message("Error occurred during TTS".to_string());
+    }
+}
+
+fn log_level_name(level: &LogLevel) -> &'static str {
+    match level {
+        LogLevel::Info => "INFO",
+        LogLevel::Success => "SUCCESS",
+        LogLevel::Warning => "WARN",
+        LogLevel::Error => "ERROR",
     }
 }

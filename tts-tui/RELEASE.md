@@ -1,6 +1,6 @@
 # TTS TUI Release Checklist
 
-The current release is `0.9.1` (2026-07-21).
+The current release is `0.9.2` (2026-08-02).
 
 ## Required Release Files
 
@@ -74,7 +74,7 @@ For each platform artifact:
 
 - Run `tts-tui --help` and verify the provider, endpoint, audio format, sample rate, SageMaker endpoint name, and AWS region options are listed.
 - Launch the TUI and verify the terminal enters and exits alternate screen mode cleanly.
-- Verify `~/.config/deepgram-tts-client.toml` is created or read without parse errors.
+- Verify `~/.config/deepgram/deepgram-tts-client.toml` is created or read without parse errors.
 
 For at least one platform:
 

@@ -608,6 +608,8 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             "  f         - Select audio encoding format",
             "  s         - Select TTS sample rate",
             "  v         - Toggle volume normalization",
+            "  w         - Toggle Deepgram WebSocket streaming",
+            "  c         - Cycle streaming chunking (10 words / sentence / punctuation)",
             "  k         - Set Deepgram API key interactively",
             "  o         - Open audio cache folder",
             "  Esc       - Stop audio / clear active filter / close popup",

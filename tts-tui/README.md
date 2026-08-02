@@ -17,11 +17,13 @@ A terminal user interface (TUI) built with Rust and Ratatui for interacting with
 - **Color themes** — choose from Deepgram (default), Nord, or Synthwave Outrun via the `t` key
 - **Audio format selection** — choose MP3, Linear16 (WAV), μ-law, A-law, FLAC, or AAC via the `f` key
 - **Sample rate selection** — choose the output sample rate for the active format via the `s` key
-- **Volume normalization** — optionally request normalized output with `--normalize-volume`, `DEEPGRAM_NORMALIZE_VOLUME=true`, or `[audio].normalize_volume = true`
+- **Volume normalization** — toggle normalized output at runtime with `v`
+- **WebSocket TTS streaming** — stream hosted Aura, Aura-2, and Flux TTS audio over Deepgram WebSockets with `w`; Aura supports selectable 10-word, sentence, or punctuation chunking with `c`
 - Adjustable TTS playback speed (`+`/`-`/`0` keys)
 - Interactive API key entry — set or override the key at runtime without restarting (`k`)
 - Open the audio cache folder with a single keystroke (`o`)
-- TOML configuration file at `~/.config/deepgram-tts-client.toml` with inline documentation
+- TOML configuration file at `~/.config/deepgram/deepgram-tts-client.toml` with inline documentation
+- Persistent rotating log at `~/.config/deepgram/tts-tui.log` (1 MiB per file, three files retained by default)
 - Experimental feature flags via config file or environment variables
 - Timestamped, color-coded log panel with scrollable history and mouse scroll support
 - Mouse click to select specific items in lists
@@ -39,14 +41,14 @@ cd tts-tui
 cargo run
 ```
 
-On first launch the app creates `~/.config/deepgram-tts-client.toml` with all options documented inline. In `deepgram` mode, if no API key is detected you will see a warning in the log panel, but requests can still be sent without an `Authorization` header for endpoints that do not require one. Press `k` to enter a key interactively if your hosted or self-hosted endpoint requires one. In `sagemaker` mode, the app uses the standard AWS credential chain instead of a Deepgram API key.
+On first launch the app creates `~/.config/deepgram/deepgram-tts-client.toml` with all options documented inline. Existing configurations are moved automatically from `~/.config/deepgram-tts-client.toml`. In `deepgram` mode, if no API key is detected you will see a warning in the log panel, but requests can still be sent without an `Authorization` header for endpoints that do not require one. Press `k` to enter a key interactively if your hosted or self-hosted endpoint requires one. In `sagemaker` mode, the app uses the standard AWS credential chain instead of a Deepgram API key.
 
 ## Configuration
 
 Settings are resolved in this priority order (highest wins):
 
 ```
-CLI arguments  >  environment variables  >  ~/.config/deepgram-tts-client.toml  >  built-in defaults
+CLI arguments  >  environment variables  >  ~/.config/deepgram/deepgram-tts-client.toml  >  built-in defaults
 ```
 
 ### Provider
@@ -55,6 +57,18 @@ Use Deepgram-compatible HTTP mode by default. Without `--endpoint`, this targets
 
 ```bash
 cargo run
+```
+
+### Logging
+
+`tts-tui` writes application events to `~/.config/deepgram/tts-tui.log`. The active file rotates when it reaches 1 MiB by default; `tts-tui.log.1` and `tts-tui.log.2` are retained, for three log files total. Batch requests log the Deepgram `dg-request-id` response header; Aura WebSocket streaming logs the request ID from `Metadata`, Flux logs it from `Connected`, and both log every successfully sent `Speak` text chunk.
+
+Configure the limits in the TOML file, or override them with `TTS_TUI_LOG_MAX_SIZE_BYTES`, `TTS_TUI_LOG_MAX_FILES`, `--log-max-size-bytes`, or `--log-max-files`:
+
+```toml
+[logging]
+max_size_bytes = 1048576
+max_files = 3
 ```
 
 Use self-hosted Deepgram TTS on Amazon SageMaker through the AWS SageMaker Runtime `InvokeEndpoint` API:
@@ -75,7 +89,7 @@ export AWS_REGION=us-east-2
 cargo run
 ```
 
-Or in `~/.config/deepgram-tts-client.toml`:
+Or in `~/.config/deepgram/deepgram-tts-client.toml`:
 
 ```toml
 [api]
@@ -110,7 +124,7 @@ Three ways to supply your Deepgram API key, in priority order:
 # 2. Environment variable
 export DEEPGRAM_API_KEY="your-api-key"
 
-# 3. Config file (~/.config/deepgram-tts-client.toml)
+# 3. Config file (~/.config/deepgram/deepgram-tts-client.toml)
 # [api]
 # key = "your-api-key"
 ```
@@ -177,7 +191,7 @@ export DEEPGRAM_AUDIO_FORMAT=linear16
 export DEEPGRAM_SAMPLE_RATE=24000
 cargo run
 
-# Config file (~/.config/deepgram-tts-client.toml)
+# Config file (~/.config/deepgram/deepgram-tts-client.toml)
 # [audio]
 # format = "flac"
 # sample_rate = 48000
@@ -198,29 +212,29 @@ You can also change format and sample rate interactively with the `f` and `s` ke
 
 #### Volume normalization
 
-Volume normalization is disabled by default. Enable it for new requests with any of these equivalent settings:
-
-```bash
-# CLI flag (the flag enables normalization; --normalize-volume=false disables it)
-cargo run -- --normalize-volume
-
-# Environment variable
-DEEPGRAM_NORMALIZE_VOLUME=true cargo run
-
-# Config file (~/.config/deepgram-tts-client.toml)
-# [audio]
-# normalize_volume = true
-```
+Volume normalization is disabled by default. Press `v` from the main screen to toggle it for new requests; the status bar and log confirm the active state. The default state can still be set with `DEEPGRAM_NORMALIZE_VOLUME=true` or `[audio].normalize_volume = true` in `~/.config/deepgram/deepgram-tts-client.toml`.
 
 When enabled, the app adds `normalize_volume=true` to the Deepgram TTS query parameters for both the HTTP and SageMaker providers. The setting is included in the audio cache key.
 
+#### WebSocket TTS streaming
+
+Press `w` on the main screen to switch the hosted Deepgram provider to streaming TTS. Aura and Aura-2 voices use `wss://api.deepgram.com/v1/speak`, authenticate through `Sec-WebSocket-Protocol`, and send the selected chunks as `Speak` messages. Flux voices use `wss://api.deepgram.com/v2/speak`, authenticate with `Authorization: Token ...`, and send the complete saved text as one `Speak` message so whitespace is preserved. Both modes send a final `Flush`; playback begins as binary Linear16 audio arrives and continues until the protocol's completion messages have been received and the audio sink is empty.
+
+Press `c` to choose a chunking strategy for the next stream:
+
+- **10 words** — sends groups of ten words.
+- **Sentence boundary** — separates at `.`, `!`, and `?`.
+- **Punctuation** — separates at sentence punctuation plus commas and semicolons.
+
+Streaming requires a Deepgram API key and a hosted Deepgram voice. It always uses streaming-compatible Linear16 audio; the app uses the selected sample rate when it is compatible, otherwise 24000 Hz. For Flux, the app waits for `Flushed`, `SpeechMetadata`, and graceful `SessionMetadata` closure before completing. Press `Esc` to abort a stream; otherwise the app plays the complete received buffer. SageMaker remains unavailable through WebSocket streaming.
+
 ### Experimental Feature Flags
 
-In-development features can be enabled in `~/.config/deepgram-tts-client.toml`:
+In-development features can be enabled in `~/.config/deepgram/deepgram-tts-client.toml`:
 
 ```toml
 [experimental]
-# Stream audio playback as bytes arrive instead of waiting for the full download.
+# Enable Deepgram WebSocket TTS streaming on startup (or press 'w' at runtime).
 streaming_playback = false
 
 # Allow SSML markup tags in text input for fine-grained speech control.
@@ -268,6 +282,8 @@ TTS_TUI_FEATURE_SSML_SUPPORT=true cargo run
 | `f` | Select audio encoding format |
 | `s` | Select output sample rate |
 | `v` | Toggle volume normalization |
+| `w` | Toggle Deepgram WebSocket streaming |
+| `c` | Cycle streaming chunking strategy |
 | `k` | Set Deepgram API key interactively |
 | `o` | Open audio cache folder |
 | `Up` / `Down` | Navigate list |

@@ -27,11 +27,13 @@ cargo check -p tts-tui
 
 ### 1. Startup And Configuration
 
-- Launch the app with no config file and verify `~/.config/deepgram-tts-client.toml` is created with documented `[api]`, `[sagemaker]`, `[audio]`, and `[experimental]` sections.
+- Launch the app with no config file and verify `~/.config/deepgram/deepgram-tts-client.toml` is created with documented `[api]`, `[sagemaker]`, `[audio]`, and `[experimental]` sections.
+- Place a config at the legacy `~/.config/deepgram-tts-client.toml` path, launch the app, and verify it is moved to the new `~/.config/deepgram/` directory without losing settings.
 - Verify the log panel shows the config path at startup.
+- Verify `~/.config/deepgram/tts-tui.log` is created and contains startup and UI log entries. Set `[logging].max_size_bytes` to a small value, generate enough log output to rotate it, and verify the active file plus at most `max_files - 1` numbered backups are retained.
 - Set `TTS_TUI_PROVIDER=deepgram` and verify the app logs the `deepgram` provider.
 - Set `TTS_TUI_PROVIDER=sagemaker` without a SageMaker endpoint name and verify the app logs a warning that the endpoint name is missing.
-- Verify CLI values override environment variables and TOML values for provider, endpoint, audio format, sample rate, volume normalization, SageMaker endpoint name, and AWS region.
+- Verify CLI values override environment variables and TOML values for provider, endpoint, audio format, sample rate, SageMaker endpoint name, and AWS region.
 
 ### 2. Deepgram HTTP Provider
 
@@ -41,8 +43,15 @@ cargo check -p tts-tui
 - Press `Ctrl+Enter` and verify the cache is bypassed and a fresh request is made.
 - Run with `--endpoint` pointing at a self-hosted or proxy Deepgram-compatible TTS endpoint and verify playback still works.
 - Remove or invalidate the API key for an endpoint that requires one and verify the log panel shows a useful error.
-- Enable volume normalization and verify the request query contains `normalize_volume=true`; disable it and verify the parameter is omitted.
+- Verify `tts-tui --help` does not list a `--normalize-volume` option.
+- Press `v` to enable volume normalization and verify the request query contains `normalize_volume=true`; press it again to disable normalization and verify the parameter is omitted.
 - Press `v` and verify the status bar/log reports volume normalization enabled or disabled; verify the next request uses the new state.
+- Press `w` and verify the status bar/log reports WebSocket streaming enabled or disabled. With a hosted Aura voice, a valid `DEEPGRAM_API_KEY`, and streaming enabled, play a saved text and verify that audio begins before the full utterance has been generated.
+- Press `c` and verify the status bar cycles through 10 words, sentence boundary, and punctuation chunking. With endpoint logging enabled, verify the app sends one `Speak` WebSocket message per chunk and a final `Flush` message.
+- Verify `~/.config/deepgram/tts-tui.log` records the individual WebSocket `Speak` chunks after they are sent.
+- Verify a hosted Deepgram batch request logs its `dg-request-id` response header, and a WebSocket stream logs the request ID received in its `Metadata` (Aura) or `Connected` (Flux) message.
+- Verify the app waits for Deepgram's `Flushed` response before closing the WebSocket and plays all queued audio. Press `Esc` during another stream and verify playback stops and the connection closes without waiting for the final audio.
+- With streaming enabled, verify a Flux voice uses WebSocket streaming and plays the complete utterance; verify the SageMaker provider still shows a clear unsupported-mode error and its normal request path works when streaming is disabled.
 - Play several different texts/voices back-to-back in quick succession (bypassing the cache with `Ctrl+Enter` for at least one) and verify no audible pop, click, or static plays between or during tracks.
 - Start the app on a machine with no audio output device (or with audio hardware disabled) and verify the log panel shows "No audio output device available" at startup and that text/voice management still works without crashing.
 
@@ -53,6 +62,7 @@ cargo check -p tts-tui
 - Increase or decrease playback speed, then play a Flux voice and verify the log notes that Flux ignores playback speed.
 - Enable volume normalization, then play a Flux voice and verify the log notes that Flux ignores volume normalization.
 - With a proxy tool (e.g. `mitmproxy`) or endpoint logs, confirm the outgoing request path is `/v2/speak` for a Flux voice and `/v1/speak` for an Aura or Aura-2 voice in the same session.
+- For Flux streaming, confirm the WebSocket uses `Authorization: Token ...`, sends `Speak` followed by `Flush`, receives `Flushed` and `SpeechMetadata`, then sends `Close` and receives `SessionMetadata` before the connection closes.
 - Play an Aura or Aura-2 voice immediately after a Flux voice and verify both work without needing to restart the app or change configuration.
 
 ### 3. SageMaker Provider

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.2 - 2026-08-02
+
+### Changes
+
+- Removed the `--normalize-volume` startup option. Toggle volume normalization from the TUI with `v`; the shortcut is available in the Help screen and Command Palette.
+- Added a `w` toggle for Deepgram WebSocket TTS streaming and a `c` shortcut to cycle 10-word, sentence, and punctuation chunking. Streams authenticate with `Sec-WebSocket-Protocol`, send a final `Flush`, wait for `Flushed`, and drain all received audio before completing playback.
+- Explicitly select Rustls' ring cryptographic provider at startup, preventing a WebSocket streaming panic when multiple Rustls providers are enabled in the workspace.
+- Moved the TOML configuration file to `~/.config/deepgram/deepgram-tts-client.toml`; existing configurations at the previous path are migrated automatically.
+- Added persistent rotating logs at `~/.config/deepgram/tts-tui.log`, with a 1 MiB active-file limit and three retained files by default. WebSocket `Speak` chunks are logged after successful sends.
+- Log Deepgram request IDs for hosted batch responses and WebSocket streaming metadata.
+- Added Flux TTS WebSocket streaming through `/v2/speak`, including Flux authentication and graceful `Flushed`/`SpeechMetadata`/`SessionMetadata` handling.
+
 ## 0.9.1 - 2026-07-21
 
 ### Features
