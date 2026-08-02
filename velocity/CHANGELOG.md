@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Restricted the Velocity release workflow to native Windows 11 x64 and ARM64 artifacts; Velocity is not released for macOS or Linux.
+
 ## 0.5.1 - 2026-07-19
 
 - Hardened the Velocity dependency graph by replacing packaged MP3 notification sounds with WAV assets, removing the vulnerable `minimp3` transitive dependency path.

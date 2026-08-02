@@ -11,21 +11,14 @@ Push-to-talk speech-to-text for Windows 11. Hold **Win+Ctrl+'** to record your v
 
 ### Scoop
 
-A Scoop manifest is available at `deploy/scoop/velocity.json`.
-
-From a local checkout:
+Velocity is published through the repository's `dg` Scoop bucket after a successful Windows release:
 
 ```powershell
-scoop install .\deploy\scoop\velocity.json
+scoop bucket add dg https://github.com/deepgram-devs/deepgram-demos-rust
+scoop install dg/velocity
 ```
 
-After this file is published on `main`, it can also be installed directly from the repository manifest:
-
-```powershell
-scoop install https://raw.githubusercontent.com/deepgram-devs/deepgram-demos-rust/main/velocity/deploy/scoop/velocity.json
-```
-
-Once accepted into a community Scoop bucket, the install command can move to the bucket-native package name.
+The release workflow builds only native Windows 11 x64 and ARM64 ZIPs and updates the Scoop manifest with their SHA256 hashes.
 
 ### Manual
 
