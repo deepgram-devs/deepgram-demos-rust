@@ -1,5 +1,6 @@
 # AGENTS.md
 
+- Keep the AGENTS.md file updated with new or changed functional requirements for the application
 - Ensure releases include Windows, Linux, and macOS (Intel and Apple ARM) binaries.
 - The README always needs to reflect the current application capabilities.
 - When updating `tts-tui`, update `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, `README.md`, and `TESTPLAN.md` as appropriate.
