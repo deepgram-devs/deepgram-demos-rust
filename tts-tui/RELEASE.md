@@ -39,8 +39,8 @@ The TTS TUI release should include binaries for:
 | macOS Intel | `x86_64-apple-darwin` | `tts-tui-<version>-x86_64-apple-darwin.tar.gz` |
 | Linux ARM64 | `aarch64-unknown-linux-gnu` | `tts-tui-<version>-aarch64-unknown-linux-gnu.tar.gz` |
 | Linux x86_64 | `x86_64-unknown-linux-gnu` | `tts-tui-<version>-x86_64-unknown-linux-gnu.tar.gz` |
-| Windows ARM64 | `aarch64-pc-windows-msvc` | `tts-tui-<version>-aarch64-pc-windows-msvc.zip` |
-| Windows x86_64 | `x86_64-pc-windows-msvc` | `tts-tui-<version>-x86_64-pc-windows-msvc.zip` |
+| Windows ARM64 | `aarch64-pc-windows-msvc` | `tts-tui-<version>-windows-arm64.zip` |
+| Windows x86_64 | `x86_64-pc-windows-msvc` | `tts-tui-<version>-windows-x64.zip` |
 
 ## GitHub Actions Release Workflow
 

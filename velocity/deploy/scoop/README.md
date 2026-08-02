@@ -2,7 +2,7 @@
 
 Velocity is published through the repository-wide `dg` Scoop bucket at `scoop/bucket/velocity.json`.
 
-The reusable release workflow builds both Windows x64 and ARM64 ZIPs with versioned names such as `velocity-0.5.1-x86_64-pc-windows-msvc.zip`, publishes them to the `velocity-v0.5.1` GitHub release, and commits the matching Scoop manifest hashes automatically. There is no separate manually maintained Velocity manifest.
+The reusable release workflow builds both Windows x64 and ARM64 ZIPs with versioned names such as `velocity-0.5.1-windows-x64.zip`, publishes them to the `velocity-v0.5.1` GitHub release, and commits the matching Scoop manifest hashes automatically. There is no separate manually maintained Velocity manifest.
 
 After the manifest has been published, install it with:
 

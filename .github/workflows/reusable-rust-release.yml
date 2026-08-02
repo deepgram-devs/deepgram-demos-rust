@@ -86,9 +86,11 @@ jobs:
           - os: windows-2025
             target: x86_64-pc-windows-msvc
             archive_kind: zip
+            archive_suffix: windows-x64
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
             archive_kind: zip
+            archive_suffix: windows-arm64
 
     steps:
       - name: Check out release tag
@@ -122,11 +124,12 @@ jobs:
           BINARY: ${{ inputs.binary }}
           SOURCE_DIRECTORY: ${{ inputs.source_directory }}
           TARGET: ${{ matrix.target }}
+          ARCHIVE_SUFFIX: ${{ matrix.archive_suffix || matrix.target }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
           package_dir="package"
-          archive="$APP-$VERSION-$TARGET.tar.gz"
+          archive="$APP-$VERSION-$ARCHIVE_SUFFIX.tar.gz"
           mkdir "$package_dir"
           cp "target/$TARGET/release/$BINARY" "$package_dir/$BINARY"
           for document in README.md CHANGELOG.md TESTPLAN.md; do
@@ -146,10 +149,11 @@ jobs:
           BINARY: ${{ inputs.binary }}
           SOURCE_DIRECTORY: ${{ inputs.source_directory }}
           TARGET: ${{ matrix.target }}
+          ARCHIVE_SUFFIX: ${{ matrix.archive_suffix }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           $packageDir = 'package'
-          $archive = "$($env:APP)-$($env:VERSION)-$($env:TARGET).zip"
+          $archive = "$($env:APP)-$($env:VERSION)-$($env:ARCHIVE_SUFFIX).zip"
           New-Item -ItemType Directory -Path $packageDir | Out-Null
           Copy-Item "target/$env:TARGET/release/$env:BINARY.exe" "$packageDir/$env:BINARY.exe"
           foreach ($document in 'README.md', 'CHANGELOG.md', 'TESTPLAN.md') {
@@ -242,8 +246,8 @@ jobs:
           set -euo pipefail
           repo="https://github.com/$GITHUB_REPOSITORY"
           base_url="$repo/releases/download/$TAG"
-          x64_asset="$APP-$VERSION-x86_64-pc-windows-msvc.zip"
-          arm64_asset="$APP-$VERSION-aarch64-pc-windows-msvc.zip"
+          x64_asset="$APP-$VERSION-windows-x64.zip"
+          arm64_asset="$APP-$VERSION-windows-arm64.zip"
           x64_hash="$(sha256sum "release-assets/$x64_asset" | awk '{print $1}')"
           arm64_hash="$(sha256sum "release-assets/$arm64_asset" | awk '{print $1}')"
           manifest="bucket-repository/scoop/bucket/$APP.json"

@@ -42,6 +42,6 @@ Use [Test-ScoopManifests.ps1](Test-ScoopManifests.ps1) to validate all JSON file
 
 Every application has a tag-triggered release workflow. A tag named `<app>-v<version>` builds six native artifacts: macOS Intel and ARM, Linux Intel and ARM, and Windows x64 and ARM64. After publishing the GitHub release, the workflow writes the matching Scoop manifest to `scoop/bucket/` with the hashes of the two Windows ZIPs.
 
-For example, publishing `dg-stt-v0.3.0` creates `dg-stt-0.3.0-x86_64-pc-windows-msvc.zip` and `dg-stt-0.3.0-aarch64-pc-windows-msvc.zip`, then updates `scoop/bucket/dg-stt.json`. The package becomes available through `scoop install dg/dg-stt` once that manifest update reaches the bucket branch.
+For example, publishing `dg-stt-v0.3.0` creates `dg-stt-0.3.0-windows-x64.zip` and `dg-stt-0.3.0-windows-arm64.zip`, then updates `scoop/bucket/dg-stt.json`. The package becomes available through `scoop install dg/dg-stt` once that manifest update reaches the bucket branch.
 
 The workflow-dispatch inputs can backfill an existing annotated tag, so the first precompiled release for each application does not require a source change.
