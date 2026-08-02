@@ -1,0 +1,26 @@
+name: dg-stt Release
+
+on:
+  push:
+    tags: ["dg-stt-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing dg-stt tag to build and publish
+        required: true
+        default: dg-stt-v0.3.0
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: ./.github/workflows/reusable-rust-release.yml
+    with:
+      app: dg-stt
+      binary: dg-stt
+      cargo_package: dg-stt
+      source_directory: speech-to-text
+      tag: ${{ inputs.tag || github.ref_name }}
+      description: Deepgram real-time speech-to-text command-line client.
+      homepage: https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/speech-to-text

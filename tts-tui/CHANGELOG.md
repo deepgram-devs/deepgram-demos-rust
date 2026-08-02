@@ -6,6 +6,10 @@
 
 - Fixed Windows startup configuration so `DEEPGRAM_API_KEY` is applied when the native `USERPROFILE` environment variable is available but `HOME` is not.
 
+### Release
+
+- Standardized release artifact names to include the version and added automatic updates for the precompiled Scoop package manifest.
+
 ## 0.9.2 - 2026-08-02
 
 ### Changes

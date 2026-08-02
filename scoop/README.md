@@ -9,7 +9,7 @@ scoop bucket add dg https://github.com/deepgram-devs/deepgram-demos-rust
 scoop install dg/dg-stt
 ```
 
-Replace `dg-stt` with any available application:
+After an application's first release has completed, replace `dg-stt` with any available application:
 
 | Application | Scoop command |
 | --- | --- |
@@ -22,7 +22,7 @@ Replace `dg-stt` with any available application:
 | Voice Agent | `scoop install dg/voice-agent` |
 | Velocity | `scoop install dg/velocity` |
 
-The manifests are source packages: Scoop installs Rust via `rustup-msvc` and then builds the requested application from a SHA256-verified, immutable repository archive. This makes the branch usable before every application has a signed binary release. The first installation needs the Microsoft C++ Build Tools and Windows SDK and can take several minutes; later installs reuse Cargo's caches.
+Each Scoop manifest installs a SHA256-verified Windows ZIP from the matching GitHub release. Rust, Cargo, and the Microsoft C++ Build Tools are not required on users' machines. Both x64 and ARM64 Windows assets are published for every release.
 
 Each app still needs its own runtime configuration, such as a `DEEPGRAM_API_KEY`, after installation. Run `<app> --help` for its CLI options.
 
@@ -36,8 +36,12 @@ dg-stt --help
 scoop uninstall dg-stt
 ```
 
-Use [Test-ScoopManifests.ps1](Test-ScoopManifests.ps1) to validate all JSON files and verify that their pinned source archive has not changed.
+Use [Test-ScoopManifests.ps1](Test-ScoopManifests.ps1) to validate all JSON files and verify that their release assets match their pinned hashes.
 
-## Updating the pinned archive
+## Release and manifest publishing
 
-Run [Update-ScoopManifests.ps1](Update-ScoopManifests.ps1) after the target commit is on GitHub. It downloads the immutable archive, calculates its SHA256 hash, and updates every manifest together. Review the diff, validate at least one install, and commit the regenerated manifests.
+Every application has a tag-triggered release workflow. A tag named `<app>-v<version>` builds six native artifacts: macOS Intel and ARM, Linux Intel and ARM, and Windows x64 and ARM64. After publishing the GitHub release, the workflow writes the matching Scoop manifest to `scoop/bucket/` with the hashes of the two Windows ZIPs.
+
+For example, publishing `dg-stt-v0.3.0` creates `dg-stt-0.3.0-x86_64-pc-windows-msvc.zip` and `dg-stt-0.3.0-aarch64-pc-windows-msvc.zip`, then updates `scoop/bucket/dg-stt.json`. The package becomes available through `scoop install dg/dg-stt` once that manifest update reaches the bucket branch.
+
+The workflow-dispatch inputs can backfill an existing annotated tag, so the first precompiled release for each application does not require a source change.

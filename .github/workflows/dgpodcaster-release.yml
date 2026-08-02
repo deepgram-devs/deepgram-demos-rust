@@ -1,0 +1,26 @@
+name: dgpodcaster Release
+
+on:
+  push:
+    tags: ["dgpodcaster-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing dgpodcaster tag to build and publish
+        required: true
+        default: dgpodcaster-v0.1.0
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: ./.github/workflows/reusable-rust-release.yml
+    with:
+      app: dgpodcaster
+      binary: dgpodcaster
+      cargo_package: dgpodcaster
+      source_directory: dgpodcaster
+      tag: ${{ inputs.tag || github.ref_name }}
+      description: Terminal user interface for generating podcast audio with Deepgram and Gemini.
+      homepage: https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/dgpodcaster

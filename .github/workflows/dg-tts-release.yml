@@ -1,0 +1,26 @@
+name: dg-tts Release
+
+on:
+  push:
+    tags: ["dg-tts-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing dg-tts tag to build and publish
+        required: true
+        default: dg-tts-v0.2.7
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: ./.github/workflows/reusable-rust-release.yml
+    with:
+      app: dg-tts
+      binary: dg-tts
+      cargo_package: dg-tts
+      source_directory: text-to-speech
+      tag: ${{ inputs.tag || github.ref_name }}
+      description: Deepgram text-to-speech command-line client.
+      homepage: https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/text-to-speech

@@ -32,14 +32,14 @@ cargo run --bin dg-tts -- --help
 
 ## Install on Windows with Scoop
 
-Windows users can add this repository as a custom Scoop bucket and install an application by name:
+Windows users can add this repository as a custom Scoop bucket and, after an application's first GitHub release, install it by name:
 
 ```powershell
 scoop bucket add dg https://github.com/deepgram-devs/deepgram-demos-rust
 scoop install dg/dg-stt
 ```
 
-The bucket contains `audio-recorder`, `dg-flux`, `dg-stt`, `dg-tts`, `dgpodcaster`, `tts-tui`, `voice-agent`, and `velocity`. The initial packages build from an immutable, hash-verified source archive, so they require the Microsoft C++ Build Tools and Windows SDK and may take several minutes on first install. See [the Scoop bucket guide](scoop/README.md) for the full package list, verification, and update process.
+The bucket contains `audio-recorder`, `dg-flux`, `dg-stt`, `dg-tts`, `dgpodcaster`, `tts-tui`, `voice-agent`, and `velocity`. Scoop downloads the precompiled Windows release ZIP matching the computer's architecture and verifies its SHA256 hash; no local Rust toolchain is required. See [the Scoop bucket guide](scoop/README.md) for the full package list, verification, and release process.
 
 ## Application Ideas
 

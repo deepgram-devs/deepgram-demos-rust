@@ -1,0 +1,26 @@
+name: Audio Recorder Release
+
+on:
+  push:
+    tags: ["audio-recorder-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing audio-recorder tag to build and publish
+        required: true
+        default: audio-recorder-v0.1.2
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: ./.github/workflows/reusable-rust-release.yml
+    with:
+      app: audio-recorder
+      binary: audio-recorder
+      cargo_package: audio-recorder
+      source_directory: audio-recorder
+      tag: ${{ inputs.tag || github.ref_name }}
+      description: Command-line audio recorder for local input devices.
+      homepage: https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/audio-recorder

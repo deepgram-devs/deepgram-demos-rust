@@ -1,0 +1,26 @@
+name: Voice Agent Release
+
+on:
+  push:
+    tags: ["voice-agent-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing voice-agent tag to build and publish
+        required: true
+        default: voice-agent-v0.1.3
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: ./.github/workflows/reusable-rust-release.yml
+    with:
+      app: voice-agent
+      binary: voice-agent
+      cargo_package: voice-agent
+      source_directory: voice-agent
+      tag: ${{ inputs.tag || github.ref_name }}
+      description: Deepgram Voice Agent client for real-time bidirectional conversations.
+      homepage: https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/voice-agent
