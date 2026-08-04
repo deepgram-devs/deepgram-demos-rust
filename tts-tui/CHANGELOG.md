@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.4 - 2026-08-03
+
+### Fixes
+
+- Keep the sample rate captured for each generated or queued item so changing the UI setting cannot change its playback speed.
+
 ## 0.9.3 - 2026-08-02
 
 ### Fixes

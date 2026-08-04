@@ -155,7 +155,10 @@ pub async fn stream_speech(
                     .context("Failed to receive a Deepgram TTS WebSocket message")?;
                 match message {
                     Message::Binary(audio) => {
-                        let _ = events.send(crate::app::TtsResult::StreamingAudio(audio.to_vec()));
+                        let _ = events.send(crate::app::TtsResult::StreamingAudio {
+                            audio_data: audio.to_vec(),
+                            sample_rate: request.sample_rate,
+                        });
                     }
                     Message::Text(text) => {
                         match serde_json::from_str::<serde_json::Value>(&text) {

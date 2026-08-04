@@ -9,7 +9,7 @@ on:
       tag:
         description: "Existing tts-tui tag to build and publish"
         required: true
-        default: "tts-tui-v0.9.3"
+        default: "tts-tui-v0.9.4"
 
 permissions:
   contents: read

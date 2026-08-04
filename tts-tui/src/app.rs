@@ -348,8 +348,7 @@ pub struct App {
     pub voice_panel_bounds: Rect,
     // Favorites
     pub favorite_voices: HashSet<String>,
-    // Playback queue: (text, voice_id) pairs
-    pub playback_queue: VecDeque<(String, String)>,
+    pub playback_queue: VecDeque<PlaybackQueueItem>,
     pub needs_queue_advance: bool,
     // Command palette
     pub command_palette_buffer: String,
@@ -372,12 +371,17 @@ pub enum TtsResult {
         audio_data: Vec<u8>,
         is_cached: bool,
         request_id: Option<String>,
+        encoding: String,
+        sample_rate: u32,
     },
     StreamingStarted {
         chunk_count: usize,
         sample_rate: u32,
     },
-    StreamingAudio(Vec<u8>),
+    StreamingAudio {
+        audio_data: Vec<u8>,
+        sample_rate: u32,
+    },
     StreamingChunk {
         index: usize,
         total: usize,
@@ -387,6 +391,14 @@ pub enum TtsResult {
     StreamingWarning(String),
     StreamingFlushed,
     Error(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlaybackQueueItem {
+    pub text: String,
+    pub voice_id: String,
+    pub audio_format_index: usize,
+    pub sample_rate: u32,
 }
 
 lazy_static! {
@@ -1027,7 +1039,12 @@ impl App {
         if let (Some(text), Some(voice)) = (self.get_selected_text(), self.get_selected_voice()) {
             let voice_id = voice.id.clone();
             let voice_name = voice.name.clone();
-            self.playback_queue.push_back((text.clone(), voice_id));
+            self.playback_queue.push_back(PlaybackQueueItem {
+                text: text.clone(),
+                voice_id,
+                audio_format_index: self.audio_format_index,
+                sample_rate: self.sample_rate,
+            });
             self.add_log(format!("Queued: \"{}\" with {}", text, voice_name));
             let count = self.playback_queue.len();
             self.set_status_message(format!(

@@ -82,6 +82,7 @@ cargo check -p tts-tui
 - For each format, open the sample-rate popup with `s` and verify only valid sample rates are shown.
 - Generate and play a short phrase for each supported format.
 - Verify the status bar shows the active format and sample rate.
+- Generate audio at 24 kHz, change the selected sample rate to 48 kHz while it is playing, and verify the current audio keeps its original speed. Queue an item at each rate and verify each queued item also plays at the rate captured when it was queued.
 - Verify μ-law and A-law audio play correctly instead of failing through the generic decoder.
 
 ### 5. Saved Texts And Voice Selection

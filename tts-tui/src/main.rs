@@ -9,7 +9,10 @@ mod tts_streaming;
 mod ui;
 
 use anyhow::Result;
-use app::{App, CommandAction, CurrentScreen, Panel, AUDIO_FORMATS, DEFAULT_FORMAT_INDEX};
+use app::{
+    App, CommandAction, CurrentScreen, Panel, PlaybackQueueItem, AUDIO_FORMATS,
+    DEFAULT_FORMAT_INDEX,
+};
 use clap::Parser;
 use crossterm::{
     event::{
@@ -165,6 +168,8 @@ fn kick_off_tts(
     voice_id: String,
     backend: tts::TtsBackend,
     force_regenerate: bool,
+    audio_format_index: usize,
+    sample_rate: u32,
 ) {
     // Stop any existing audio and signal an in-flight WebSocket stream to close.
     app.stop_audio_playback();
@@ -197,8 +202,9 @@ fn kick_off_tts(
             }
         };
 
-        let sample_rate = tts_streaming::streaming_sample_rate(app.sample_rate);
-        if sample_rate != app.sample_rate {
+        let requested_sample_rate = sample_rate;
+        let sample_rate = tts_streaming::streaming_sample_rate(requested_sample_rate);
+        if sample_rate != requested_sample_rate {
             app.add_log(format!(
                 "WebSocket streaming uses Linear16 at {} Hz (the selected format's rate is unsupported)",
                 sample_rate
@@ -251,10 +257,9 @@ fn kick_off_tts(
     }
 
     let speed = app.playback_speed;
-    let sample_rate = app.sample_rate;
-    let encoding = app.current_audio_format().encoding.to_string();
+    let encoding = AUDIO_FORMATS[audio_format_index].encoding.to_string();
     let normalize_volume = app.config.audio.normalize_volume;
-    let extension = app.current_audio_format().extension.to_string();
+    let extension = AUDIO_FORMATS[audio_format_index].extension.to_string();
     let cache_dir = app.audio_cache_dir.clone();
 
     tokio::spawn(async move {
@@ -277,6 +282,8 @@ fn kick_off_tts(
                 audio_data,
                 is_cached,
                 request_id,
+                encoding,
+                sample_rate,
             },
             Err(e) => {
                 let mut error_msg = format!("Error fetching audio: {:#}", e);
@@ -352,17 +359,17 @@ async fn run_app(
                     audio_data,
                     is_cached,
                     request_id,
+                    encoding,
+                    sample_rate,
                 } => {
                     app.record_cached_tts_result(message, is_cached);
                     if let Some(request_id) = request_id {
                         app.add_log(format!("Deepgram request ID: {request_id}"));
                     }
-                    let encoding = app.current_audio_format().encoding;
-                    let sample_rate = app.sample_rate;
                     match app.audio_stream_handle.clone() {
                         Some(stream_handle) => match tts::play_audio_data_sync(
                             &audio_data,
-                            encoding,
+                            &encoding,
                             sample_rate,
                             &stream_handle,
                         ) {
@@ -389,42 +396,40 @@ async fn run_app(
                         chunk_count, sample_rate
                     ));
                 }
-                app::TtsResult::StreamingAudio(audio_data) => {
-                    let sample_rate = tts_streaming::streaming_sample_rate(app.sample_rate);
-                    match app.audio_stream_handle.clone() {
-                        Some(stream_handle) => {
-                            let playback = match app.audio_sink.as_ref() {
-                                Some(sink) => tts::append_linear16_streaming_audio(
-                                    sink,
-                                    &audio_data,
-                                    sample_rate,
-                                )
-                                .map(|duration| (sink.clone(), duration)),
-                                None => tts::create_linear16_streaming_sink(
-                                    &audio_data,
-                                    sample_rate,
-                                    &stream_handle,
-                                ),
-                            };
-                            match playback {
-                                Ok((sink, duration_ms)) => {
-                                    if app.audio_sink.is_none() {
-                                        app.audio_sink = Some(sink);
-                                        app.playback_start_time = std::time::Instant::now();
-                                    }
-                                    app.audio_duration_ms =
-                                        app.audio_duration_ms.saturating_add(duration_ms);
-                                }
-                                Err(error) => app.handle_tts_error(format!(
-                                    "Error playing streaming audio: {error}"
-                                )),
+                app::TtsResult::StreamingAudio {
+                    audio_data,
+                    sample_rate,
+                } => match app.audio_stream_handle.clone() {
+                    Some(stream_handle) => {
+                        let playback = match app.audio_sink.as_ref() {
+                            Some(sink) => {
+                                tts::append_linear16_streaming_audio(sink, &audio_data, sample_rate)
+                                    .map(|duration| (sink.clone(), duration))
                             }
+                            None => tts::create_linear16_streaming_sink(
+                                &audio_data,
+                                sample_rate,
+                                &stream_handle,
+                            ),
+                        };
+                        match playback {
+                            Ok((sink, duration_ms)) => {
+                                if app.audio_sink.is_none() {
+                                    app.audio_sink = Some(sink);
+                                    app.playback_start_time = std::time::Instant::now();
+                                }
+                                app.audio_duration_ms =
+                                    app.audio_duration_ms.saturating_add(duration_ms);
+                            }
+                            Err(error) => app.handle_tts_error(format!(
+                                "Error playing streaming audio: {error}"
+                            )),
                         }
-                        None => app.handle_tts_error(
-                            "Error starting playback: no audio output device available".to_string(),
-                        ),
                     }
-                }
+                    None => app.handle_tts_error(
+                        "Error starting playback: no audio output device available".to_string(),
+                    ),
+                },
                 app::TtsResult::StreamingChunk { index, total, text } => {
                     app.add_log(format!(
                         "Deepgram WebSocket Speak chunk {index}/{total}: {text}"
@@ -450,7 +455,13 @@ async fn run_app(
         // Auto-advance the playback queue when previous track finishes
         if app.needs_queue_advance {
             app.needs_queue_advance = false;
-            if let Some((text, voice_id)) = app.playback_queue.pop_front() {
+            if let Some(PlaybackQueueItem {
+                text,
+                voice_id,
+                audio_format_index,
+                sample_rate,
+            }) = app.playback_queue.pop_front()
+            {
                 match build_tts_backend(app) {
                     Ok(backend) => {
                         let remaining = app.playback_queue.len();
@@ -460,7 +471,15 @@ async fn run_app(
                                 remaining
                             ));
                         }
-                        kick_off_tts(app, text, voice_id, backend, false);
+                        kick_off_tts(
+                            app,
+                            text,
+                            voice_id,
+                            backend,
+                            false,
+                            audio_format_index,
+                            sample_rate,
+                        );
                     }
                     Err(e) => {
                         app.add_log(format!("Queue advance failed: {}", e));
@@ -650,6 +669,8 @@ async fn run_app(
                                                     voice_id,
                                                     backend,
                                                     force,
+                                                    app.audio_format_index,
+                                                    app.sample_rate,
                                                 );
                                             }
                                             Err(e) => {
@@ -839,6 +860,8 @@ async fn run_app(
                                                             voice_id,
                                                             backend,
                                                             false,
+                                                            app.audio_format_index,
+                                                            app.sample_rate,
                                                         ),
                                                         Err(e) => {
                                                             app.add_log(format!("Error: {}", e));
