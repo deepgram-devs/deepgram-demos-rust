@@ -55,9 +55,9 @@ pub(crate) async fn run_deepgram_client(
         params.push("multichannel=true".to_string());
     }
 
-    // Add diarize parameter
+    // diarize_model enables diarization and selects the newest available model.
     if config.diarize {
-        params.push("diarize=true".to_string());
+        params.push("diarize_model=latest".to_string());
     }
 
     // Add detect_entities parameter

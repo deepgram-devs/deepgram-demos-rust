@@ -253,9 +253,9 @@ pub async fn run_transcribe_mode(
         params.push(format!("smart_format={}", smart));
     }
 
-    // Add diarize parameter
-    if let Some(diar) = args.diarize {
-        params.push(format!("diarize={}", diar));
+    // diarize_model enables diarization; omit it when diarization is disabled.
+    if args.diarize == Some(true) {
+        params.push("diarize_model=latest".to_string());
     }
 
     // Add multichannel parameter
