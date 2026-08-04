@@ -1,0 +1,18 @@
+{
+  "version": "0.4.0",
+  "description": "Deepgram real-time speech-to-text command-line client.",
+  "homepage": "https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/speech-to-text",
+  "license": "ISC",
+  "notes": "Installed from the dg-stt-v0.4.0 GitHub release.",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/dg-stt-v0.4.0/dg-stt-0.4.0-windows-x64.zip",
+      "hash": "c2acb54266ce1b7f12a91fd3d2ad38ce4ac8b9f969737695bd0c5c72ac881719"
+    },
+    "arm64": {
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/dg-stt-v0.4.0/dg-stt-0.4.0-windows-arm64.zip",
+      "hash": "00914995d77ebf0e8bef6e85a510286a3e3151e3d9a1f87677bfce407a00f4cf"
+    }
+  },
+  "bin": "dg-stt.exe"
+}
