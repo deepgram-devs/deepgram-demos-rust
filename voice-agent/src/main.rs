@@ -20,7 +20,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
 
 const DEFAULT_SYSTEM_PROMPT: &str =
-    "Keep your responses concise and focused. Answer in as few words as possible while remaining helpful.";
+    "Keep your responses concise and focused. Answer in as few words as possible while remaining helpful. Do not use Markdown formatting in your responses.";
 
 #[derive(Parser, Debug)]
 #[command(name = "voice-agent")]
@@ -887,7 +887,21 @@ async fn connect_to_voice_agent(
         .body(())?;
 
     debug!("Connecting to Deepgram Voice Agent WebSocket...");
-    let (ws_stream, _response) = connect_async(request).await?;
+    let upgrade_started_at = Instant::now();
+    let (ws_stream, _response) = match connect_async(request).await {
+        Ok(result) => result,
+        Err(error) => {
+            info!(
+                "Voice Agent HTTP-to-WebSocket upgrade failed after {} ms",
+                upgrade_started_at.elapsed().as_millis()
+            );
+            return Err(error.into());
+        }
+    };
+    info!(
+        "Voice Agent HTTP-to-WebSocket upgrade completed in {} ms",
+        upgrade_started_at.elapsed().as_millis()
+    );
     debug!("Connected to Deepgram Voice Agent successfully");
 
     Ok(ws_stream)
@@ -1078,11 +1092,12 @@ fn create_agent_config(
 
 fn config_from_options(
     options: &LaunchOptions,
+    sample_rate: u32,
     eleven_labs_api_key: Option<String>,
 ) -> VoiceAgentConfig {
     create_agent_config(
         &options.audio_encoding,
-        options.audio_sample_rate,
+        sample_rate,
         ListenArgs {
             provider: &options.listen_provider,
             model: &options.listen_model,
@@ -1118,6 +1133,13 @@ fn config_from_options(
 }
 
 fn validate_think_options(options: &LaunchOptions) -> Result<(), Box<dyn std::error::Error>> {
+    // AWS_* environment variables may be present in a developer shell even
+    // when another think provider is explicitly selected. Provider-specific
+    // credentials must not override the selected provider.
+    if options.think_type != "aws_bedrock" {
+        return Ok(());
+    }
+
     let has_bedrock_credentials = options.think_credentials_type.is_some()
         || options.think_aws_region.is_some()
         || options.think_aws_access_key_id.is_some()
@@ -1126,10 +1148,6 @@ fn validate_think_options(options: &LaunchOptions) -> Result<(), Box<dyn std::er
 
     if has_bedrock_credentials && options.think_type != "aws_bedrock" {
         return Err("AWS Bedrock credentials require --think-type aws_bedrock".into());
-    }
-
-    if options.think_type != "aws_bedrock" {
-        return Ok(());
     }
 
     if options.think_endpoint.as_deref().is_none_or(str::is_empty) {
@@ -1397,7 +1415,12 @@ fn print_json_response(body: &str) {
 }
 
 fn redact_voice_agent_credentials(config: &VoiceAgentConfig) -> serde_json::Value {
-    let mut value = serde_json::to_value(config).expect("voice agent config should serialize");
+    redact_voice_agent_json(
+        serde_json::to_value(config).expect("voice agent config should serialize"),
+    )
+}
+
+fn redact_voice_agent_json(mut value: serde_json::Value) -> serde_json::Value {
     if let Some(credentials) = value
         .get_mut("agent")
         .and_then(|agent| agent.get_mut("think"))
@@ -2119,10 +2142,33 @@ mod tests {
     }
 
     #[test]
-    fn default_system_prompt_requests_concise_responses() {
+    fn default_system_prompt_requests_concise_responses_without_markdown() {
         let config = config_for_listen_model("nova-3", None, &[]);
 
         assert_eq!(config["agent"]["think"]["prompt"], DEFAULT_SYSTEM_PROMPT);
+        assert!(DEFAULT_SYSTEM_PROMPT.contains("Do not use Markdown formatting"));
+    }
+
+    #[test]
+    fn verbose_settings_redact_google_api_key_header() {
+        let mut config_value = config_for_listen_model("nova-3", None, &[]);
+        config_value["agent"]["think"]["endpoint"] = serde_json::json!({
+            "url": "https://generativelanguage.googleapis.com/",
+            "headers": {
+                "x-goog-api-key": "secret-gemini-key",
+                "x-custom-header": "visible-value"
+            }
+        });
+        let redacted = redact_voice_agent_json(config_value);
+
+        assert_eq!(
+            redacted["agent"]["think"]["endpoint"]["headers"]["x-goog-api-key"],
+            "<redacted>"
+        );
+        assert_eq!(
+            redacted["agent"]["think"]["endpoint"]["headers"]["x-custom-header"],
+            "visible-value"
+        );
     }
 
     #[test]

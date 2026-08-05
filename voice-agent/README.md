@@ -177,7 +177,7 @@ cargo run -- --think-type anthropic \
 # Use Amazon Bedrock with long-lived IAM credentials
 cargo run -- \
              --think-type aws_bedrock \
-             --think-model us.anthropic.claude-3-5-sonnet-20241022-v2:0 \
+             --think-model nvidia.nemotron-super-3-120b \
              --think-temperature 0.7 \
              --think-endpoint https://bedrock-runtime.us-east-2.amazonaws.com/ \
              --think-credentials-type iam \
@@ -191,6 +191,25 @@ cargo run -- \
 # AWS credentials are intentionally not allowed in `config create` reusable
 # configurations because those values are visible to project members. Use an
 # inline launch for Bedrock credentials.
+```
+
+#### PowerShell with the Gemini think provider
+
+Set the Gemini API key in the current PowerShell session, then pass the
+Google Gemini streaming endpoint and API-key header to the Voice Agent CLI.
+For a custom Google endpoint, include the model in the endpoint URL; the CLI
+does not include `--think-model` separately in the Voice Agent Settings JSON.
+
+```powershell
+$env:GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
+
+cargo run -- `
+  --think-type google `
+  --think-model gemini-2.5-flash `
+  --think-endpoint "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse" `
+  --think-header "x-goog-api-key=$env:GEMINI_API_KEY" `
+  --enable-sample-functions `
+  --verbose
 ```
 
 #### PowerShell with refreshed STS credentials from an AWS profile
@@ -208,7 +227,7 @@ Invoke-Expression $awsCredentials
 cargo run -- `
   --enable-sample-functions `
   --think-type aws_bedrock `
-  --think-model us.anthropic.claude-3-5-sonnet-20241022-v2:0 `
+  --think-model nvidia.nemotron-super-3-120b `
   --think-temperature 0.7 `
   --think-endpoint https://bedrock-runtime.us-east-2.amazonaws.com/ `
   --think-credentials-type sts `
