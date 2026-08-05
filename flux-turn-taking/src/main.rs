@@ -287,7 +287,7 @@ impl AudioCapture {
 }
 
 async fn connect_to_deepgram(
-    api_key: &str,
+    api_key: Option<&str>,
     endpoint: Option<&str>,
     sample_rate: u32,
     encoding: &str,
@@ -318,21 +318,32 @@ async fn connect_to_deepgram(
 
     let url = Url::parse(&url)?;
 
-    // Create a simple request with authorization header
-    let request = tokio_tungstenite::tungstenite::handshake::client::Request::get(url.as_str())
-        .header("Authorization", format!("Token {}", api_key))
-        .header("Host", url.host_str().unwrap_or("api.deepgram.com"))
-        .header("Upgrade", "websocket")
-        .header("Connection", "Upgrade")
-        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
-        .header("Sec-WebSocket-Version", "13")
-        .body(())?;
+    let request = build_websocket_request(&url, api_key)?;
 
     info!("Connecting to Deepgram WebSocket at {}...", url.as_str());
     let (ws_stream, response) = connect_async(request).await?;
     info!("Connected to Deepgram WebSocket successfully");
 
     Ok((ws_stream, response))
+}
+
+/// Build the WebSocket handshake request, omitting Authorization when the
+/// endpoint does not need a Deepgram API key.
+fn build_websocket_request(
+    url: &Url,
+    api_key: Option<&str>,
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, Box<dyn std::error::Error>> {
+    let mut request = tokio_tungstenite::tungstenite::handshake::client::Request::get(url.as_str());
+    if let Some(api_key) = api_key {
+        request = request.header("Authorization", format!("Token {}", api_key));
+    }
+    Ok(request
+        .header("Host", url.host_str().unwrap_or("api.deepgram.com"))
+        .header("Upgrade", "websocket")
+        .header("Connection", "Upgrade")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .header("Sec-WebSocket-Version", "13")
+        .body(())?)
 }
 
 async fn handle_websocket_responses(
@@ -572,7 +583,7 @@ fn run_thread_worker(
     connection: usize,
     stats_mode: bool,
     mut audio_rx: broadcast::Receiver<Vec<u8>>,
-    api_key: String,
+    api_key: Option<String>,
     endpoint: Option<String>,
     sample_rate: u32,
     encoding: String,
@@ -590,7 +601,7 @@ fn run_thread_worker(
         // Connect to Deepgram WebSocket
         info!("[Thread {}] Connecting to Deepgram WebSocket...", thread_id);
 
-        let (ws_stream, response) = match connect_to_deepgram(&api_key, endpoint.as_deref(), sample_rate, &encoding, numerals, eager_eot_threshold).await {
+        let (ws_stream, response) = match connect_to_deepgram(api_key.as_deref(), endpoint.as_deref(), sample_rate, &encoding, numerals, eager_eot_threshold).await {
             Ok(result) => {
                 info!("[Thread {}] Connected successfully", thread_id);
                 result
@@ -695,6 +706,21 @@ fn run_thread_worker(
     })
 }
 
+/// Load an optional API key. Hosted Deepgram normally requires one, but a
+/// custom endpoint can provide its own authentication or accept unauthenticated
+/// WebSocket connections.
+fn load_api_key(endpoint: Option<&str>) -> Option<String> {
+    let api_key = env::var("DEEPGRAM_API_KEY")
+        .ok()
+        .filter(|key| !key.trim().is_empty());
+
+    if api_key.is_none() && endpoint.is_none() {
+        log::warn!("DEEPGRAM_API_KEY is not set; connecting to hosted Deepgram without an Authorization header");
+    }
+
+    api_key
+}
+
 async fn run_microphone(
     endpoint: Option<String>,
     sample_rate: u32,
@@ -710,9 +736,7 @@ async fn run_microphone(
     validate_eager_eot_threshold(eager_eot_threshold)?;
     validate_connection(connection, threads)?;
 
-    // Get API key from environment variable
-    let api_key =
-        env::var("DEEPGRAM_API_KEY").map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
+    let api_key = load_api_key(endpoint.as_deref());
 
     info!("Starting microphone streaming to Deepgram Flux with {} thread(s)...", threads);
 
@@ -926,9 +950,7 @@ async fn run_file(
     validate_eager_eot_threshold(eager_eot_threshold)?;
     validate_connection(connection, threads)?;
 
-    // Get API key from environment variable
-    let api_key =
-        env::var("DEEPGRAM_API_KEY").map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
+    let api_key = load_api_key(endpoint.as_deref());
 
     info!("Starting file streaming to Deepgram Flux with {} thread(s)...", threads);
 
@@ -1230,4 +1252,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_endpoint_request_omits_authorization_without_api_key() {
+        let url = Url::parse("ws://localhost:8119/v2/listen").unwrap();
+        let request = build_websocket_request(&url, None).unwrap();
+
+        assert!(request.headers().get("Authorization").is_none());
+    }
+
+    #[test]
+    fn request_includes_token_authorization_when_api_key_is_configured() {
+        let url = Url::parse("wss://api.deepgram.com/v2/listen").unwrap();
+        let request = build_websocket_request(&url, Some("test-key")).unwrap();
+
+        assert_eq!(
+            request.headers().get("Authorization").unwrap(),
+            "Token test-key"
+        );
+    }
 }

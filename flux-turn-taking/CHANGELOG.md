@@ -5,6 +5,11 @@ All notable changes to the Rust Flux WebSocket Client will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Allow Flux connections without `DEEPGRAM_API_KEY`, omitting the Authorization
+  header for self-hosted and other custom endpoints that do not require it.
+
 ## [0.3.0] - 2026-07-20
 
 ### Added

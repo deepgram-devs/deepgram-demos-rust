@@ -37,17 +37,25 @@ A Rust application that streams audio to the Deepgram Flux API via WebSocket for
 ## Prerequisites
 
 - Rust (latest stable version)
-- A Deepgram API key with Flux API access
+- A Deepgram API key with Flux API access when connecting to hosted Deepgram. Custom
+  endpoints may be used without a key when they do not require Authorization.
 - A working microphone (for microphone mode)
 - Audio files in supported formats (for file mode)
 
 ## Setup
 
 1. Clone or download this repository
-2. Set your Deepgram API key as an environment variable:
+2. For hosted Deepgram, set your API key as an environment variable:
 
 ```bash
 export DEEPGRAM_API_KEY="your_api_key_here"
+```
+
+For a self-hosted or other custom endpoint that does not require Deepgram
+authentication, omit `DEEPGRAM_API_KEY`:
+
+```bash
+cargo run -- file --path audio.wav --endpoint ws://localhost:8119/
 ```
 
 To compile and install the application with the Rust toolchain into `$HOME/.cargo/bin`, use this command:
@@ -361,13 +369,18 @@ export RUST_LOG=info  # or debug, trace, warn, error
 
 Make sure you have a microphone connected and accessible to your system.
 
-### DEEPGRAM_API_KEY not set
+### Hosted connection fails without an API key
 
-Ensure you've set the environment variable with your Deepgram API key:
+Hosted Deepgram connections require an API key. Set the environment variable:
 
 ```bash
 export DEEPGRAM_API_KEY="your_api_key_here"
 ```
+
+Custom endpoints are allowed to run without `DEEPGRAM_API_KEY`; the client
+omits the `Authorization` header in that case. If your custom endpoint uses a
+different authentication scheme, configure that scheme at the endpoint or
+network layer.
 
 ### WebSocket connection errors
 
