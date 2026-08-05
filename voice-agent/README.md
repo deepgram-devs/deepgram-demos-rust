@@ -95,7 +95,8 @@ cargo run
 | `--listen-eager-eot-threshold <VALUE>` | _(none)_ | Eager end-of-turn threshold for `agent.listen.provider.eager_eot_threshold` |
 | `--listen-smart-format [true\|false]` | _(none)_ | Optional smart formatting for `agent.listen.provider.smart_format`; omitted from Settings JSON when unspecified |
 | `--audio-encoding <ENCODING>` | `linear16` | Microphone encoding for Voice Agent audio input: `linear16`, `linear32`, `mulaw`, or `alaw` |
-| `--audio-sample-rate <HZ>` | `24000` | Microphone capture and Voice Agent audio input sample rate; the device must support this rate |
+| `--audio-sample-rate <HZ>` | OS default | Microphone capture and Voice Agent audio input sample rate; when omitted, uses the operating system's default input rate |
+| `--save-audio <PATH>` | _(none)_ | Save the encoded microphone stream as a raw local file |
 | `--speak-model <MODEL>` | `aura-2-thalia-en` | TTS model for agent voice |
 | `--think-type <TYPE>` | `open_ai` | LLM provider type |
 | `--think-model <MODEL>` | `gpt-4o-mini` | LLM model |
@@ -114,6 +115,8 @@ cargo run
 
 ## Example Commands
 
+### Basic Conversation
+
 `config create`, `config delete`, and all `config variable` commands accept an optional `--project-id` (or
 `DEEPGRAM_PROJECT_ID`). When it is omitted, the CLI lists projects accessible
 to `DEEPGRAM_API_KEY`; it automatically uses the only project, and asks for
@@ -125,11 +128,22 @@ token and WebSocket key are redacted, which is useful for troubleshooting
 request validation without exposing credentials.
 
 ```bash
-# Basic usage
+# Start a basic conversation
 cargo run
 
 # Use a different TTS voice
 cargo run -- --speak-model aura-2-apollo-en
+
+# Set a custom system prompt for the agent
+cargo run -- --prompt "You are a helpful assistant that speaks only in rhymes."
+
+# Keep mic live during playback (e.g., using headphones)
+cargo run -- --no-mic-mute
+```
+
+### Listen Provider and Audio
+
+```bash
 
 # Tune the listen provider
 cargo run -- --listen-model nova-3 \
@@ -143,6 +157,16 @@ cargo run -- --listen-model nova-3 \
 
 # Capture and send microphone audio as 8-bit mu-law at 8 kHz
 cargo run -- --audio-encoding mulaw --audio-sample-rate 8000
+
+# Save the raw mu-law microphone stream while running the agent
+cargo run -- --audio-encoding mulaw --audio-sample-rate 24000 --save-audio microphone.mulaw
+# For example, listen to the raw file with FFplay:
+ffplay -f mulaw -ar 24000 -ac 1 microphone.mulaw
+```
+
+### LLM Providers
+
+```bash
 
 # Use Claude via a custom endpoint
 cargo run -- --think-type anthropic \
@@ -167,12 +191,45 @@ cargo run -- \
 # AWS credentials are intentionally not allowed in `config create` reusable
 # configurations because those values are visible to project members. Use an
 # inline launch for Bedrock credentials.
+```
+
+#### PowerShell with refreshed STS credentials from an AWS profile
+
+The following example exports the temporary credentials already refreshed for
+the `dg-dev` named profile, including its session token, into the current
+PowerShell session. It then enables the sample client-side functions while
+using Amazon Bedrock. Replace `dg-dev` if your refreshed credentials are in a
+different named profile.
+
+```powershell
+$awsCredentials = aws configure export-credentials --profile dg-dev --format powershell | Out-String
+Invoke-Expression $awsCredentials
+
+cargo run -- `
+  --enable-sample-functions `
+  --think-type aws_bedrock `
+  --think-model us.anthropic.claude-3-5-sonnet-20241022-v2:0 `
+  --think-temperature 0.7 `
+  --think-endpoint https://bedrock-runtime.us-east-2.amazonaws.com/ `
+  --think-credentials-type sts `
+  --think-aws-region $env:AWS_REGION `
+  --think-aws-access-key-id $env:AWS_ACCESS_KEY_ID `
+  --think-aws-secret-access-key $env:AWS_SECRET_ACCESS_KEY `
+  --think-aws-session-token $env:AWS_SESSION_TOKEN `
+  --verbose
+```
+
+### Self-Hosted Endpoint
+
+```bash
 
 # Connect to a self-hosted endpoint
 cargo run -- --endpoint wss://my-internal-agent.example.com
+```
 
-# Set a custom system prompt for the agent
-cargo run -- --prompt "You are a helpful assistant that speaks only in rhymes."
+### Reusable Agent Configurations
+
+```bash
 
 # Save the current agent settings as a reusable configuration
 cargo run -- config create \
@@ -188,6 +245,11 @@ cargo run -- config delete \
 
 # Reusable configurations must not contain provider headers or API keys.
 # Do not combine `config create` with custom provider headers.
+```
+
+### Project and Template Variables
+
+```bash
 
 # If the API key has multiple projects, specify the project explicitly:
 cargo run -- config create \
@@ -206,12 +268,14 @@ cargo run -- config variable update VARIABLE_ID --value '"You are a concise agen
 cargo run -- config variable delete VARIABLE_ID --yes
 
 # Use `config variables` as an alias for `config variable`.
+```
+
+### Debugging
+
+```bash
 
 # Print the full Settings JSON for debugging
 cargo run -- --verbose
-
-# Keep mic live during playback (e.g., using headphones)
-cargo run -- --no-mic-mute
 ```
 
 ## Architecture
