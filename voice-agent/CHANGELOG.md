@@ -5,6 +5,9 @@
 ### Added
 - Added `--audio-encoding` support for `linear16`, `linear32`, `mulaw`, and `alaw` microphone audio.
 - Added `--audio-sample-rate` to configure microphone capture and Voice Agent input audio sample rate.
+- When `--audio-sample-rate` is omitted, the microphone's operating system default input rate is used.
+- Added `--save-audio` to save the encoded microphone stream as a raw local file.
+- Updated the default Voice Agent prompt to request responses without Markdown formatting.
 
 ## [0.1.3] - 2026-07-14
 

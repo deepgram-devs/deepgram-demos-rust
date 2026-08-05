@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::time::Instant;
+use std::{fs::File, io::BufWriter, path::PathBuf};
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -242,12 +243,12 @@ struct LaunchOptions {
     audio_encoding: String,
 
     /// Microphone capture and input audio sample rate in Hz
-    #[arg(
-        long,
-        default_value_t = 24000,
-        value_parser = clap::value_parser!(u32).range(1..)
-    )]
-    audio_sample_rate: u32,
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    audio_sample_rate: Option<u32>,
+
+    /// Save the encoded microphone stream to a raw local file
+    #[arg(long, value_name = "PATH")]
+    save_audio: Option<PathBuf>,
 
     /// Eleven Labs voice ID (used in the endpoint URL)
     #[arg(long)]
@@ -567,7 +568,7 @@ struct AudioCapture {
 }
 
 impl AudioCapture {
-    fn new(sample_rate: u32) -> Result<Self, Box<dyn std::error::Error>> {
+    fn new(sample_rate: Option<u32>) -> Result<Self, Box<dyn std::error::Error>> {
         let host = cpal::default_host();
         let device = host
             .default_input_device()
@@ -578,28 +579,39 @@ impl AudioCapture {
         let default_config = device.default_input_config()?;
         debug!("Default input config: {:?}", default_config);
 
-        let supported_config = device
-            .supported_input_configs()?
-            .find(|config| {
-                config.channels() == default_config.channels()
-                    && config.sample_format() == default_config.sample_format()
-                    && config.min_sample_rate().0 <= sample_rate
-                    && config.max_sample_rate().0 >= sample_rate
-            })
-            .ok_or_else(|| {
-                format!(
-                    "Input device does not support {} Hz with its default channel count ({}) and sample format ({:?})",
-                    sample_rate,
-                    default_config.channels(),
-                    default_config.sample_format()
-                )
-            })?;
+        let selected_config = if let Some(sample_rate) = sample_rate {
+            let supported_config = device
+                .supported_input_configs()?
+                .find(|config| {
+                    config.channels() == default_config.channels()
+                        && config.sample_format() == default_config.sample_format()
+                        && config.min_sample_rate().0 <= sample_rate
+                        && config.max_sample_rate().0 >= sample_rate
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "Input device does not support {} Hz with its default channel count ({}) and sample format ({:?})",
+                        sample_rate,
+                        default_config.channels(),
+                        default_config.sample_format()
+                    )
+                })?;
+            supported_config.with_sample_rate(cpal::SampleRate(sample_rate))
+        } else {
+            default_config
+        };
 
-        let sample_format = supported_config.sample_format();
-        let config: StreamConfig = supported_config
-            .with_sample_rate(cpal::SampleRate(sample_rate))
-            .into();
-        debug!("Selected input config: {:?}", config);
+        let sample_format = selected_config.sample_format();
+        let config: StreamConfig = selected_config.into();
+        debug!(
+            "Selected input config: {:?} ({})",
+            config,
+            if sample_rate.is_some() {
+                "requested sample rate"
+            } else {
+                "operating system default"
+            }
+        );
 
         Ok(AudioCapture {
             device,
@@ -695,12 +707,25 @@ where
 }
 
 fn encode_mulaw(sample: f32) -> u8 {
-    let sample = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
+    const BIAS: i32 = 0x84;
+    const CLIP: i32 = 32635;
+
+    let mut sample = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i32;
     let sign = if sample < 0 { 0x80 } else { 0 };
-    let magnitude = sample.unsigned_abs().min(32635) + 132;
-    let exponent = (15 - magnitude.leading_zeros()).min(7) as u8;
-    let mantissa = ((magnitude >> (exponent + 3)) & 0x0f) as u8;
-    !(sign | (exponent << 4) | mantissa)
+    if sample < 0 {
+        sample = -sample;
+    }
+    sample = sample.min(CLIP) + BIAS;
+
+    let mut exponent = 7u8;
+    let mut mask = 0x4000;
+    while exponent > 0 && sample & mask == 0 {
+        exponent -= 1;
+        mask >>= 1;
+    }
+    let mantissa = (sample >> (exponent + 3)) & 0x0f;
+
+    (!(sign | ((exponent as i32) << 4) | mantissa)) as u8
 }
 
 fn encode_alaw(sample: f32) -> u8 {
@@ -1062,20 +1087,27 @@ fn create_agent_config(
                     provider_type: think_type.to_string(),
                     model: think_model_for_settings,
                     temperature: think_temperature,
-                    credentials: think_credentials_type
-                        .or(think_aws_region)
-                        .or(think_aws_access_key_id)
-                        .or(think_aws_secret_access_key)
-                        .or(think_aws_session_token)
-                        .map(|_| ThinkCredentials {
-                            credential_type: think_credentials_type.unwrap_or("iam").to_string(),
-                            region: think_aws_region.unwrap_or_default().to_string(),
-                            access_key_id: think_aws_access_key_id.unwrap_or_default().to_string(),
-                            secret_access_key: think_aws_secret_access_key
-                                .unwrap_or_default()
-                                .to_string(),
-                            session_token: think_aws_session_token.map(str::to_string),
-                        }),
+                    credentials: (think_type == "aws_bedrock")
+                        .then(|| {
+                            think_credentials_type
+                                .or(think_aws_region)
+                                .or(think_aws_access_key_id)
+                                .or(think_aws_secret_access_key)
+                                .or(think_aws_session_token)
+                                .map(|_| ThinkCredentials {
+                                    credential_type:
+                                        think_credentials_type.unwrap_or("iam").to_string(),
+                                    region: think_aws_region.unwrap_or_default().to_string(),
+                                    access_key_id: think_aws_access_key_id
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    secret_access_key: think_aws_secret_access_key
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    session_token: think_aws_session_token.map(str::to_string),
+                                })
+                        })
+                        .flatten(),
                 },
                 prompt: Some(prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT).to_string()),
                 functions: if enable_sample_functions {
@@ -1434,6 +1466,24 @@ fn redact_voice_agent_json(mut value: serde_json::Value) -> serde_json::Value {
             }
         }
     }
+
+    if let Some(headers) = value
+        .get_mut("agent")
+        .and_then(|agent| agent.get_mut("think"))
+        .and_then(|think| think.get_mut("endpoint"))
+        .and_then(|endpoint| endpoint.get_mut("headers"))
+        .and_then(|headers| headers.as_object_mut())
+    {
+        let api_key_headers: Vec<String> = headers
+            .keys()
+            .filter(|key| key.eq_ignore_ascii_case("x-goog-api-key"))
+            .cloned()
+            .collect();
+        for key in api_key_headers {
+            headers.insert(key, serde_json::json!("<redacted>"));
+        }
+    }
+
     value
 }
 
@@ -1815,8 +1865,9 @@ async fn create_agent_configuration(
     let project_id =
         resolve_project_id(&api_key, args.project_id.as_deref(), args.launch.verbose).await?;
     let eleven_labs_api_key = load_eleven_labs_api_key(&args.launch)?;
-    let _audio_capture = AudioCapture::new(args.launch.audio_sample_rate)?;
-    let config = config_from_options(&args.launch, eleven_labs_api_key);
+    let audio_capture = AudioCapture::new(args.launch.audio_sample_rate)?;
+    let sample_rate = audio_capture.config.sample_rate.0;
+    let config = config_from_options(&args.launch, sample_rate, eleven_labs_api_key);
     let agent_id = create_reusable_agent_config(
         &api_key,
         &project_id,
@@ -1851,11 +1902,12 @@ async fn run_voice_agent(
 
     // Initialize audio capture
     let audio_capture = AudioCapture::new(args.audio_sample_rate)?;
+    let sample_rate = audio_capture.config.sample_rate.0;
     let channels = audio_capture.config.channels;
 
     debug!(
         "Audio config - Sample rate: {} Hz, Channels: {}",
-        args.audio_sample_rate, channels
+        sample_rate, channels
     );
 
     // Create microphone control flag - start with mic enabled
@@ -1898,7 +1950,20 @@ async fn run_voice_agent(
         audio_capture.start_capture(audio_tx, mic_enabled_for_capture, &args.audio_encoding)?;
     debug!("Audio capture started");
 
-    let mut config = config_from_options(&args, eleven_labs_api_key);
+    let mut audio_writer = args
+        .save_audio
+        .as_ref()
+        .map(|path| {
+            File::create(path)
+                .map(BufWriter::new)
+                .map_err(|error| format!("failed to open audio capture file {:?}: {error}", path))
+        })
+        .transpose()?;
+    if let Some(path) = args.save_audio.as_ref() {
+        info!("Saving encoded microphone audio to {}", path.display());
+    }
+
+    let mut config = config_from_options(&args, sample_rate, eleven_labs_api_key);
     if let Some(agent_id) = agent_config_id {
         config.agent = AgentConfiguration::Reference(agent_id.to_string());
     }
@@ -1907,7 +1972,7 @@ async fn run_voice_agent(
     let ws_stream = connect_to_voice_agent(
         &api_key,
         &args.endpoint,
-        args.audio_sample_rate,
+        sample_rate,
         channels,
         args.verbose,
     )
@@ -1960,6 +2025,13 @@ async fn run_voice_agent(
                     let Some(audio_data) = audio_data else { break };
                     packet_count += 1;
 
+                    if let Some(writer) = audio_writer.as_mut() {
+                        if let Err(error) = writer.write_all(&audio_data) {
+                            error!("Failed to save microphone audio: {}", error);
+                            audio_writer = None;
+                        }
+                    }
+
                     // Send audio data as binary message
                     if let Err(e) = ws_sender.send(Message::Binary(audio_data.into())).await {
                         error!("❌ Failed to send audio data to WebSocket: {}", e);
@@ -1983,6 +2055,12 @@ async fn run_voice_agent(
                         None => function_responses_closed = true,
                     }
                 }
+            }
+        }
+
+        if let Some(mut writer) = audio_writer {
+            if let Err(error) = writer.flush() {
+                error!("Failed to flush microphone audio file: {}", error);
             }
         }
     });
@@ -2118,11 +2196,82 @@ mod tests {
             "mulaw",
             "--audio-sample-rate",
             "8000",
+            "--save-audio",
+            "microphone.mulaw",
         ])
         .expect("audio options should parse");
 
         assert_eq!(args.launch.audio_encoding, "mulaw");
-        assert_eq!(args.launch.audio_sample_rate, 8000);
+        assert_eq!(args.launch.audio_sample_rate, Some(8000));
+        assert_eq!(
+            args.launch.save_audio,
+            Some(PathBuf::from("microphone.mulaw"))
+        );
+    }
+
+    #[test]
+    fn audio_sample_rate_defaults_to_operating_system_configuration() {
+        let args =
+            Args::try_parse_from(["voice-agent"]).expect("audio sample rate should be optional");
+
+        assert_eq!(args.launch.audio_sample_rate, None);
+    }
+
+    #[test]
+    fn explicit_non_bedrock_provider_ignores_aws_credentials() {
+        let mut args = Args::try_parse_from(["voice-agent", "--think-type", "google"])
+            .expect("Google think provider should parse");
+        args.launch.think_aws_region = Some("us-east-2".to_string());
+        args.launch.think_aws_access_key_id = Some("access-key".to_string());
+        args.launch.think_aws_secret_access_key = Some("secret-key".to_string());
+        args.launch.think_aws_session_token = Some("session-token".to_string());
+
+        assert!(validate_think_options(&args.launch).is_ok());
+    }
+
+    #[test]
+    fn google_settings_omit_aws_credentials() {
+        let keyterms = Vec::new();
+        let config = create_agent_config(
+            "linear16",
+            16000,
+            ListenArgs {
+                provider: "deepgram",
+                model: "nova-3",
+                version: None,
+                language: "en",
+                language_hints: &[],
+                keyterms: &keyterms,
+                eot_threshold: None,
+                eager_eot_threshold: None,
+                smart_format: None,
+            },
+            SpeakArgs {
+                provider: "deepgram",
+                model: "aura-2-thalia-en",
+                model_id: "eleven_turbo_v2_5",
+                language_code: "en-US",
+                voice_id: None,
+                eleven_labs_api_key: None,
+            },
+            "google",
+            "gemini-2.5-flash",
+            None,
+            None,
+            &[],
+            Some("iam"),
+            Some("us-east-2"),
+            Some("access-key"),
+            Some("secret-key"),
+            Some("session-token"),
+            None,
+            false,
+        );
+        let config = serde_json::to_value(config).expect("settings should serialize");
+
+        assert!(config["agent"]["think"]["provider"]
+            .get("credentials")
+            .is_none());
     }
 
     #[test]
@@ -2131,6 +2280,13 @@ mod tests {
         assert_eq!(encoded_sample_width("linear32"), 4);
         assert_eq!(encoded_sample_width("mulaw"), 1);
         assert_eq!(encoded_sample_width("alaw"), 1);
+    }
+
+    #[test]
+    fn mulaw_encoding_uses_standard_g711_values() {
+        assert_eq!(encode_mulaw(0.0), 0xff);
+        assert_eq!(encode_mulaw(1.0), 0x80);
+        assert_eq!(encode_mulaw(-1.0), 0x00);
     }
 
     #[test]
