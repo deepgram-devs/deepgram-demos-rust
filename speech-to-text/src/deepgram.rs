@@ -100,6 +100,11 @@ pub(crate) async fn run_deepgram_client(
         params.push(format!("model={}", model_name));
     }
 
+    // Add model version parameter if specified.
+    if let Some(version) = &config.version {
+        params.push(format!("version={}", urlencoding::encode(version)));
+    }
+
     // Add redact parameter if specified
     if let Some(redact_value) = &config.redact {
         // Parse the redact value to handle categories and individual entities
@@ -253,7 +258,11 @@ pub(crate) async fn run_deepgram_client(
                             last_message_time = tokio::time::Instant::now();
                             match serde_json::from_str::<DeepgramResponse>(&text) {
                                 Ok(response) => {
-                                    if response.message_type == "Results" {
+                                    if response.message_type == "Metadata" {
+                                        if !silent {
+                                            println!("{}Metadata: {}", response_prefix, text);
+                                        }
+                                    } else if response.message_type == "Results" {
                                         let channel = response.channel.and_then(|channel| {
                                             serde_json::from_value::<Channel>(channel).ok()
                                         });

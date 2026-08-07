@@ -53,6 +53,7 @@ pub(crate) struct DeepgramClientConfig {
     pub(crate) intents: bool,
     pub(crate) topics: bool,
     pub(crate) model: Option<String>,
+    pub(crate) version: Option<String>,
     pub(crate) redact: Option<String>,
     pub(crate) language: Option<String>,
     pub(crate) endpointing: Option<u32>,

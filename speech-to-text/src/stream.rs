@@ -77,6 +77,10 @@ pub enum StreamSource {
         #[arg(long)]
         model: Option<String>,
 
+        /// Model version to use (for example, a Nova-3 model version)
+        #[arg(long)]
+        version: Option<String>,
+
         /// Redact entities (comma-separated). Can include specific entities or categories: phi, pii, pci, other
         #[arg(long)]
         redact: Option<String>,
@@ -183,6 +187,10 @@ pub enum StreamSource {
         /// Deepgram model to use (e.g., nova-2, enhanced, base)
         #[arg(long)]
         model: Option<String>,
+
+        /// Model version to use (for example, a Nova-3 model version)
+        #[arg(long)]
+        version: Option<String>,
 
         /// Redact entities (comma-separated). Can include specific entities or categories: phi, pii, pci, other
         #[arg(long)]

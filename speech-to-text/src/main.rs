@@ -1,6 +1,7 @@
 mod audio;
 mod cli;
 mod deepgram;
+mod models;
 mod protocol;
 mod stream;
 mod transcribe;
@@ -171,6 +172,7 @@ async fn run_microphone_mode(
     intents: bool,
     topics: bool,
     model: Option<String>,
+    version: Option<String>,
     redact: Option<String>,
     language: Option<String>,
     endpointing: Option<u32>,
@@ -219,6 +221,7 @@ async fn run_microphone_mode(
         intents,
         topics,
         model,
+        version,
         redact,
         language,
         endpointing,
@@ -290,6 +293,7 @@ async fn run_file_mode(
     intents: bool,
     topics: bool,
     model: Option<String>,
+    version: Option<String>,
     redact: Option<String>,
     language: Option<String>,
     endpointing: Option<u32>,
@@ -353,6 +357,7 @@ async fn run_file_mode(
         intents,
         topics,
         model,
+        version,
         redact,
         language,
         endpointing,
@@ -423,6 +428,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let api_key = api_key_for_endpoint(args.endpoint.as_deref())?;
             transcribe::run_transcribe_mode(api_key, args).await?
         }
+        Commands::ListModels {
+            include_outdated,
+            endpoint,
+        } => {
+            let api_key = api_key_for_endpoint(endpoint.as_deref())?;
+            models::run_list_models(api_key, endpoint, include_outdated).await?
+        }
         Commands::Stream { source } => match source {
             StreamSource::Microphone {
                 callback,
@@ -443,6 +455,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 intents,
                 topics,
                 model,
+                version,
                 redact,
                 language,
                 endpointing,
@@ -471,6 +484,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     intents,
                     topics,
                     model,
+                    version,
                     redact,
                     language,
                     endpointing,
@@ -501,6 +515,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 intents,
                 topics,
                 model,
+                version,
                 redact,
                 language,
                 endpointing,
@@ -531,6 +546,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     intents,
                     topics,
                     model,
+                    version,
                     redact,
                     language,
                     endpointing,

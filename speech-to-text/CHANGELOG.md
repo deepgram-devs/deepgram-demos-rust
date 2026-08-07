@@ -1,11 +1,16 @@
 # Changelog for Deepgram Rust Speech-to-Text (STT) CLI
 
+## 2026-08-07
+
+* Streaming mode now prints the metadata message returned by Deepgram, including request ID, duration, and channel count.
+* Added `--version` to streaming mode for selecting a Deepgram model version.
+* Added `list-models` to display STT model names, modes, versions, UUIDs, and languages.
+
 ## 0.4.0 - 2026-08-03
 
 * Uses `diarize_model=latest` when diarization is enabled, selecting the current supported diarizer for batch and streaming requests.
 * Added parallel streaming connections, self-hosted endpoint support without a Deepgram API key, endpointing controls, and utterance-end configuration.
 * Improved streaming resilience for control-event response shapes and WAV files with an incorrect zero-length `data` chunk.
-
 ## 2026-07-30
 
 * Added `--endpointing` and `--utterance-end` to both microphone and file streaming modes.

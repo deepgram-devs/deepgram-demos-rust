@@ -18,7 +18,7 @@ A real-time speech-to-text CLI using Rust that connects to the Deepgram API via 
 - WebSocket connection to Deepgram API for live transcription
 - Parallel streaming connections with the same input audio using `--connections`
 - Callback support for webhook integration
-- Displays transcription results in real-time; parse errors written to `dg-stt-debug.log`
+- Displays metadata and transcription results in real-time; parse errors written to `dg-stt-debug.log`
 - Deepgram request ID printed on connect (and on connection errors)
 
 ### Transcribe Mode (HTTP API)
@@ -39,6 +39,7 @@ A real-time speech-to-text CLI using Rust that connects to the Deepgram API via 
 ### General Features
 - Cross-platform support (Windows, macOS, Linux)
 - Multiple Deepgram models (nova-3, nova-2, enhanced, base)
+- Model version selection with `--version`
 - Language support for multiple languages
 - Smart formatting and punctuation
 
@@ -71,6 +72,17 @@ cargo build
 The application supports two modes of operation:
 1. **Stream**: Real-time streaming transcription (WebSocket API)
 2. **Transcribe**: Pre-recorded audio transcription (HTTP API)
+3. **List models**: Display available speech-to-text model metadata
+
+### List Models
+
+List the latest available speech-to-text models in a table:
+
+```bash
+cargo run -- list-models
+```
+
+Include non-latest model versions with `--include-outdated`. Use `--endpoint` to override the API base URL.
 
 ### Microphone Mode
 

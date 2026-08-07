@@ -23,4 +23,14 @@ pub(crate) enum Commands {
         #[command(flatten)]
         args: TranscribeArgs,
     },
+    /// List available speech-to-text models
+    ListModels {
+        /// Include non-latest model versions
+        #[arg(long)]
+        include_outdated: bool,
+
+        /// Override the Deepgram API base URL
+        #[arg(long)]
+        endpoint: Option<String>,
+    },
 }
