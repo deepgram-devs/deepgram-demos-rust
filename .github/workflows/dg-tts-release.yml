@@ -8,7 +8,7 @@ on:
       tag:
         description: Existing dg-tts tag to build and publish
         required: true
-        default: dg-tts-v0.2.7
+        default: dg-tts-v0.2.8
 
 permissions:
   contents: write

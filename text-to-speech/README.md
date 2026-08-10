@@ -7,6 +7,7 @@ A Rust CLI application demonstrating Deepgram's Text-to-Speech API with multiple
 - **Speak Mode**: Interactive text-to-speech with immediate playback
 - **Save Mode**: Convert text to speech and save to an audio file
 - **Stream Mode**: WebSocket-based streaming TTS with real-time audio playback
+- **Flux TTS v2**: Add `v2` under `speak`, `save`, or `stream` to use Flux's documented `/v2/speak` batch or WebSocket API
 
 ## Prerequisites
 
@@ -65,6 +66,33 @@ With custom voice:
 cargo run --release -- save --text "Hello, world!" --output output.mp3 --voice aura-2-asteria-en
 ```
 
+### Flux TTS v2
+
+Flux uses the `/v2/speak` API and defaults to the `flux-haley-en` voice. Batch commands return containerized audio, while streaming emits raw Linear16 audio:
+
+```bash
+# Interactive batch playback
+cargo run --release -- speak v2
+
+# Save Flux batch audio
+cargo run --release -- save v2 --text "Your appointment is confirmed." --output appointment.mp3
+
+# Stream Flux audio over WebSocket
+cargo run --release -- stream v2
+```
+
+Override the Flux voice, endpoint, or tags with the same options used by the v2 subcommands:
+
+```bash
+cargo run --release -- save v2 \
+  --voice flux-haley-en \
+  --tags production,notifications \
+  --text "Your appointment is confirmed." \
+  --output appointment.mp3
+```
+
+Flux TTS is in Early Access. The v2 WebSocket uses `Authorization: Token ...`, sends JSON `Speak`, `Flush`, and `Close` messages, and supports Flux models only.
+
 ### Stream Mode (WebSocket)
 
 Use WebSocket streaming for real-time text-to-speech:
@@ -110,6 +138,12 @@ For the complete list of available voices, visit the [Deepgram documentation](ht
 ### Tags
 
 Add custom tags to your requests for tracking and analytics:
+
+Every request also includes the default tags `tts-tui`, `appeng`, and `deepgram-demos-rust`.
+Custom comma-separated tags are appended to those defaults.
+
+Batch requests and WebSocket handshakes identify the client with a versioned
+`User-Agent` header in the form `dg-tts/<version>`.
 
 ```bash
 cargo run --release -- speak --tags "demo,testing"

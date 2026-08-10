@@ -1,8 +1,9 @@
+use crate::tags;
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use rodio::{OutputStreamBuilder, Sink};
 use serde::{Deserialize, Serialize};
-use std::io::{Write};
+use std::io::Write;
 use std::sync::mpsc;
 use std::thread;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -14,16 +15,39 @@ struct TtsStreamRequest {
     text: String,
 }
 
-pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>, endpoint: &str) -> Result<()> {
+pub async fn run_stream(
+    api_key: &str,
+    voice: &str,
+    tags: Option<String>,
+    endpoint: &str,
+) -> Result<()> {
+    run_stream_impl(api_key, voice, tags, endpoint, 1).await
+}
+
+pub async fn run_stream_v2(
+    api_key: &str,
+    voice: &str,
+    tags: Option<String>,
+    endpoint: &str,
+) -> Result<()> {
+    run_stream_impl(api_key, voice, tags, endpoint, 2).await
+}
+
+async fn run_stream_impl(
+    api_key: &str,
+    voice: &str,
+    tags: Option<String>,
+    endpoint: &str,
+    api_version: u8,
+) -> Result<()> {
     // Build WebSocket URL
     let mut url = format!(
-        "{}/v1/speak?model={}&encoding=linear16&sample_rate=24000",
-        endpoint,
-        voice
+        "{}/v{}/speak?model={}&encoding=linear16&sample_rate=24000",
+        endpoint, api_version, voice
     );
-    
-    if let Some(tag_value) = tags {
-        url.push_str(&format!("&tag={}", tag_value));
+
+    for tag in tags::request_tags(tags.as_deref()) {
+        url.push_str(&format!("&tag={}", urlencoding::encode(&tag)));
     }
 
     println!("Connecting to Deepgram TTS WebSocket...");
@@ -32,15 +56,23 @@ pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>, endpoi
     let host = endpoint.replace("wss://", "").replace("ws://", "");
 
     // Connect to WebSocket with required headers
-    let request = tokio_tungstenite::tungstenite::http::Request::builder()
+    let mut request_builder = tokio_tungstenite::tungstenite::http::Request::builder()
         .uri(&url)
-        // .header("Authorization", format!("Token {}", api_key))
         .header("upgrade", "websocket")
         .header("connection", "Upgrade")
         .header("host", &host)
+        .header("User-Agent", crate::CLIENT_USER_AGENT)
         .header("sec-websocket-key", "YXNkZmFzZGZhc2RmYXNkZgo=")
-        .header("Sec-WebSocket-Version", "13")
-        .header("Sec-WebSocket-Protocol", format!("token, {}", api_key))
+        .header("Sec-WebSocket-Version", "13");
+
+    if api_version == 2 {
+        request_builder = request_builder.header("Authorization", format!("Token {}", api_key));
+    } else {
+        request_builder =
+            request_builder.header("Sec-WebSocket-Protocol", format!("token, {}", api_key));
+    }
+
+    let request = request_builder
         .body(())
         .context("Failed to build WebSocket request")?;
 
@@ -77,7 +109,7 @@ pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>, endpoi
                 eprintln!("Error appending audio: {}", e);
             }
         }
-        
+
         // Wait for all audio to finish playing before exiting
         sink.sleep_until_end();
     });
@@ -142,8 +174,7 @@ pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>, endpoi
             text: input.to_string(),
         };
 
-        let json = serde_json::to_string(&request)
-            .context("Failed to serialize request")?;
+        let json = serde_json::to_string(&request).context("Failed to serialize request")?;
 
         if let Err(e) = write.send(Message::Text(json.into())).await {
             eprintln!("Failed to send message: {}", e);
@@ -152,11 +183,13 @@ pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>, endpoi
 
         // Send Flush message to process the audio immediately
         let flush_msg = serde_json::json!({ "type": "Flush" });
-        if let Err(e) = write.send(Message::Text(flush_msg.to_string().into())).await {
+        if let Err(e) = write
+            .send(Message::Text(flush_msg.to_string().into()))
+            .await
+        {
             eprintln!("Failed to send flush message: {}", e);
             break;
-        }
-        else {
+        } else {
             println!("Sent a message to the server");
         }
     }
@@ -169,7 +202,7 @@ pub async fn run_stream(api_key: &str, voice: &str, tags: Option<String>, endpoi
 
     // Drop the audio sender to signal the audio thread to exit
     // drop(audio_tx);
-    
+
     // Wait for audio thread to finish
     let _ = audio_thread.join();
 
@@ -193,9 +226,9 @@ fn append_audio_to_sink(audio_bytes: Vec<u8>, sink: &Sink) -> Result<()> {
     // Create a buffer with the samples at 24000 Hz sample rate (as specified in the URL)
     // Assuming mono audio (1 channel)
     let buffer = SamplesBuffer::new(1, 24000, samples);
-    
+
     // Append to the existing sink for continuous playback
     sink.append(buffer);
-    
+
     Ok(())
 }
