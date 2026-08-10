@@ -1,0 +1,18 @@
+{
+  "version": "0.2.8",
+  "description": "Deepgram text-to-speech command-line client.",
+  "homepage": "https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/text-to-speech",
+  "license": "ISC",
+  "notes": "Installed from the dg-tts-v0.2.8 GitHub release.",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/dg-tts-v0.2.8/dg-tts-0.2.8-windows-x64.zip",
+      "hash": "1e8a8c90c8d0afbde3dacd294d09cfde3b48b46bd9dcf2c715a5212b0bba576c"
+    },
+    "arm64": {
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/dg-tts-v0.2.8/dg-tts-0.2.8-windows-arm64.zip",
+      "hash": "769c2bb26045d407dc6efdb945d141f70356450e394e45926e9d1728fe1fad41"
+    }
+  },
+  "bin": "dg-tts.exe"
+}
