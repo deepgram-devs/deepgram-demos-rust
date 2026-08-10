@@ -16,6 +16,8 @@ Automated coverage currently verifies:
 - SageMaker `CustomAttributes` are built with the Deepgram `v1/speak` path and encoded TTS query parameters.
 - SageMaker fixed-rate encodings omit `sample_rate` when appropriate.
 - Deepgram HTTP and SageMaker requests add `normalize_volume=true` only when enabled.
+- Deepgram HTTP, WebSocket, and SageMaker requests include the default request tags and preserve additional tags.
+- Deepgram HTTP requests and WebSocket handshakes include a `User-Agent` header formatted as `tts-tui/<version>`.
 
 Run the package build check:
 
@@ -42,6 +44,8 @@ cargo check -p tts-tui
 - Verify audio is generated, played, and cached.
 - Press `Ctrl+Enter` and verify the cache is bypassed and a fresh request is made.
 - Run with `--endpoint` pointing at a self-hosted or proxy Deepgram-compatible TTS endpoint and verify playback still works.
+- Run with `--tags production --tags demo` (or `--tags production,demo`) and use endpoint logging to verify the default tags plus both custom tags are sent.
+- Use endpoint logging or a test proxy to verify the outgoing `User-Agent` is `tts-tui/0.9.5` for the current release.
 - Remove or invalidate the API key for an endpoint that requires one and verify the log panel shows a useful error.
 - Verify `tts-tui --help` does not list a `--normalize-volume` option.
 - Press `v` to enable volume normalization and verify the request query contains `normalize_volume=true`; press it again to disable normalization and verify the parameter is omitted.

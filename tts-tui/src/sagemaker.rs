@@ -14,12 +14,19 @@ pub async fn fetch_sagemaker_tts(
     sample_rate: u32,
     encoding: &str,
     normalize_volume: bool,
+    request_tags: &[String],
 ) -> Result<Vec<u8>> {
     let body = serde_json::to_vec(&json!({ "text": text }))
         .context("Failed to serialize SageMaker TTS request body")?;
 
-    let custom_attributes =
-        build_custom_attributes(voice_id, speed, sample_rate, encoding, normalize_volume);
+    let custom_attributes = build_custom_attributes(
+        voice_id,
+        speed,
+        sample_rate,
+        encoding,
+        normalize_volume,
+        request_tags,
+    );
 
     let sdk_config = aws_config::defaults(BehaviorVersion::latest())
         .region(Region::new(region.to_string()))
@@ -64,6 +71,7 @@ fn build_custom_attributes(
     sample_rate: u32,
     encoding: &str,
     normalize_volume: bool,
+    request_tags: &[String],
 ) -> String {
     let mut serializer = form_urlencoded::Serializer::new(String::new());
     serializer.append_pair("model", voice_id);
@@ -76,6 +84,9 @@ fn build_custom_attributes(
     }
     if normalize_volume {
         serializer.append_pair("normalize_volume", "true");
+    }
+    for tag in request_tags {
+        serializer.append_pair("tag", tag);
     }
 
     format!("v1/speak?{}", serializer.finish())
@@ -104,6 +115,7 @@ mod tests {
             24000,
             "linear16",
             false,
+            &[],
         );
 
         assert_eq!(
@@ -114,8 +126,14 @@ mod tests {
 
     #[test]
     fn custom_attributes_omit_fixed_sample_rate_for_mp3() {
-        let attrs =
-            build_custom_attributes("aura-2-orion-en", Decimal::new(12, 1), 22050, "mp3", false);
+        let attrs = build_custom_attributes(
+            "aura-2-orion-en",
+            Decimal::new(12, 1),
+            22050,
+            "mp3",
+            false,
+            &[],
+        );
 
         assert_eq!(
             attrs,
@@ -131,11 +149,30 @@ mod tests {
             24000,
             "linear16",
             true,
+            &[],
         );
 
         assert_eq!(
             attrs,
             "v1/speak?model=aura-2-thalia-en&encoding=linear16&sample_rate=24000&normalize_volume=true"
+        );
+    }
+
+    #[test]
+    fn custom_attributes_include_request_tags() {
+        let tags = vec!["tts-tui".to_string(), "custom".to_string()];
+        let attrs = build_custom_attributes(
+            "aura-2-thalia-en",
+            Decimal::new(10, 1),
+            24000,
+            "linear16",
+            false,
+            &tags,
+        );
+
+        assert_eq!(
+            attrs,
+            "v1/speak?model=aura-2-thalia-en&encoding=linear16&sample_rate=24000&tag=tts-tui&tag=custom"
         );
     }
 }

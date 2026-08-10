@@ -27,6 +27,8 @@ A terminal user interface (TUI) built with Rust and Ratatui for interacting with
 - Experimental feature flags via config file or environment variables
 - Timestamped, color-coded log panel with scrollable history and mouse scroll support
 - Mouse click to select specific items in lists
+- Deepgram request tags: every request includes `tts-tui`, `appeng`, and `deepgram-demos-rust`; add more with `--tags`
+- Identifies direct HTTP and WebSocket requests with a versioned `User-Agent` header (`tts-tui/<version>`)
 
 ## Requirements
 
@@ -162,6 +164,17 @@ cargo run
 This setting applies to the `deepgram` provider, which is the direct HTTP path for hosted or self-hosted Deepgram-compatible TTS. SageMaker provider configuration uses `[sagemaker].endpoint_name` and `[sagemaker].region` instead.
 
 Both HTTP and HTTPS endpoint URLs are supported. If the endpoint is only a scheme and host, such as `https://api.eu.deepgram.com`, `tts-tui` sends requests to `/v1/speak` on that host. If the URL already includes a path, that path is preserved.
+
+### Request Tags
+
+Every Deepgram TTS request includes the default tags `tts-tui`, `appeng`, and `deepgram-demos-rust`. Add custom tags with `--tags`; repeat the option or provide comma-separated values:
+
+```bash
+cargo run -- --tags production --tags demo
+cargo run -- --tags production,demo
+```
+
+Tags are sent as repeated `tag` query parameters for HTTP and WebSocket requests, and in SageMaker `CustomAttributes`.
 
 ### Flux TTS
 

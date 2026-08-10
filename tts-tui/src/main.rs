@@ -27,6 +27,8 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{io, time::Duration};
 use tokio_util::sync::CancellationToken;
 
+const DEFAULT_REQUEST_TAGS: [&str; 3] = ["tts-tui", "appeng", "deepgram-demos-rust"];
+
 #[derive(Parser, Debug)]
 #[command(name = "tts-tui")]
 #[command(about = "A Deepgram TTS terminal user interface")]
@@ -65,6 +67,10 @@ struct Args {
     /// Maximum number of log files to retain, including the active log (overrides config file and env var)
     #[arg(long, env = "TTS_TUI_LOG_MAX_FILES")]
     log_max_files: Option<usize>,
+
+    /// Additional Deepgram request tags; may be repeated or comma-separated
+    #[arg(long, value_delimiter = ',')]
+    tags: Vec<String>,
 }
 
 #[tokio::main]
@@ -75,6 +81,11 @@ async fn main() -> Result<()> {
     // is constructed so Rustls does not panic over ambiguous providers.
     let _ = rustls::crypto::ring::default_provider().install_default();
     let args = Args::parse();
+    let mut request_tags = DEFAULT_REQUEST_TAGS
+        .iter()
+        .map(|tag| (*tag).to_string())
+        .collect::<Vec<_>>();
+    request_tags.extend(args.tags);
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -135,7 +146,7 @@ async fn main() -> Result<()> {
 
     let mut app = App::new(endpoint, format_index, sample_rate, app_config);
     app.persist_existing_logs();
-    let res = run_app(&mut terminal, &mut app).await;
+    let res = run_app(&mut terminal, &mut app, request_tags).await;
 
     // Restore terminal
     if kbd_enhancement {
@@ -164,6 +175,7 @@ fn kick_off_tts(
     text: String,
     voice_id: String,
     backend: tts::TtsBackend,
+    request_tags: Vec<String>,
     force_regenerate: bool,
 ) {
     // Stop any existing audio and signal an in-flight WebSocket stream to close.
@@ -236,6 +248,7 @@ fn kick_off_tts(
                     sample_rate,
                     chunking_strategy: strategy,
                     text: &text,
+                    tags: &request_tags,
                 },
                 cancellation,
                 tx.clone(),
@@ -268,6 +281,7 @@ fn kick_off_tts(
             normalize_volume,
             &extension,
             &cache_dir,
+            &request_tags,
             force_regenerate,
         )
         .await
@@ -333,6 +347,7 @@ fn build_tts_backend(app: &App) -> Result<tts::TtsBackend> {
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
+    request_tags: Vec<String>,
 ) -> Result<()> {
     // Track mouse capture state so we can toggle it when popups open/close.
     // Mouse capture is enabled at startup (see main()), so start as true.
@@ -460,7 +475,7 @@ async fn run_app(
                                 remaining
                             ));
                         }
-                        kick_off_tts(app, text, voice_id, backend, false);
+                        kick_off_tts(app, text, voice_id, backend, request_tags.clone(), false);
                     }
                     Err(e) => {
                         app.add_log(format!("Queue advance failed: {}", e));
@@ -649,6 +664,7 @@ async fn run_app(
                                                     selected_text,
                                                     voice_id,
                                                     backend,
+                                                    request_tags.clone(),
                                                     force,
                                                 );
                                             }
@@ -838,6 +854,7 @@ async fn run_app(
                                                             selected_text,
                                                             voice_id,
                                                             backend,
+                                                            request_tags.clone(),
                                                             false,
                                                         ),
                                                         Err(e) => {

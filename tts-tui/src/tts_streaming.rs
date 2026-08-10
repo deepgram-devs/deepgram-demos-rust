@@ -9,7 +9,7 @@ use tokio_tungstenite::{
     tungstenite::{
         client::IntoClientRequest,
         http::{
-            header::{AUTHORIZATION, SEC_WEBSOCKET_PROTOCOL},
+            header::{AUTHORIZATION, SEC_WEBSOCKET_PROTOCOL, USER_AGENT},
             HeaderValue,
         },
         Message,
@@ -62,6 +62,7 @@ pub struct StreamingRequest<'a> {
     pub sample_rate: u32,
     pub chunking_strategy: ChunkingStrategy,
     pub text: &'a str,
+    pub tags: &'a [String],
 }
 
 pub async fn stream_speech(
@@ -79,16 +80,21 @@ pub async fn stream_speech(
         return Err(anyhow!("Cannot stream an empty text utterance"));
     }
 
-    let url = build_streaming_url(
+    let url = build_streaming_url_with_tags(
         request.protocol,
         request.voice_id,
         request.speed,
         request.sample_rate,
+        request.tags,
     )?;
     let mut websocket_request = url
         .as_str()
         .into_client_request()
         .context("Failed to create Deepgram WebSocket request")?;
+    websocket_request.headers_mut().insert(
+        USER_AGENT,
+        HeaderValue::from_static(crate::tts::CLIENT_USER_AGENT),
+    );
     match request.protocol {
         StreamingProtocol::Aura => {
             let protocol = HeaderValue::from_str(&format!("token, {}", request.api_key))
@@ -240,6 +246,16 @@ fn build_streaming_url(
     speed: Decimal,
     sample_rate: u32,
 ) -> Result<Url> {
+    build_streaming_url_with_tags(protocol, voice_id, speed, sample_rate, &[])
+}
+
+fn build_streaming_url_with_tags(
+    protocol: StreamingProtocol,
+    voice_id: &str,
+    speed: Decimal,
+    sample_rate: u32,
+    request_tags: &[String],
+) -> Result<Url> {
     let endpoint = match protocol {
         StreamingProtocol::Aura => AURA_SPEAK_WEBSOCKET_URL,
         StreamingProtocol::Flux => FLUX_SPEAK_WEBSOCKET_URL,
@@ -252,6 +268,9 @@ fn build_streaming_url(
         pairs.append_pair("sample_rate", &sample_rate.to_string());
         if protocol == StreamingProtocol::Aura && speed != Decimal::ONE {
             pairs.append_pair("speed", &speed.to_string());
+        }
+        for tag in request_tags {
+            pairs.append_pair("tag", tag);
         }
     }
     Ok(url)
@@ -369,6 +388,24 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "wss://api.deepgram.com/v2/speak?model=flux-haley-en&encoding=linear16&sample_rate=24000"
+        );
+    }
+
+    #[test]
+    fn streaming_url_includes_request_tags() {
+        let tags = vec!["tts-tui".to_string(), "custom".to_string()];
+        let url = build_streaming_url_with_tags(
+            StreamingProtocol::Aura,
+            "aura-2-thalia-en",
+            Decimal::ONE,
+            24000,
+            &tags,
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "wss://api.deepgram.com/v1/speak?model=aura-2-thalia-en&encoding=linear16&sample_rate=24000&tag=tts-tui&tag=custom"
         );
     }
 
