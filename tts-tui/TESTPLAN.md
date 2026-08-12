@@ -45,7 +45,7 @@ cargo check -p tts-tui
 - Press `Ctrl+Enter` and verify the cache is bypassed and a fresh request is made.
 - Run with `--endpoint` pointing at a self-hosted or proxy Deepgram-compatible TTS endpoint and verify playback still works.
 - Run with `--tags production --tags demo` (or `--tags production,demo`) and use endpoint logging to verify the default tags plus both custom tags are sent.
-- Use endpoint logging or a test proxy to verify the outgoing `User-Agent` is `tts-tui/0.9.6` for the current release.
+- Use endpoint logging or a test proxy to verify the outgoing `User-Agent` is `tts-tui/0.9.7` for the current release.
 - Remove or invalidate the API key for an endpoint that requires one and verify the log panel shows a useful error.
 - Verify `tts-tui --help` does not list a `--normalize-volume` option.
 - Press `v` to enable volume normalization and verify the request query contains `normalize_volume=true`; press it again to disable normalization and verify the parameter is omitted.
@@ -56,6 +56,7 @@ cargo check -p tts-tui
 - Verify a hosted Deepgram batch request logs its `dg-request-id` response header, and a WebSocket stream logs the request ID received in its `Metadata` (Aura) or `Connected` (Flux) message.
 - Verify the app waits for Deepgram's `Flushed` response before closing the WebSocket and plays all queued audio. Press `Esc` during another stream and verify playback stops and the connection closes without waiting for the final audio.
 - With streaming enabled, verify a Flux voice uses WebSocket streaming and plays the complete utterance; verify the SageMaker provider still shows a clear unsupported-mode error and its normal request path works when streaming is disabled.
+- With streaming enabled and a self-hosted Deepgram-compatible HTTP(S) endpoint configured, omit the API key and verify the app connects without an authentication header.
 - Play several different texts/voices back-to-back in quick succession (bypassing the cache with `Ctrl+Enter` for at least one) and verify no audible pop, click, or static plays between or during tracks.
 - Start the app on a machine with no audio output device (or with audio hardware disabled) and verify the log panel shows "No audio output device available" at startup and that text/voice management still works without crashing.
 

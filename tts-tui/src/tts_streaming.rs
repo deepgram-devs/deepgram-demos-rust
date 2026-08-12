@@ -18,9 +18,6 @@ use tokio_tungstenite::{
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-const AURA_SPEAK_WEBSOCKET_URL: &str = "wss://api.deepgram.com/v1/speak";
-const FLUX_SPEAK_WEBSOCKET_URL: &str = "wss://api.deepgram.com/v2/speak";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StreamingProtocol {
     Aura,
@@ -55,7 +52,8 @@ impl ChunkingStrategy {
 }
 
 pub struct StreamingRequest<'a> {
-    pub api_key: &'a str,
+    pub api_key: Option<&'a str>,
+    pub endpoint: &'a str,
     pub voice_id: &'a str,
     pub protocol: StreamingProtocol,
     pub speed: Decimal,
@@ -81,6 +79,7 @@ pub async fn stream_speech(
     }
 
     let url = build_streaming_url_with_tags(
+        request.endpoint,
         request.protocol,
         request.voice_id,
         request.speed,
@@ -95,22 +94,7 @@ pub async fn stream_speech(
         USER_AGENT,
         HeaderValue::from_static(crate::tts::CLIENT_USER_AGENT),
     );
-    match request.protocol {
-        StreamingProtocol::Aura => {
-            let protocol = HeaderValue::from_str(&format!("token, {}", request.api_key))
-                .context("Deepgram API key contains an invalid WebSocket protocol character")?;
-            websocket_request
-                .headers_mut()
-                .insert(SEC_WEBSOCKET_PROTOCOL, protocol);
-        }
-        StreamingProtocol::Flux => {
-            let authorization = HeaderValue::from_str(&format!("Token {}", request.api_key))
-                .context("Deepgram API key contains an invalid authorization header")?;
-            websocket_request
-                .headers_mut()
-                .insert(AUTHORIZATION, authorization);
-        }
-    }
+    add_authentication_headers(&mut websocket_request, request.protocol, request.api_key)?;
 
     let (mut socket, _) = connect_async(websocket_request)
         .await
@@ -246,21 +230,47 @@ fn build_streaming_url(
     speed: Decimal,
     sample_rate: u32,
 ) -> Result<Url> {
-    build_streaming_url_with_tags(protocol, voice_id, speed, sample_rate, &[])
+    build_streaming_url_with_tags(
+        "https://api.deepgram.com/v1/speak",
+        protocol,
+        voice_id,
+        speed,
+        sample_rate,
+        &[],
+    )
 }
 
 fn build_streaming_url_with_tags(
+    endpoint: &str,
     protocol: StreamingProtocol,
     voice_id: &str,
     speed: Decimal,
     sample_rate: u32,
     request_tags: &[String],
 ) -> Result<Url> {
-    let endpoint = match protocol {
-        StreamingProtocol::Aura => AURA_SPEAK_WEBSOCKET_URL,
-        StreamingProtocol::Flux => FLUX_SPEAK_WEBSOCKET_URL,
-    };
     let mut url = Url::parse(endpoint)?;
+    let websocket_scheme = match url.scheme() {
+        "http" => "ws",
+        "https" => "wss",
+        "ws" => "ws",
+        "wss" => "wss",
+        scheme => {
+            return Err(anyhow!(
+                "Unsupported Deepgram TTS endpoint scheme '{}'. Use http or https.",
+                scheme
+            ));
+        }
+    };
+    url.set_scheme(websocket_scheme)
+        .map_err(|_| anyhow!("Failed to convert Deepgram TTS endpoint to WebSocket URL"))?;
+    if url.path().is_empty() || url.path() == "/" {
+        url.set_path(match protocol {
+            StreamingProtocol::Aura => "/v1/speak",
+            StreamingProtocol::Flux => "/v2/speak",
+        });
+    } else if protocol == StreamingProtocol::Flux && url.path() == "/v1/speak" {
+        url.set_path("/v2/speak");
+    }
     {
         let mut pairs = url.query_pairs_mut();
         pairs.append_pair("model", voice_id);
@@ -274,6 +284,31 @@ fn build_streaming_url_with_tags(
         }
     }
     Ok(url)
+}
+
+fn add_authentication_headers(
+    request: &mut tokio_tungstenite::tungstenite::http::Request<()>,
+    protocol: StreamingProtocol,
+    api_key: Option<&str>,
+) -> Result<()> {
+    let Some(api_key) = api_key else {
+        return Ok(());
+    };
+    match protocol {
+        StreamingProtocol::Aura => {
+            let protocol = HeaderValue::from_str(&format!("token, {}", api_key))
+                .context("Deepgram API key contains an invalid WebSocket protocol character")?;
+            request
+                .headers_mut()
+                .insert(SEC_WEBSOCKET_PROTOCOL, protocol);
+        }
+        StreamingProtocol::Flux => {
+            let authorization = HeaderValue::from_str(&format!("Token {}", api_key))
+                .context("Deepgram API key contains an invalid authorization header")?;
+            request.headers_mut().insert(AUTHORIZATION, authorization);
+        }
+    }
+    Ok(())
 }
 
 pub fn streaming_sample_rate(preferred_rate: u32) -> u32 {
@@ -395,6 +430,7 @@ mod tests {
     fn streaming_url_includes_request_tags() {
         let tags = vec!["tts-tui".to_string(), "custom".to_string()];
         let url = build_streaming_url_with_tags(
+            "https://api.deepgram.com/v1/speak",
             StreamingProtocol::Aura,
             "aura-2-thalia-en",
             Decimal::ONE,
@@ -407,6 +443,30 @@ mod tests {
             url.as_str(),
             "wss://api.deepgram.com/v1/speak?model=aura-2-thalia-en&encoding=linear16&sample_rate=24000&tag=tts-tui&tag=custom"
         );
+    }
+
+    #[test]
+    fn builds_self_hosted_streaming_endpoint_without_requiring_authentication() {
+        let url = build_streaming_url_with_tags(
+            "https://tts.internal.example/v1/speak",
+            StreamingProtocol::Aura,
+            "aura-2-thalia-en",
+            Decimal::ONE,
+            24000,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "wss://tts.internal.example/v1/speak?model=aura-2-thalia-en&encoding=linear16&sample_rate=24000"
+        );
+
+        let mut request = "wss://tts.internal.example/v1/speak"
+            .into_client_request()
+            .unwrap();
+        add_authentication_headers(&mut request, StreamingProtocol::Aura, None).unwrap();
+        assert!(!request.headers().contains_key(SEC_WEBSOCKET_PROTOCOL));
+        assert!(!request.headers().contains_key(AUTHORIZATION));
     }
 
     #[test]

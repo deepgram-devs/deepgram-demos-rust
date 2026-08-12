@@ -271,7 +271,7 @@ Press `c` to choose a chunking strategy for the next stream:
 - **Sentence boundary** — separates at `.`, `!`, and `?`.
 - **Punctuation** — separates at sentence punctuation plus commas and semicolons.
 
-Streaming requires a Deepgram API key and a hosted Deepgram voice. It always uses streaming-compatible Linear16 audio; the app uses the selected sample rate when it is compatible, otherwise 24000 Hz. For Flux, the app waits for `Flushed`, `SpeechMetadata`, and graceful `SessionMetadata` closure before completing. Press `Esc` to abort a stream; otherwise the app plays the complete received buffer. SageMaker remains unavailable through WebSocket streaming.
+Hosted streaming requires a Deepgram API key; self-hosted Deepgram-compatible endpoints may accept WebSocket connections without one. The configured HTTP(S) endpoint is converted to its WebSocket equivalent, and authentication headers are sent only when a key is configured. Streaming always uses Linear16 audio; the app uses the selected sample rate when it is compatible, otherwise 24000 Hz. For Flux, the app waits for `Flushed`, `SpeechMetadata`, and graceful `SessionMetadata` closure before completing. Press `Esc` to abort a stream; otherwise the app plays the complete received buffer. SageMaker remains unavailable through WebSocket streaming.
 
 ### Experimental Feature Flags
 

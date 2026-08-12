@@ -188,18 +188,10 @@ fn kick_off_tts(
     app.tts_receiver = Some(rx);
 
     if app.websocket_streaming_enabled {
-        let (api_key, voice_id) = match backend {
+        let (api_key, endpoint, voice_id) = match backend {
             tts::TtsBackend::Deepgram {
-                api_key: Some(api_key),
-                ..
-            } => (api_key, voice_id),
-            tts::TtsBackend::Deepgram { .. } => {
-                app.handle_tts_error(
-                    "WebSocket streaming requires a Deepgram API key. Press 'k' to enter one."
-                        .to_string(),
-                );
-                return;
-            }
+                api_key, endpoint, ..
+            } => (api_key, endpoint, voice_id),
             tts::TtsBackend::SageMaker { .. } => {
                 app.handle_tts_error(
                     "WebSocket streaming is available only with the hosted Deepgram provider."
@@ -241,7 +233,8 @@ fn kick_off_tts(
         tokio::spawn(async move {
             let result = tts_streaming::stream_speech(
                 tts_streaming::StreamingRequest {
-                    api_key: &api_key,
+                    api_key: api_key.as_deref(),
+                    endpoint: &endpoint,
                     voice_id: &voice_id,
                     protocol,
                     speed,

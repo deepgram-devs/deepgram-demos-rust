@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.7 - 2026-08-12
+
+### Fixes
+
+- Allowed WebSocket streaming against self-hosted Deepgram-compatible endpoints without requiring a Deepgram API key.
+- Converted the configured HTTP(S) TTS endpoint to its WebSocket equivalent for streaming requests.
+
 ## 0.9.6 - 2026-08-12
 
 ### Features

@@ -123,7 +123,7 @@ const fn default_log_max_files() -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentalFlags {
     /// Enable Deepgram WebSocket TTS streaming on startup.
-    /// Toggle this at runtime with the 'w' key; hosted Deepgram voices and an API key are required.
+    /// Toggle this at runtime with the 'w' key; hosted endpoints require an API key, while self-hosted endpoints may not.
     /// Env var override: TTS_TUI_FEATURE_STREAMING_PLAYBACK=true|false
     /// Default: false
     pub streaming_playback: bool,
@@ -272,7 +272,7 @@ max_files = 3
 #   TTS_TUI_FEATURE_<FLAG_NAME_UPPERCASE>=true|false
 [experimental]
 # Enable Deepgram WebSocket TTS streaming on startup.
-# Hosted Aura voices and a Deepgram API key are required. Toggle it at runtime with 'w'.
+# Hosted endpoints require a Deepgram API key; self-hosted endpoints may not. Toggle with 'w'.
 # Env var: TTS_TUI_FEATURE_STREAMING_PLAYBACK=true|false
 streaming_playback = false
 
