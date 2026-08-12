@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.6 - 2026-08-12
+
+### Features
+
+- Updated the Flux voice catalog to all 36 voices currently supported by the Deepgram documentation.
+- Removed the retired `flux-renee-en` voice.
+
 ## 0.9.5 - 2026-08-10
 
 ### Features

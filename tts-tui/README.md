@@ -5,7 +5,7 @@ A terminal user interface (TUI) built with Rust and Ratatui for interacting with
 ## Features
 
 - Play saved text snippets with any Deepgram Aura, Aura-2, or Flux voice
-- **Flux TTS support** — all 12 early-access Flux voices (`flux-*-en`) are selectable alongside Aura and Aura-2; requests are automatically routed to Deepgram's `/v2/speak` endpoint
+- **Flux TTS support** — all 36 Flux voices (`flux-*-en`) are selectable alongside Aura and Aura-2; requests are automatically routed to Deepgram's `/v2/speak` endpoint
 - Choose the TTS provider: Deepgram-compatible HTTP endpoint or Amazon SageMaker `InvokeEndpoint`
 - Browse and filter voices by name, language, or model via a dedicated popup (`/` with Voices panel focused)
 - Filter saved texts by content via the same `/` key (with Saved Texts panel focused)
@@ -178,22 +178,46 @@ Tags are sent as repeated `tag` query parameters for HTTP and WebSocket requests
 
 ### Flux TTS
 
-[Flux](https://developers.deepgram.com/docs/flux-tts/overview) is Deepgram's early-access TTS model built for voice agent pipelines. All 12 Flux voices are available in the Voices panel, filterable with `flux` (e.g. `/` then type `flux`):
+[Flux](https://developers.deepgram.com/docs/flux-tts/overview) is Deepgram's TTS model built for voice agent pipelines. All 36 Flux voices are available in the Voices panel, filterable with `flux` (e.g. `/` then type `flux`):
 
 | Voice ID | Name | Accent | Gender |
 |----------|------|--------|--------|
+| `flux-hannah-en` | Hannah | American | Female |
+| `flux-kit-en` | Kit | British | Male |
+| `flux-alexis-en` | Alexis | American | Female |
+| `flux-cliff-en` | Cliff | American | Male |
+| `flux-sienna-en` | Sienna | American | Female |
+| `flux-cole-en` | Cole | American | Male |
+| `flux-brooke-en` | Brooke | American | Female |
+| `flux-colin-en` | Colin | British | Male |
+| `flux-gemma-en` | Gemma | British | Female |
 | `flux-haley-en` | Haley | American | Female |
 | `flux-heather-en` | Heather | American | Female |
-| `flux-cole-en` | Cole | American | Male |
-| `flux-alexis-en` | Alexis | American | Female |
-| `flux-priya-en` | Priya | Indian | Female |
-| `flux-jack-en` | Jack | British | Male |
+| `flux-miles-en` | Miles | American | Male |
+| `flux-sean-en` | Sean | British | Male |
+| `flux-bree-en` | Bree | American | Female |
+| `flux-brittany-en` | Brittany | American | Female |
 | `flux-bruce-en` | Bruce | American | Male |
-| `flux-rufus-en` | Rufus | British | Male |
+| `flux-conor-en` | Conor | British | Male |
+| `flux-donovan-en` | Donovan | American | Male |
 | `flux-drew-en` | Drew | American | Male |
-| `flux-renee-en` | Renee | American | Female |
+| `flux-elise-en` | Elise | American | Female |
+| `flux-jack-en` | Jack | British | Male |
+| `flux-kai-en` | Kai | Singaporean | Male |
+| `flux-kelsey-en` | Kelsey | American | Female |
+| `flux-maeve-en` | Maeve | Irish | Female |
+| `flux-marcelo-en` | Marcelo | Filipino | Male |
 | `flux-marcus-en` | Marcus | American | Male |
+| `flux-meena-en` | Meena | Indian | Female |
+| `flux-meghan-en` | Meghan | American | Female |
+| `flux-naveen-en` | Naveen | Indian | Male |
+| `flux-paige-en` | Paige | American | Female |
+| `flux-priya-en` | Priya | Indian | Female |
+| `flux-rufus-en` | Rufus | British | Male |
 | `flux-sharon-en` | Sharon | Australian | Female |
+| `flux-tanner-en` | Tanner | British | Male |
+| `flux-wade-en` | Wade | American | Male |
+| `flux-wes-en` | Wes | American | Male |
 
 Selecting a Flux voice on the `deepgram` provider automatically sends the request to `/v2/speak` instead of `/v1/speak` — no configuration change is needed, including with a hosted regional base URL. Aura and Aura-2 voices continue to use `/v1/speak` unchanged.
 

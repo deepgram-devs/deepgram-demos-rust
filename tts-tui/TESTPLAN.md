@@ -45,7 +45,7 @@ cargo check -p tts-tui
 - Press `Ctrl+Enter` and verify the cache is bypassed and a fresh request is made.
 - Run with `--endpoint` pointing at a self-hosted or proxy Deepgram-compatible TTS endpoint and verify playback still works.
 - Run with `--tags production --tags demo` (or `--tags production,demo`) and use endpoint logging to verify the default tags plus both custom tags are sent.
-- Use endpoint logging or a test proxy to verify the outgoing `User-Agent` is `tts-tui/0.9.5` for the current release.
+- Use endpoint logging or a test proxy to verify the outgoing `User-Agent` is `tts-tui/0.9.6` for the current release.
 - Remove or invalidate the API key for an endpoint that requires one and verify the log panel shows a useful error.
 - Verify `tts-tui --help` does not list a `--normalize-volume` option.
 - Press `v` to enable volume normalization and verify the request query contains `normalize_volume=true`; press it again to disable normalization and verify the parameter is omitted.
@@ -61,7 +61,7 @@ cargo check -p tts-tui
 
 ### 2a. Flux TTS Voices
 
-- Open the Voices filter (`/`) and type `flux`; verify all 12 `flux-*-en` voices are shown.
+- Open the Voices filter (`/`) and type `flux`; verify all 36 `flux-*-en` voices are shown, including the featured voices and the additional accent/character voices listed in the README.
 - Play a short phrase with a Flux voice and verify audio is generated and plays correctly.
 - Increase or decrease playback speed, then play a Flux voice and verify the log notes that Flux ignores playback speed.
 - Enable volume normalization, then play a Flux voice and verify the log notes that Flux ignores volume normalization.
