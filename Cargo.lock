@@ -9146,7 +9146,7 @@ dependencies = [
 
 [[package]]
 name = "tts-tui"
-version = "0.9.3"
+version = "0.9.7"
 dependencies = [
  "anyhow",
  "arboard",

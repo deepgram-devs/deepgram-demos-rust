@@ -5,7 +5,7 @@ A terminal user interface (TUI) built with Rust and Ratatui for interacting with
 ## Features
 
 - Play saved text snippets with any Deepgram Aura, Aura-2, or Flux voice
-- **Flux TTS support** — all 12 early-access Flux voices (`flux-*-en`) are selectable alongside Aura and Aura-2; requests are automatically routed to Deepgram's `/v2/speak` endpoint
+- **Flux TTS support** — all 36 Flux voices (`flux-*-en`) are selectable alongside Aura and Aura-2; requests are automatically routed to Deepgram's `/v2/speak` endpoint
 - Choose the TTS provider: Deepgram-compatible HTTP endpoint or Amazon SageMaker `InvokeEndpoint`
 - Browse and filter voices by name, language, or model via a dedicated popup (`/` with Voices panel focused)
 - Filter saved texts by content via the same `/` key (with Saved Texts panel focused)
@@ -27,6 +27,8 @@ A terminal user interface (TUI) built with Rust and Ratatui for interacting with
 - Experimental feature flags via config file or environment variables
 - Timestamped, color-coded log panel with scrollable history and mouse scroll support
 - Mouse click to select specific items in lists
+- Deepgram request tags: every request includes `tts-tui`, `appeng`, and `deepgram-demos-rust`; add more with `--tags`
+- Identifies direct HTTP and WebSocket requests with a versioned `User-Agent` header (`tts-tui/<version>`)
 
 ## Requirements
 
@@ -163,24 +165,59 @@ This setting applies to the `deepgram` provider, which is the direct HTTP path f
 
 Both HTTP and HTTPS endpoint URLs are supported. If the endpoint is only a scheme and host, such as `https://api.eu.deepgram.com`, `tts-tui` sends requests to `/v1/speak` on that host. If the URL already includes a path, that path is preserved.
 
+### Request Tags
+
+Every Deepgram TTS request includes the default tags `tts-tui`, `appeng`, and `deepgram-demos-rust`. Add custom tags with `--tags`; repeat the option or provide comma-separated values:
+
+```bash
+cargo run -- --tags production --tags demo
+cargo run -- --tags production,demo
+```
+
+Tags are sent as repeated `tag` query parameters for HTTP and WebSocket requests, and in SageMaker `CustomAttributes`.
+
 ### Flux TTS
 
-[Flux](https://developers.deepgram.com/docs/flux-tts/overview) is Deepgram's early-access TTS model built for voice agent pipelines. All 12 Flux voices are available in the Voices panel, filterable with `flux` (e.g. `/` then type `flux`):
+[Flux](https://developers.deepgram.com/docs/flux-tts/overview) is Deepgram's TTS model built for voice agent pipelines. All 36 Flux voices are available in the Voices panel, filterable with `flux` (e.g. `/` then type `flux`):
 
 | Voice ID | Name | Accent | Gender |
 |----------|------|--------|--------|
+| `flux-hannah-en` | Hannah | American | Female |
+| `flux-kit-en` | Kit | British | Male |
+| `flux-alexis-en` | Alexis | American | Female |
+| `flux-cliff-en` | Cliff | American | Male |
+| `flux-sienna-en` | Sienna | American | Female |
+| `flux-cole-en` | Cole | American | Male |
+| `flux-brooke-en` | Brooke | American | Female |
+| `flux-colin-en` | Colin | British | Male |
+| `flux-gemma-en` | Gemma | British | Female |
 | `flux-haley-en` | Haley | American | Female |
 | `flux-heather-en` | Heather | American | Female |
-| `flux-cole-en` | Cole | American | Male |
-| `flux-alexis-en` | Alexis | American | Female |
-| `flux-priya-en` | Priya | Indian | Female |
-| `flux-jack-en` | Jack | British | Male |
+| `flux-miles-en` | Miles | American | Male |
+| `flux-sean-en` | Sean | British | Male |
+| `flux-bree-en` | Bree | American | Female |
+| `flux-brittany-en` | Brittany | American | Female |
 | `flux-bruce-en` | Bruce | American | Male |
-| `flux-rufus-en` | Rufus | British | Male |
+| `flux-conor-en` | Conor | British | Male |
+| `flux-donovan-en` | Donovan | American | Male |
 | `flux-drew-en` | Drew | American | Male |
-| `flux-renee-en` | Renee | American | Female |
+| `flux-elise-en` | Elise | American | Female |
+| `flux-jack-en` | Jack | British | Male |
+| `flux-kai-en` | Kai | Singaporean | Male |
+| `flux-kelsey-en` | Kelsey | American | Female |
+| `flux-maeve-en` | Maeve | Irish | Female |
+| `flux-marcelo-en` | Marcelo | Filipino | Male |
 | `flux-marcus-en` | Marcus | American | Male |
+| `flux-meena-en` | Meena | Indian | Female |
+| `flux-meghan-en` | Meghan | American | Female |
+| `flux-naveen-en` | Naveen | Indian | Male |
+| `flux-paige-en` | Paige | American | Female |
+| `flux-priya-en` | Priya | Indian | Female |
+| `flux-rufus-en` | Rufus | British | Male |
 | `flux-sharon-en` | Sharon | Australian | Female |
+| `flux-tanner-en` | Tanner | British | Male |
+| `flux-wade-en` | Wade | American | Male |
+| `flux-wes-en` | Wes | American | Male |
 
 Selecting a Flux voice on the `deepgram` provider automatically sends the request to `/v2/speak` instead of `/v1/speak` — no configuration change is needed, including with a hosted regional base URL. Aura and Aura-2 voices continue to use `/v1/speak` unchanged.
 
@@ -234,7 +271,7 @@ Press `c` to choose a chunking strategy for the next stream:
 - **Sentence boundary** — separates at `.`, `!`, and `?`.
 - **Punctuation** — separates at sentence punctuation plus commas and semicolons.
 
-Streaming requires a Deepgram API key and a hosted Deepgram voice. It always uses streaming-compatible Linear16 audio; the app uses the selected sample rate when it is compatible, otherwise 24000 Hz. For Flux, the app waits for `Flushed`, `SpeechMetadata`, and graceful `SessionMetadata` closure before completing. Press `Esc` to abort a stream; otherwise the app plays the complete received buffer. SageMaker remains unavailable through WebSocket streaming.
+Hosted streaming requires a Deepgram API key; self-hosted Deepgram-compatible endpoints may accept WebSocket connections without one. The configured HTTP(S) endpoint is converted to its WebSocket equivalent, and authentication headers are sent only when a key is configured. Streaming always uses Linear16 audio; the app uses the selected sample rate when it is compatible, otherwise 24000 Hz. For Flux, the app waits for `Flushed`, `SpeechMetadata`, and graceful `SessionMetadata` closure before completing. Press `Esc` to abort a stream; otherwise the app plays the complete received buffer. SageMaker remains unavailable through WebSocket streaming.
 
 ### Experimental Feature Flags
 

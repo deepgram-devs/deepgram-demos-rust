@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.9.7 - 2026-08-12
+
+### Fixes
+
+- Allowed WebSocket streaming against self-hosted Deepgram-compatible endpoints without requiring a Deepgram API key.
+- Converted the configured HTTP(S) TTS endpoint to its WebSocket equivalent for streaming requests.
+
+## 0.9.6 - 2026-08-12
+
+### Features
+
+- Updated the Flux voice catalog to all 36 voices currently supported by the Deepgram documentation.
+- Removed the retired `flux-renee-en` voice.
+
+## 0.9.5 - 2026-08-10
+
+### Features
+
+- Added default Deepgram request tags (`tts-tui`, `appeng`, and `deepgram-demos-rust`) with support for additional tags through `--tags`.
+- Added a versioned `User-Agent` header identifying direct HTTP and WebSocket requests as `tts-tui/<version>`.
+
+## Unreleased
+
 ## 0.9.3 - 2026-08-02
 
 ### Fixes

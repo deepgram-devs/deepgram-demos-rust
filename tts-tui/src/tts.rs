@@ -11,6 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
+pub const CLIENT_USER_AGENT: &str = concat!("tts-tui/", env!("CARGO_PKG_VERSION"));
+
 #[derive(Clone, Debug)]
 pub enum TtsBackend {
     Deepgram {
@@ -45,6 +47,7 @@ pub async fn fetch_audio_for_playback(
     normalize_volume: bool,
     extension: &str,
     cache_dir: &str,
+    request_tags: &[String],
     force_regenerate: bool,
 ) -> Result<(String, Vec<u8>, bool, Option<String>)> {
     let cache_file_path = get_cache_file_path(
@@ -98,6 +101,7 @@ pub async fn fetch_audio_for_playback(
                     encoding,
                     normalize_volume,
                     endpoint,
+                    request_tags,
                 )
                 .await?
             }
@@ -114,6 +118,7 @@ pub async fn fetch_audio_for_playback(
                     sample_rate,
                     encoding,
                     normalize_volume,
+                    request_tags,
                 )
                 .await?;
                 (audio_data, None)
@@ -414,19 +419,22 @@ async fn fetch_deepgram_tts(
     encoding: &str,
     normalize_volume: bool,
     endpoint: &str,
+    request_tags: &[String],
 ) -> Result<(Vec<u8>, Option<String>)> {
     let client = Client::new();
-    let url = build_deepgram_tts_url(
+    let url = build_deepgram_tts_url_with_tags(
         endpoint,
         voice_id,
         speed,
         sample_rate,
         encoding,
         normalize_volume,
+        request_tags,
     )?;
 
     let mut request = client
         .post(url.clone())
+        .header(reqwest::header::USER_AGENT, CLIENT_USER_AGENT)
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({"text": text}));
 
@@ -489,6 +497,26 @@ fn build_deepgram_tts_url(
     encoding: &str,
     normalize_volume: bool,
 ) -> Result<Url> {
+    build_deepgram_tts_url_with_tags(
+        endpoint,
+        voice_id,
+        speed,
+        sample_rate,
+        encoding,
+        normalize_volume,
+        &[],
+    )
+}
+
+fn build_deepgram_tts_url_with_tags(
+    endpoint: &str,
+    voice_id: &str,
+    speed: Decimal,
+    sample_rate: u32,
+    encoding: &str,
+    normalize_volume: bool,
+    request_tags: &[String],
+) -> Result<Url> {
     let mut url = Url::parse(endpoint)
         .with_context(|| format!("Invalid Deepgram TTS endpoint URL: {}", endpoint))?;
 
@@ -528,6 +556,9 @@ fn build_deepgram_tts_url(
         }
         if !is_flux && normalize_volume {
             pairs.append_pair("normalize_volume", "true");
+        }
+        for tag in request_tags {
+            pairs.append_pair("tag", tag);
         }
     }
 
@@ -716,5 +747,30 @@ mod tests {
             deepgram_request_id(&headers).as_deref(),
             Some("request-123")
         );
+    }
+
+    #[test]
+    fn deepgram_url_includes_request_tags() {
+        let tags = vec!["tts-tui".to_string(), "custom tag".to_string()];
+        let url = build_deepgram_tts_url_with_tags(
+            "https://api.deepgram.com/v1/speak",
+            "aura-2-thalia-en",
+            Decimal::new(10, 1),
+            24000,
+            "linear16",
+            false,
+            &tags,
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "https://api.deepgram.com/v1/speak?model=aura-2-thalia-en&encoding=linear16&sample_rate=24000&tag=tts-tui&tag=custom+tag"
+        );
+    }
+
+    #[test]
+    fn client_user_agent_identifies_application_and_version() {
+        assert_eq!(CLIENT_USER_AGENT, "tts-tui/0.9.7");
     }
 }
