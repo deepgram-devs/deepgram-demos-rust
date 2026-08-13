@@ -2,10 +2,12 @@ use anyhow::{anyhow, Context, Result};
 use claxon;
 use reqwest::{Client, Url};
 use rodio::buffer::SamplesBuffer;
-use rodio::{Decoder, OutputStreamHandle, Sink, Source};
+use rodio::mixer::Mixer;
+use rodio::{Decoder, Player, Source};
 use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
+use std::num::{NonZeroU16, NonZeroU32};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -147,9 +149,9 @@ pub fn play_audio_data_sync(
     data: &[u8],
     encoding: &str,
     sample_rate: u32,
-    stream_handle: &OutputStreamHandle,
-) -> Result<(Arc<Sink>, u64)> {
-    let sink = Sink::try_new(stream_handle)?;
+    mixer: &Mixer,
+) -> Result<(Arc<Player>, u64)> {
+    let sink = Player::connect_new(mixer);
 
     // mulaw and alaw are returned as raw bytes by the Deepgram API with no container,
     // so rodio's Decoder cannot recognize them. Decode to linear PCM manually.
@@ -157,13 +159,13 @@ pub fn play_audio_data_sync(
         "mulaw" => {
             let samples: Vec<i16> = data.iter().map(|&b| decode_ulaw(b)).collect();
             let duration_ms = data.len() as u64 * 1000 / sample_rate as u64;
-            sink.append(SamplesBuffer::new(1, sample_rate, samples));
+            sink.append(samples_buffer(sample_rate, samples));
             duration_ms
         }
         "alaw" => {
             let samples: Vec<i16> = data.iter().map(|&b| decode_alaw(b)).collect();
             let duration_ms = data.len() as u64 * 1000 / sample_rate as u64;
-            sink.append(SamplesBuffer::new(1, sample_rate, samples));
+            sink.append(samples_buffer(sample_rate, samples));
             duration_ms
         }
         _ => {
@@ -190,7 +192,7 @@ pub fn play_audio_data_sync(
 /// The streaming endpoint only supports raw encodings, so this bypasses container
 /// decoders and lets playback begin as soon as the first binary message arrives.
 pub fn append_linear16_streaming_audio(
-    sink: &Arc<Sink>,
+    sink: &Arc<Player>,
     data: &[u8],
     sample_rate: u32,
 ) -> Result<u64> {
@@ -204,18 +206,30 @@ pub fn append_linear16_streaming_audio(
         .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
         .collect::<Vec<_>>();
     let duration_ms = samples.len() as u64 * 1000 / sample_rate as u64;
-    sink.append(SamplesBuffer::new(1, sample_rate, samples));
+    sink.append(samples_buffer(sample_rate, samples));
     Ok(duration_ms)
 }
 
 pub fn create_linear16_streaming_sink(
     data: &[u8],
     sample_rate: u32,
-    stream_handle: &OutputStreamHandle,
-) -> Result<(Arc<Sink>, u64)> {
-    let sink = Arc::new(Sink::try_new(stream_handle)?);
+    mixer: &Mixer,
+) -> Result<(Arc<Player>, u64)> {
+    let sink = Arc::new(Player::connect_new(mixer));
     let duration_ms = append_linear16_streaming_audio(&sink, data, sample_rate)?;
     Ok((sink, duration_ms))
+}
+
+fn samples_buffer(sample_rate: u32, samples: Vec<i16>) -> SamplesBuffer {
+    let samples = samples
+        .into_iter()
+        .map(|sample| sample as f32 / 32_768.0)
+        .collect::<Vec<_>>();
+    SamplesBuffer::new(
+        NonZeroU16::new(1).expect("one channel is non-zero"),
+        NonZeroU32::new(sample_rate).expect("sample rate is non-zero"),
+        samples,
+    )
 }
 
 /// Decode a single G.711 μ-law byte to a signed 16-bit linear PCM sample.
@@ -405,7 +419,8 @@ fn get_cache_file_path(
     hasher.update(encoding.as_bytes());
     hasher.update(normalize_volume.to_string().as_bytes());
     let hash = hasher.finalize();
-    let filename = format!("{:x}.{}", hash, extension);
+    let hash_hex: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
+    let filename = format!("{hash_hex}.{extension}");
     let path = PathBuf::from(cache_dir).join(filename);
     Ok(path)
 }
@@ -574,6 +589,16 @@ async fn save_audio_to_cache(path: &Path, data: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn samples_buffer_converts_linear16_to_float_samples() {
+        let mut buffer = samples_buffer(16_000, vec![i16::MIN, 0, i16::MAX]);
+
+        assert!((buffer.next().unwrap() + 1.0).abs() < f32::EPSILON);
+        assert_eq!(buffer.next(), Some(0.0));
+        assert!((buffer.next().unwrap() - 0.9999695).abs() < f32::EPSILON);
+        assert_eq!(buffer.next(), None);
+    }
 
     #[test]
     fn deepgram_url_adds_tts_path_for_host_only_https_endpoint() {
@@ -771,6 +796,6 @@ mod tests {
 
     #[test]
     fn client_user_agent_identifies_application_and_version() {
-        assert_eq!(CLIENT_USER_AGENT, "tts-tui/0.9.7");
+        assert_eq!(CLIENT_USER_AGENT, "tts-tui/0.9.8");
     }
 }

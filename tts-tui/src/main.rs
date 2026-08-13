@@ -1,4 +1,5 @@
 mod app;
+mod audio;
 mod config;
 mod logging;
 mod persistence;
@@ -367,12 +368,12 @@ async fn run_app(
                     }
                     let encoding = app.current_audio_format().encoding;
                     let sample_rate = app.sample_rate;
-                    match app.audio_stream_handle.clone() {
-                        Some(stream_handle) => match tts::play_audio_data_sync(
+                    match app.audio_output.as_ref().map(|output| output.mixer.clone()) {
+                        Some(mixer) => match tts::play_audio_data_sync(
                             &audio_data,
                             encoding,
                             sample_rate,
-                            &stream_handle,
+                            &mixer,
                         ) {
                             Ok((sink, duration_ms)) => {
                                 app.audio_sink = Some(sink);
@@ -399,8 +400,8 @@ async fn run_app(
                 }
                 app::TtsResult::StreamingAudio(audio_data) => {
                     let sample_rate = tts_streaming::streaming_sample_rate(app.sample_rate);
-                    match app.audio_stream_handle.clone() {
-                        Some(stream_handle) => {
+                    match app.audio_output.as_ref().map(|output| output.mixer.clone()) {
+                        Some(mixer) => {
                             let playback = match app.audio_sink.as_ref() {
                                 Some(sink) => tts::append_linear16_streaming_audio(
                                     sink,
@@ -411,7 +412,7 @@ async fn run_app(
                                 None => tts::create_linear16_streaming_sink(
                                     &audio_data,
                                     sample_rate,
-                                    &stream_handle,
+                                    &mixer,
                                 ),
                             };
                             match playback {

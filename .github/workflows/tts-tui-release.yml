@@ -8,7 +8,7 @@ on:
       tag:
         description: Existing tts-tui tag to build and publish
         required: true
-        default: tts-tui-v0.9.7
+    default: tts-tui-v0.9.8
 
 permissions:
   contents: write

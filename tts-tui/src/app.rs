@@ -1,3 +1,4 @@
+use crate::audio::AudioOutput;
 use crate::config::{self, AppConfig, ExperimentalFlags};
 use crate::persistence;
 use crate::theme::{Theme, DEFAULT_THEME_INDEX, THEMES};
@@ -7,7 +8,7 @@ use lazy_static::lazy_static;
 use ratatui::layout::Rect;
 use ratatui::widgets::ListState;
 use ratatui::widgets::TableState;
-use rodio::{OutputStream, OutputStreamHandle};
+use rodio::Player;
 use rust_decimal::Decimal;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::str::FromStr;
@@ -332,13 +333,12 @@ pub struct App {
     pub is_loading: bool,
     pub loading_text: String,
     pub spinner_index: usize,
-    pub audio_sink: Option<Arc<rodio::Sink>>,
+    pub audio_sink: Option<Arc<Player>>,
     // Opened once at startup and held for the app's lifetime so playback
     // doesn't reopen the OS audio device (and cause audible pops/static)
-    // on every play. Never read again after construction; kept alive only
-    // for its Drop impl, hence the leading underscore.
-    pub _audio_output_stream: Option<OutputStream>,
-    pub audio_stream_handle: Option<OutputStreamHandle>,
+    // on every play. The audio output owns the device stream and keeps it
+    // alive for the application's lifetime.
+    pub audio_output: Option<AudioOutput>,
     pub tts_receiver: Option<mpsc::UnboundedReceiver<TtsResult>>,
     pub audio_duration_ms: u64,
     pub playback_start_time: std::time::Instant,
@@ -673,11 +673,11 @@ impl App {
         let persisted = persistence::load();
 
         // Open the audio output device once, for the app's lifetime. Opening
-        // a fresh OutputStream on every play (the previous approach) closes
+        // a fresh audio output on every play (the previous approach) closes
         // and reopens the OS audio device each time, which is a known source
         // of audible pop/click/static artifacts on many audio backends.
-        let (audio_output_stream, audio_stream_handle) = match OutputStream::try_default() {
-            Ok((stream, handle)) => (Some(stream), Some(handle)),
+        let audio_output = match AudioOutput::open_default() {
+            Ok(output) => Some(output),
             Err(e) => {
                 initial_logs.push(make_entry(
                     LogLevel::Warning,
@@ -686,7 +686,7 @@ impl App {
                         e
                     ),
                 ));
-                (None, None)
+                None
             }
         };
 
@@ -728,8 +728,7 @@ impl App {
             loading_text: String::new(),
             spinner_index: 0,
             audio_sink: None,
-            _audio_output_stream: audio_output_stream,
-            audio_stream_handle,
+            audio_output,
             tts_receiver: None,
             audio_duration_ms: 0,
             playback_start_time: std::time::Instant::now(),

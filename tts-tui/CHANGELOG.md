@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.8 - 2026-08-12
+
+### Changes
+
+- Migrated audio playback from rodio 0.20 to rodio 0.22.
+- Reused a persistent rodio mixer and player model for batch and WebSocket streaming playback.
+- Updated Linear16 sample conversion for rodio 0.22's floating-point sample buffers.
+- Updated base64, sha2, tokio-tungstenite, and toml dependencies.
+
 ## 0.9.7 - 2026-08-12
 
 ### Fixes
