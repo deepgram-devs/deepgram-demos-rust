@@ -1969,7 +1969,7 @@ async fn run_voice_agent(
     }
 
     // Connect to Deepgram Voice Agent
-    let ws_stream = connect_to_voice_agent(
+    let mut ws_stream = connect_to_voice_agent(
         &api_key,
         &args.endpoint,
         sample_rate,
@@ -1977,7 +1977,37 @@ async fn run_voice_agent(
         args.verbose,
     )
     .await?;
-    let (mut ws_sender, ws_receiver) = ws_stream.split();
+
+    // Deepgram requires the server's Welcome message before receiving Settings.
+    let welcome = ws_stream
+        .next()
+        .await
+        .ok_or("Voice Agent connection closed before Welcome message")??;
+    let welcome = match welcome {
+        Message::Text(text) => serde_json::from_str::<VoiceAgentResponse>(&text)
+            .map_err(|error| format!("invalid Voice Agent Welcome message: {error}"))?,
+        message => {
+            return Err(
+                format!("expected Voice Agent Welcome message, received {message:?}").into(),
+            )
+        }
+    };
+    if welcome.message_type != "Welcome" {
+        return Err(format!(
+            "expected Voice Agent Welcome message, received {}",
+            welcome.message_type
+        )
+        .into());
+    }
+    let request_id = welcome
+        .data
+        .get("request_id")
+        .and_then(|value| value.as_str())
+        .ok_or("Voice Agent Welcome message did not include request_id")?;
+    debug!("👋 Connected: request_id={}", request_id);
+    if args.verbose {
+        info!("Request ID: {}", request_id);
+    }
 
     // Send Settings configuration
     let config_json = serde_json::to_string(&config)?;
@@ -1990,6 +2020,7 @@ async fn run_voice_agent(
         );
     }
 
+    let (mut ws_sender, ws_receiver) = ws_stream.split();
     ws_sender.send(Message::Text(config_json.into())).await?;
     debug!("✅ Settings configuration sent successfully");
 
