@@ -68,6 +68,34 @@ For applications that implement a Terminal User Interface (TUI), adhere to the f
 - Do not push any git branches that start with an `internal-` prefix to GitHub public repositories
   - Pushing these to private repositories are okay
 
+## Rust Dependency & Supply Chain Security
+
+When modifying `Cargo.toml` or introducing external Rust crates, follow these security protocols:
+
+### Guarding Against AI Hallucinations & Typosquatting
+
+- Never guess a crate name or version number. Verify dependencies using authoritative registry information rather than relying on memory.
+- If a crate is not part of the standard well-known ecosystem (for example, `serde`, `tokio`, `reqwest`, `clap`, or `anyhow`), verify that it exists and is valid before adding it, or request human verification.
+
+### Mandatory Local Tool Checks
+
+After changing `Cargo.toml` or `Cargo.lock`, run and pass the applicable project-native security checks:
+
+- Run `cargo audit` to scan the dependency tree against the RustSec Advisory Database.
+- Treat RustSec vulnerabilities as zero-tolerance: if `cargo audit` reports a vulnerability, stop the addition, roll back the change, or find an alternative patched version.
+- If `deny.toml` exists in the project root, run `cargo deny check`.
+- Ensure dependencies comply with the project policy for approved licenses (such as MIT/Apache-2.0), restricted sources (crates.io only), duplicate packages, and unmaintained packages.
+
+### Supply Chain Surface Minimization
+
+- Minimize dependency feature flags. Do not enable default features when only a subset of functionality is needed; use `default-features = false` and explicitly select the required features.
+- Avoid heavy procedural macro dependencies and build dependencies that increase compile time or attack surface unless they are essential.
+
+### Unsoundness and Unmaintained Crates
+
+- Check whether a dependency relies extensively on `unsafe` code without documented invariants.
+- If `cargo audit` or `cargo deny` reports an unmaintained dependency, explicitly flag it to the developer and propose an actively maintained alternative crate.
+
 ## Testing
 
 - Document, recommend or implement the steps to automate testing of TUI applications
