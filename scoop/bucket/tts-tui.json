@@ -1,17 +1,17 @@
 {
-  "version": "0.9.8",
+  "version": "0.9.9",
   "description": "Terminal user interface for Deepgram text-to-speech.",
   "homepage": "https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/tts-tui",
   "license": "ISC",
-  "notes": "Installed from the tts-tui-v0.9.8 GitHub release.",
+  "notes": "Installed from the tts-tui-v0.9.9 GitHub release.",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/tts-tui-v0.9.8/tts-tui-0.9.8-windows-x64.zip",
-      "hash": "8a14ceae0658b67319044c597986e938b8aea3ca8af24886bcd2e13f775da7eb"
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/tts-tui-v0.9.9/tts-tui-0.9.9-windows-x64.zip",
+      "hash": "58aa8e836893283af3e3b45a266af87b0d081a0b91a6bb894e772bc1c01cfecc"
     },
     "arm64": {
-      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/tts-tui-v0.9.8/tts-tui-0.9.8-windows-arm64.zip",
-      "hash": "943e8f5c79968e0644929d29eff449a8799148cf04721ce101eb23ba4de85e18"
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/tts-tui-v0.9.9/tts-tui-0.9.9-windows-arm64.zip",
+      "hash": "e49204a96ee1977f9ed6c5b4011b16f54e2e8e564d8d23e395b967c926d0790e"
     }
   },
   "bin": "tts-tui.exe"
