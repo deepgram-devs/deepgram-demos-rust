@@ -45,7 +45,7 @@ cargo check -p tts-tui
 - Press `Ctrl+Enter` and verify the cache is bypassed and a fresh request is made.
 - Run with `--endpoint` pointing at a self-hosted or proxy Deepgram-compatible TTS endpoint and verify playback still works.
 - Run with `--tags production --tags demo` (or `--tags production,demo`) and use endpoint logging to verify the default tags plus both custom tags are sent.
-- Use endpoint logging or a test proxy to verify the outgoing `User-Agent` is `tts-tui/0.9.8` for the current release.
+- Use endpoint logging or a test proxy to verify the outgoing `User-Agent` is `tts-tui/0.9.9` for the current release.
 - Remove or invalidate the API key for an endpoint that requires one and verify the log panel shows a useful error.
 - Verify `tts-tui --help` does not list a `--normalize-volume` option.
 - Press `v` to enable volume normalization and verify the request query contains `normalize_volume=true`; press it again to disable normalization and verify the parameter is omitted.
@@ -66,6 +66,8 @@ cargo check -p tts-tui
 - Play a short phrase with a Flux voice and verify audio is generated and plays correctly.
 - Increase or decrease playback speed, then play a Flux voice and verify the log notes that Flux ignores playback speed.
 - Enable volume normalization, then play a Flux voice and verify the log notes that Flux ignores volume normalization.
+- Open the Command Palette (`Ctrl+P`), choose `Select Flux Expressivity`, and verify the popup offers `API default (omit parameter)`, `-2`, `-1`, `0`, `+1`, and `+2`.
+- With a Flux voice selected, choose an explicit expressivity value and confirm the batch request includes `expressivity=<value>`; choose `API default (omit parameter)` and confirm it is omitted.
 - With a proxy tool (e.g. `mitmproxy`) or endpoint logs, confirm the outgoing request path is `/v2/speak` for a Flux voice and `/v1/speak` for an Aura or Aura-2 voice in the same session.
 - For Flux streaming, confirm the WebSocket uses `Authorization: Token ...`, sends `Speak` followed by `Flush`, receives `Flushed` and `SpeechMetadata`, then sends `Close` and receives `SessionMetadata` before the connection closes.
 - Play an Aura or Aura-2 voice immediately after a Flux voice and verify both work without needing to restart the app or change configuration.

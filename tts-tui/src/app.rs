@@ -43,6 +43,7 @@ pub enum CurrentScreen {
     ThemeSelect,
     SampleRateSelect,
     AudioFormatSelect,
+    FluxExpressivitySelect,
     CommandPalette,
 }
 
@@ -71,6 +72,7 @@ pub enum CommandAction {
     SelectTheme,
     SelectAudioFormat,
     SelectSampleRate,
+    SelectFluxExpressivity,
     ShowHelp,
     IncreaseSpeed,
     DecreaseSpeed,
@@ -186,6 +188,11 @@ pub static ALL_COMMANDS: &[AppCommand] = &[
         action: CommandAction::SelectSampleRate,
     },
     AppCommand {
+        name: "Select Flux Expressivity",
+        shortcut: None,
+        action: CommandAction::SelectFluxExpressivity,
+    },
+    AppCommand {
         name: "Show Help",
         shortcut: Some("?"),
         action: CommandAction::ShowHelp,
@@ -220,6 +227,11 @@ pub struct AudioFormat {
     pub valid_sample_rates: &'static [u32],
     pub default_sample_rate: u32,
 }
+
+/// Flux expressivity options. `None` means use the API default by omitting the
+/// query parameter; `Some(0)` is an explicit user selection.
+pub const FLUX_EXPRESSIVITY_OPTIONS: [Option<i8>; 6] =
+    [None, Some(-2), Some(-1), Some(0), Some(1), Some(2)];
 
 static MP3_RATES: [u32; 1] = [22050];
 static LINEAR16_RATES: [u32; 5] = [8000, 16000, 24000, 32000, 48000];
@@ -324,6 +336,8 @@ pub struct App {
     pub audio_format_menu_state: ListState,
     pub sample_rate: u32,
     pub sample_rate_menu_state: ListState,
+    pub flux_expressivity: Option<i8>,
+    pub flux_expressivity_menu_state: ListState,
     pub playback_speed: Decimal, // Range: 0.7 to 1.5
     pub websocket_streaming_enabled: bool,
     pub streaming_chunking_strategy: crate::tts_streaming::ChunkingStrategy,
@@ -718,6 +732,8 @@ impl App {
             audio_format_menu_state,
             sample_rate,
             sample_rate_menu_state,
+            flux_expressivity: None,
+            flux_expressivity_menu_state: ListState::default(),
             playback_speed: Decimal::from_str("1.0").unwrap(),
             websocket_streaming_enabled,
             streaming_chunking_strategy: crate::tts_streaming::ChunkingStrategy::TenWords,
@@ -1185,6 +1201,7 @@ impl App {
                 CommandAction::SelectTheme => self.enter_theme_select_mode(),
                 CommandAction::SelectAudioFormat => self.enter_audio_format_mode(),
                 CommandAction::SelectSampleRate => self.enter_sample_rate_mode(),
+                CommandAction::SelectFluxExpressivity => self.enter_flux_expressivity_mode(),
                 CommandAction::ShowHelp => self.show_help_screen(),
                 CommandAction::IncreaseSpeed => self.increase_speed(),
                 CommandAction::DecreaseSpeed => self.decrease_speed(),
@@ -1689,6 +1706,56 @@ impl App {
             None => 0,
         };
         self.sample_rate_menu_state.select(Some(i));
+    }
+
+    pub fn enter_flux_expressivity_mode(&mut self) {
+        let selected = FLUX_EXPRESSIVITY_OPTIONS
+            .iter()
+            .position(|value| *value == self.flux_expressivity)
+            .unwrap_or(0);
+        self.flux_expressivity_menu_state.select(Some(selected));
+        self.current_screen = CurrentScreen::FluxExpressivitySelect;
+        self.status_message =
+            "Select Flux expressivity — Enter to apply, Esc to cancel".to_string();
+    }
+
+    pub fn apply_flux_expressivity(&mut self) {
+        if let Some(index) = self.flux_expressivity_menu_state.selected() {
+            if let Some(value) = FLUX_EXPRESSIVITY_OPTIONS.get(index) {
+                self.flux_expressivity = *value;
+                let label = value
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "API default (omitted)".to_string());
+                self.add_log_with_level(LogLevel::Info, format!("Flux expressivity: {}", label));
+            }
+        }
+        self.current_screen = CurrentScreen::Main;
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    pub fn cancel_flux_expressivity_mode(&mut self) {
+        self.current_screen = CurrentScreen::Main;
+        self.status_message =
+            "Press 'n' to add new text, 'd' to delete, 'Enter' to play.".to_string();
+    }
+
+    pub fn scroll_flux_expressivity_menu(&mut self, direction: i32) {
+        let len = FLUX_EXPRESSIVITY_OPTIONS.len();
+        let index = match self.flux_expressivity_menu_state.selected() {
+            Some(index) => {
+                let new_index = index as i32 + direction;
+                if new_index < 0 {
+                    len - 1
+                } else if new_index as usize >= len {
+                    0
+                } else {
+                    new_index as usize
+                }
+            }
+            None => 0,
+        };
+        self.flux_expressivity_menu_state.select(Some(index));
     }
 
     pub fn increase_speed(&mut self) {

@@ -6,6 +6,7 @@ A terminal user interface (TUI) built with Rust and Ratatui for interacting with
 
 - Play saved text snippets with any Deepgram Aura, Aura-2, or Flux voice
 - **Flux TTS support** — all 36 Flux voices (`flux-*-en`) are selectable alongside Aura and Aura-2; requests are automatically routed to Deepgram's `/v2/speak` endpoint
+- **Flux expressivity** — use the Command Palette's `Select Flux Expressivity` popup to choose the API-default behavior or an explicit value from `-2` (calm) to `2` (animated)
 - Choose the TTS provider: Deepgram-compatible HTTP endpoint or Amazon SageMaker `InvokeEndpoint`
 - Browse and filter voices by name, language, or model via a dedicated popup (`/` with Voices panel focused)
 - Filter saved texts by content via the same `/` key (with Saved Texts panel focused)
@@ -220,6 +221,8 @@ Tags are sent as repeated `tag` query parameters for HTTP and WebSocket requests
 | `flux-wes-en` | Wes | American | Male |
 
 Selecting a Flux voice on the `deepgram` provider automatically sends the request to `/v2/speak` instead of `/v1/speak` — no configuration change is needed, including with a hosted regional base URL. Aura and Aura-2 voices continue to use `/v1/speak` unchanged.
+
+Flux expressivity is unset by default. Use `Ctrl+P`, then select `Select Flux Expressivity` to choose `-2` through `2`; the selected value is sent as the `expressivity` query parameter on Flux batch and WebSocket requests. Choose `API default (omit parameter)` to remove the parameter and let the API choose its default. The setting applies only to Flux requests.
 
 Flux does not currently document support for the `speed` or `normalize_volume` query parameters, so `tts-tui` omits both when a Flux voice is selected rather than sending values the API may reject. If playback speed or volume normalization is active while a Flux voice plays, the log panel notes that the setting was ignored for that request. All standard audio formats (MP3, Linear16, μ-law, A-law, FLAC, AAC) are supported by Flux voices. Flux is not yet supported through the `sagemaker` provider.
 

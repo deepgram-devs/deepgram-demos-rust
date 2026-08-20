@@ -57,6 +57,7 @@ pub struct StreamingRequest<'a> {
     pub voice_id: &'a str,
     pub protocol: StreamingProtocol,
     pub speed: Decimal,
+    pub expressivity: Option<i8>,
     pub sample_rate: u32,
     pub chunking_strategy: ChunkingStrategy,
     pub text: &'a str,
@@ -83,6 +84,7 @@ pub async fn stream_speech(
         request.protocol,
         request.voice_id,
         request.speed,
+        request.expressivity,
         request.sample_rate,
         request.tags,
     )?;
@@ -235,6 +237,7 @@ fn build_streaming_url(
         protocol,
         voice_id,
         speed,
+        None,
         sample_rate,
         &[],
     )
@@ -245,6 +248,7 @@ fn build_streaming_url_with_tags(
     protocol: StreamingProtocol,
     voice_id: &str,
     speed: Decimal,
+    expressivity: Option<i8>,
     sample_rate: u32,
     request_tags: &[String],
 ) -> Result<Url> {
@@ -278,6 +282,17 @@ fn build_streaming_url_with_tags(
         pairs.append_pair("sample_rate", &sample_rate.to_string());
         if protocol == StreamingProtocol::Aura && speed != Decimal::ONE {
             pairs.append_pair("speed", &speed.to_string());
+        }
+        if protocol == StreamingProtocol::Flux {
+            if let Some(expressivity) = expressivity {
+                if !(-2..=2).contains(&expressivity) {
+                    return Err(anyhow!(
+                        "Flux expressivity must be between -2 and 2, got {}",
+                        expressivity
+                    ));
+                }
+                pairs.append_pair("expressivity", &expressivity.to_string());
+            }
         }
         for tag in request_tags {
             pairs.append_pair("tag", tag);
@@ -427,6 +442,41 @@ mod tests {
     }
 
     #[test]
+    fn flux_streaming_url_includes_explicit_expressivity() {
+        let url = build_streaming_url_with_tags(
+            "https://api.deepgram.com/v2/speak",
+            StreamingProtocol::Flux,
+            "flux-haley-en",
+            Decimal::ONE,
+            Some(2),
+            24000,
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "wss://api.deepgram.com/v2/speak?model=flux-haley-en&encoding=linear16&sample_rate=24000&expressivity=2"
+        );
+    }
+
+    #[test]
+    fn flux_streaming_url_omits_unset_expressivity() {
+        let url = build_streaming_url_with_tags(
+            "https://api.deepgram.com/v2/speak",
+            StreamingProtocol::Flux,
+            "flux-haley-en",
+            Decimal::ONE,
+            None,
+            24000,
+            &[],
+        )
+        .unwrap();
+
+        assert!(!url.as_str().contains("expressivity"));
+    }
+
+    #[test]
     fn streaming_url_includes_request_tags() {
         let tags = vec!["tts-tui".to_string(), "custom".to_string()];
         let url = build_streaming_url_with_tags(
@@ -434,6 +484,7 @@ mod tests {
             StreamingProtocol::Aura,
             "aura-2-thalia-en",
             Decimal::ONE,
+            None,
             24000,
             &tags,
         )
@@ -452,6 +503,7 @@ mod tests {
             StreamingProtocol::Aura,
             "aura-2-thalia-en",
             Decimal::ONE,
+            None,
             24000,
             &[],
         )

@@ -44,6 +44,7 @@ pub async fn fetch_audio_for_playback(
     text: &str,
     voice_id: &str,
     speed: Decimal,
+    expressivity: Option<i8>,
     sample_rate: u32,
     encoding: &str,
     normalize_volume: bool,
@@ -52,12 +53,19 @@ pub async fn fetch_audio_for_playback(
     request_tags: &[String],
     force_regenerate: bool,
 ) -> Result<(String, Vec<u8>, bool, Option<String>)> {
+    let effective_expressivity =
+        if matches!(backend, TtsBackend::Deepgram { .. }) && voice_id.starts_with("flux-") {
+            expressivity
+        } else {
+            None
+        };
     let cache_file_path = get_cache_file_path(
         cache_dir,
         &backend.cache_namespace(),
         text,
         voice_id,
         speed,
+        effective_expressivity,
         sample_rate,
         encoding,
         normalize_volume,
@@ -99,6 +107,7 @@ pub async fn fetch_audio_for_playback(
                     text,
                     voice_id,
                     speed,
+                    expressivity,
                     sample_rate,
                     encoding,
                     normalize_volume,
@@ -405,6 +414,7 @@ fn get_cache_file_path(
     text: &str,
     voice_id: &str,
     speed: Decimal,
+    expressivity: Option<i8>,
     sample_rate: u32,
     encoding: &str,
     normalize_volume: bool,
@@ -415,6 +425,12 @@ fn get_cache_file_path(
     hasher.update(text);
     hasher.update(voice_id);
     hasher.update(speed.to_string().as_bytes());
+    hasher.update(
+        expressivity
+            .map(|value| format!("expressivity:{value}"))
+            .unwrap_or_else(|| "expressivity:unset".to_string())
+            .as_bytes(),
+    );
     hasher.update(sample_rate.to_string().as_bytes());
     hasher.update(encoding.as_bytes());
     hasher.update(normalize_volume.to_string().as_bytes());
@@ -430,6 +446,7 @@ async fn fetch_deepgram_tts(
     text: &str,
     voice_id: &str,
     speed: Decimal,
+    expressivity: Option<i8>,
     sample_rate: u32,
     encoding: &str,
     normalize_volume: bool,
@@ -437,10 +454,11 @@ async fn fetch_deepgram_tts(
     request_tags: &[String],
 ) -> Result<(Vec<u8>, Option<String>)> {
     let client = Client::new();
-    let url = build_deepgram_tts_url_with_tags(
+    let url = build_deepgram_tts_url_with_tags_and_expressivity(
         endpoint,
         voice_id,
         speed,
+        expressivity,
         sample_rate,
         encoding,
         normalize_volume,
@@ -532,6 +550,28 @@ fn build_deepgram_tts_url_with_tags(
     normalize_volume: bool,
     request_tags: &[String],
 ) -> Result<Url> {
+    build_deepgram_tts_url_with_tags_and_expressivity(
+        endpoint,
+        voice_id,
+        speed,
+        None,
+        sample_rate,
+        encoding,
+        normalize_volume,
+        request_tags,
+    )
+}
+
+fn build_deepgram_tts_url_with_tags_and_expressivity(
+    endpoint: &str,
+    voice_id: &str,
+    speed: Decimal,
+    expressivity: Option<i8>,
+    sample_rate: u32,
+    encoding: &str,
+    normalize_volume: bool,
+    request_tags: &[String],
+) -> Result<Url> {
     let mut url = Url::parse(endpoint)
         .with_context(|| format!("Invalid Deepgram TTS endpoint URL: {}", endpoint))?;
 
@@ -571,6 +611,17 @@ fn build_deepgram_tts_url_with_tags(
         }
         if !is_flux && normalize_volume {
             pairs.append_pair("normalize_volume", "true");
+        }
+        if is_flux {
+            if let Some(expressivity) = expressivity {
+                if !(-2..=2).contains(&expressivity) {
+                    return Err(anyhow!(
+                        "Flux expressivity must be between -2 and 2, got {}",
+                        expressivity
+                    ));
+                }
+                pairs.append_pair("expressivity", &expressivity.to_string());
+            }
         }
         for tag in request_tags {
             pairs.append_pair("tag", tag);
@@ -744,6 +795,43 @@ mod tests {
     }
 
     #[test]
+    fn flux_url_includes_explicit_expressivity() {
+        let url = build_deepgram_tts_url_with_tags_and_expressivity(
+            "https://api.deepgram.com/v2/speak",
+            "flux-haley-en",
+            Decimal::ONE,
+            Some(-2),
+            24000,
+            "linear16",
+            false,
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "https://api.deepgram.com/v2/speak?model=flux-haley-en&encoding=linear16&sample_rate=24000&expressivity=-2"
+        );
+    }
+
+    #[test]
+    fn flux_url_omits_unset_expressivity() {
+        let url = build_deepgram_tts_url_with_tags_and_expressivity(
+            "https://api.deepgram.com/v2/speak",
+            "flux-haley-en",
+            Decimal::ONE,
+            None,
+            24000,
+            "linear16",
+            false,
+            &[],
+        )
+        .unwrap();
+
+        assert!(!url.as_str().contains("expressivity"));
+    }
+
+    #[test]
     fn flux_url_preserves_custom_non_default_path() {
         let url = build_deepgram_tts_url(
             "https://selfhosted.example.com/custom/route",
@@ -796,6 +884,6 @@ mod tests {
 
     #[test]
     fn client_user_agent_identifies_application_and_version() {
-        assert_eq!(CLIENT_USER_AGENT, "tts-tui/0.9.8");
+        assert_eq!(CLIENT_USER_AGENT, "tts-tui/0.9.9");
     }
 }

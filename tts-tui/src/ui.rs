@@ -11,6 +11,7 @@ use ratatui::{
 
 use crate::app::{
     App, CurrentScreen, Gender, LogEntry, LogLevel, Panel, AUDIO_FORMATS, DEFAULT_FORMAT_INDEX,
+    FLUX_EXPRESSIVITY_OPTIONS,
 };
 use crate::theme::THEMES;
 
@@ -607,6 +608,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             "  t         - Select color theme",
             "  f         - Select audio encoding format",
             "  s         - Select TTS sample rate",
+            "  Ctrl+P    - Select Flux expressivity from the Command Palette",
             "  v         - Toggle volume normalization",
             "  w         - Toggle Deepgram WebSocket streaming",
             "  c         - Cycle streaming chunking (10 words / sentence / punctuation)",
@@ -652,7 +654,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
             "  Esc       - Cancel",
             "  Backspace - Delete character",
             "",
-            "Theme / Format / Rate Popups:",
+            "Theme / Format / Rate / Flux Expressivity Popups:",
             "  Up/Down   - Navigate options",
             "  Enter     - Apply and close",
             "  Esc / q   - Cancel",
@@ -819,6 +821,72 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
 
         let list = List::new(items);
         f.render_stateful_widget(list, chunks[0], &mut app.audio_format_menu_state);
+
+        let hint = Line::from(vec![
+            Span::styled(
+                " Enter",
+                Style::default()
+                    .fg(theme.success)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" apply  "),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme.error)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" cancel"),
+        ]);
+        f.render_widget(Paragraph::new(hint), chunks[1]);
+    }
+
+    // ── Flux Expressivity Select Popup ───────────────────────────────────────
+    if app.current_screen == CurrentScreen::FluxExpressivitySelect {
+        let popup_height = FLUX_EXPRESSIVITY_OPTIONS.len() as u16 + 4;
+        let area = centered_rect_fixed(52, popup_height, size);
+        f.render_widget(Clear, area);
+
+        let items: Vec<ListItem> = FLUX_EXPRESSIVITY_OPTIONS
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let is_selected = app.flux_expressivity_menu_state.selected() == Some(index);
+                let label = match value {
+                    None => "API default (omit parameter)".to_string(),
+                    Some(-2) => "-2 (calm)".to_string(),
+                    Some(-1) => "-1".to_string(),
+                    Some(0) => "0 (neutral)".to_string(),
+                    Some(1) => "+1".to_string(),
+                    Some(2) => "+2 (animated)".to_string(),
+                    Some(value) => value.to_string(),
+                };
+                let style = if is_selected {
+                    Style::default()
+                        .fg(theme.quaternary)
+                        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                } else {
+                    Style::default().fg(theme.secondary_light)
+                };
+                ListItem::new(label).style(style)
+            })
+            .collect();
+
+        let popup_block = Block::default()
+            .title(" Flux Expressivity ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme.quaternary));
+
+        let inner = popup_block.inner(area);
+        f.render_widget(popup_block, area);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(inner);
+
+        let list = List::new(items);
+        f.render_stateful_widget(list, chunks[0], &mut app.flux_expressivity_menu_state);
 
         let hint = Line::from(vec![
             Span::styled(

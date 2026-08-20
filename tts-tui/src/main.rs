@@ -213,6 +213,7 @@ fn kick_off_tts(
             app.add_log("WebSocket streaming ignores volume normalization.".to_string());
         }
         let speed = app.playback_speed;
+        let expressivity = app.flux_expressivity;
         let strategy = app.streaming_chunking_strategy;
         let protocol = if voice_id.starts_with("flux-") {
             tts_streaming::StreamingProtocol::Flux
@@ -239,6 +240,7 @@ fn kick_off_tts(
                     voice_id: &voice_id,
                     protocol,
                     speed,
+                    expressivity,
                     sample_rate,
                     chunking_strategy: strategy,
                     text: &text,
@@ -258,6 +260,7 @@ fn kick_off_tts(
     }
 
     let speed = app.playback_speed;
+    let expressivity = app.flux_expressivity;
     let sample_rate = app.sample_rate;
     let encoding = app.current_audio_format().encoding.to_string();
     let normalize_volume = app.config.audio.normalize_volume;
@@ -270,6 +273,7 @@ fn kick_off_tts(
             &text,
             &voice_id,
             speed,
+            expressivity,
             sample_rate,
             &encoding,
             normalize_volume,
@@ -535,6 +539,9 @@ async fn run_app(
                             CurrentScreen::ThemeSelect => app.cancel_theme_mode(),
                             CurrentScreen::SampleRateSelect => app.cancel_sample_rate_mode(),
                             CurrentScreen::AudioFormatSelect => app.cancel_audio_format_mode(),
+                            CurrentScreen::FluxExpressivitySelect => {
+                                app.cancel_flux_expressivity_mode()
+                            }
                             CurrentScreen::CommandPalette => app.exit_command_palette(),
                         }
                         continue;
@@ -813,6 +820,21 @@ async fn run_app(
                             }
                             KeyCode::Down => {
                                 app.scroll_audio_format_menu(1);
+                            }
+                            _ => {}
+                        },
+                        CurrentScreen::FluxExpressivitySelect => match key.code {
+                            KeyCode::Enter => {
+                                app.apply_flux_expressivity();
+                            }
+                            KeyCode::Char('q') => {
+                                app.cancel_flux_expressivity_mode();
+                            }
+                            KeyCode::Up => {
+                                app.scroll_flux_expressivity_menu(-1);
+                            }
+                            KeyCode::Down => {
+                                app.scroll_flux_expressivity_menu(1);
                             }
                             _ => {}
                         },

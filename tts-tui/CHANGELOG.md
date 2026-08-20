@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.9 - 2026-08-19
+
+### Features
+
+- Added a Command Palette selector for Flux TTS expressivity from `-2` (calm) through `2` (animated).
+- Explicit expressivity values are sent to Flux `/v2/speak` batch and WebSocket requests; the API-default option omits the parameter.
+
 ## 0.9.8 - 2026-08-12
 
 ### Changes
