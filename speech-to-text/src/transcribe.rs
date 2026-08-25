@@ -5,9 +5,13 @@ use urlencoding;
 
 #[derive(Args)]
 pub struct TranscribeArgs {
-    /// Path to the audio file
-    #[arg(short, long)]
-    pub file: PathBuf,
+    /// Path to the audio file (required unless --url is provided)
+    #[arg(short, long, required_unless_present = "url", conflicts_with = "url")]
+    pub file: Option<PathBuf>,
+
+    /// HTTPS cloud URL for Deepgram to fetch and transcribe
+    #[arg(long)]
+    pub url: Option<String>,
 
     /// Deepgram model to use (e.g., nova-3, nova-2, enhanced, base)
     #[arg(long)]
@@ -17,6 +21,14 @@ pub struct TranscribeArgs {
     #[arg(long)]
     pub language: Option<String>,
 
+    /// Restrict automatic language detection to these language codes (e.g., en es fr or ["en","es","fr"])
+    #[arg(long, value_delimiter = ',', num_args = 1..)]
+    pub detect_language: Option<Vec<String>>,
+
+    /// Convert spoken numbers to numerals
+    #[arg(long)]
+    pub numerals: Option<bool>,
+
     /// Enable punctuation
     #[arg(long)]
     pub punctuate: Option<bool>,
@@ -24,6 +36,10 @@ pub struct TranscribeArgs {
     /// Enable smart formatting
     #[arg(long)]
     pub smart_format: Option<bool>,
+
+    /// Filter profanity from transcripts
+    #[arg(long)]
+    pub profanity_filter: bool,
 
     /// Enable diarization (speaker detection)
     #[arg(long)]
@@ -220,11 +236,28 @@ pub async fn run_transcribe_mode(
     api_key: Option<String>,
     args: TranscribeArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Transcribing audio file: {}", args.file.display());
+    let (content_type, request_body) = if let Some(remote_url) = args.url.as_deref() {
+        let parsed_url = reqwest::Url::parse(remote_url)
+            .map_err(|error| format!("Invalid audio URL '{remote_url}': {error}"))?;
+        if parsed_url.scheme() != "https" {
+            return Err(format!("Audio URL must use HTTPS: {remote_url}").into());
+        }
 
-    // Read the audio file
-    let audio_data = std::fs::read(&args.file)?;
-    println!("Read {} bytes from file", audio_data.len());
+        println!("Transcribing remote audio URL: {remote_url}");
+        (
+            "application/json",
+            serde_json::to_vec(&serde_json::json!({ "url": remote_url }))?,
+        )
+    } else {
+        let file = args
+            .file
+            .as_ref()
+            .expect("clap requires --file when --url is absent");
+        println!("Transcribing audio file: {}", file.display());
+        let audio_data = std::fs::read(file)?;
+        println!("Read {} bytes from file", audio_data.len());
+        ("application/octet-stream", audio_data)
+    };
 
     // Build the API URL with query parameters
     let base_url = args
@@ -243,6 +276,27 @@ pub async fn run_transcribe_mode(
         params.push(format!("language={}", lang));
     }
 
+    // Deepgram expects one detect_language query parameter per allowed language.
+    if let Some(languages) = args.detect_language {
+        for language in languages {
+            let language = language
+                .trim()
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'');
+            if !language.is_empty() {
+                params.push(format!("detect_language={}", urlencoding::encode(language)));
+            }
+        }
+    }
+
+    // Add numerals parameter
+    if let Some(numerals) = args.numerals {
+        params.push(format!("numerals={numerals}"));
+    }
+
     // Add punctuate parameter
     if let Some(punct) = args.punctuate {
         params.push(format!("punctuate={}", punct));
@@ -251,6 +305,11 @@ pub async fn run_transcribe_mode(
     // Add smart_format parameter
     if let Some(smart) = args.smart_format {
         params.push(format!("smart_format={}", smart));
+    }
+
+    // Add profanity_filter parameter
+    if args.profanity_filter {
+        params.push("profanity_filter=true".to_string());
     }
 
     // diarize_model enables diarization; omit it when diarization is disabled.
@@ -327,8 +386,8 @@ pub async fn run_transcribe_mode(
     // Send POST request
     let mut request = client
         .post(&url)
-        .header("Content-Type", "application/octet-stream")
-        .body(audio_data);
+        .header("Content-Type", content_type)
+        .body(request_body);
 
     if let Some(api_key) = api_key {
         request = request.header("Authorization", format!("Token {}", api_key));

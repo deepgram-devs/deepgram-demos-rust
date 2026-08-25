@@ -1,6 +1,6 @@
 [package]
 name = "dg-stt"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 default-run = "dg-stt"
 
@@ -21,3 +21,4 @@ symphonia = { version = "0.5", features = ["mp3", "wav", "flac", "aac", "isomp4"
 urlencoding = "2.1"
 indicatif = "0.17"
 reqwest = { version = "0.13.1", features = ["json"] }
+crossterm = "0.29.0"

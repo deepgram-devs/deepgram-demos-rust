@@ -2,6 +2,7 @@ mod audio;
 mod cli;
 mod deepgram;
 mod models;
+mod monitor;
 mod protocol;
 mod stream;
 mod transcribe;
@@ -16,6 +17,7 @@ use tokio::task::JoinHandle;
 use crate::audio::{AudioCapture, AudioFileReader, connection_prefix, start_audio_fanout};
 use crate::cli::{Cli, Commands};
 use crate::deepgram::run_deepgram_client;
+use crate::monitor::{ConnectionMonitor, MonitorCommand, MonitorEvent};
 use crate::protocol::{DeepgramClientConfig, StreamResult};
 use crate::stream::StreamSource;
 
@@ -152,11 +154,25 @@ async fn wait_for_file_tasks(
     .await;
 }
 
+async fn send_shutdown(shutdown_senders: &[mpsc::Sender<()>], connection_id: usize) {
+    if let Some(shutdown_tx) = shutdown_senders.get(connection_id.saturating_sub(1)) {
+        let _ = shutdown_tx.send(()).await;
+    }
+}
+
+async fn send_shutdown_all(shutdown_senders: &[mpsc::Sender<()>]) {
+    for shutdown_tx in shutdown_senders {
+        let _ = shutdown_tx.send(()).await;
+    }
+}
+
 async fn run_microphone_mode(
     api_key: Option<String>,
     connections: usize,
     callback: Option<String>,
     silent: bool,
+    output: String,
+    monitor: bool,
     endpoint: Option<String>,
     encoding: Option<String>,
     sample_rate_override: Option<u32>,
@@ -168,6 +184,7 @@ async fn run_microphone_mode(
     vad_events: bool,
     punctuate: bool,
     smart_format: bool,
+    profanity_filter: bool,
     sentiment: bool,
     intents: bool,
     topics: bool,
@@ -202,10 +219,19 @@ async fn run_microphone_mode(
 
     println!("Listening for audio... Press Ctrl+C to stop.");
 
+    let (monitor_event_tx, monitor_event_rx) = mpsc::unbounded_channel();
+    let (monitor_command_tx, mut monitor_command_rx) = mpsc::unbounded_channel();
+    let monitor_task = monitor.then(|| {
+        tokio::spawn(ConnectionMonitor::new(connections, monitor_command_tx).run(monitor_event_rx))
+    });
+    let monitor_tx = monitor.then_some(monitor_event_tx.clone());
+
     let client_config = DeepgramClientConfig {
         api_key,
         callback,
-        silent,
+        silent: silent || monitor,
+        output,
+        monitor_tx,
         endpoint,
         encoding,
         sample_rate_override,
@@ -217,6 +243,7 @@ async fn run_microphone_mode(
         vad_events,
         punctuate,
         smart_format,
+        profanity_filter,
         sentiment,
         intents,
         topics,
@@ -244,6 +271,9 @@ async fn run_microphone_mode(
             None,
             shutdown_rx,
         )));
+        let _ = monitor_event_tx.send(MonitorEvent::Registered {
+            connection_id: idx + 1,
+        });
     }
 
     let mut deepgram_tasks_future = Box::pin(wait_for_deepgram_tasks(
@@ -252,21 +282,50 @@ async fn run_microphone_mode(
         "Deepgram client finished successfully",
     ));
 
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            println!("\nReceived Ctrl+C, initiating graceful shutdown...");
-            for shutdown_tx in shutdown_senders {
-                let _ = shutdown_tx.send(()).await;
+    if monitor {
+        loop {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    println!("\nReceived Ctrl+C, initiating graceful shutdown...");
+                    send_shutdown_all(&shutdown_senders).await;
+                    deepgram_tasks_future.await;
+                    break;
+                }
+                command = monitor_command_rx.recv() => {
+                    match command {
+                        Some(MonitorCommand::TerminateConnection { connection_id }) => send_shutdown(&shutdown_senders, connection_id).await,
+                        Some(MonitorCommand::StopAll) => {
+                            send_shutdown_all(&shutdown_senders).await;
+                            deepgram_tasks_future.await;
+                            break;
+                        }
+                        None => {
+                            deepgram_tasks_future.await;
+                            break;
+                        }
+                    }
+                }
+                _ = &mut deepgram_tasks_future => break,
             }
-
-            deepgram_tasks_future.await;
         }
-        _ = &mut deepgram_tasks_future => {}
+    } else {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("\nReceived Ctrl+C, initiating graceful shutdown...");
+                send_shutdown_all(&shutdown_senders).await;
+                deepgram_tasks_future.await;
+            }
+            _ = &mut deepgram_tasks_future => {}
+        }
     }
 
     drop(stream_handle);
     fanout_task.abort();
     let _ = fanout_task.await;
+    drop(monitor_event_tx);
+    if let Some(task) = monitor_task {
+        let _ = task.await;
+    }
 
     Ok(())
 }
@@ -278,6 +337,8 @@ async fn run_file_mode(
     fast: bool,
     callback: Option<String>,
     silent: bool,
+    output: String,
+    monitor: bool,
     endpoint: Option<String>,
     encoding: Option<String>,
     sample_rate_override: Option<u32>,
@@ -289,6 +350,7 @@ async fn run_file_mode(
     vad_events: bool,
     punctuate: bool,
     smart_format: bool,
+    profanity_filter: bool,
     sentiment: bool,
     intents: bool,
     topics: bool,
@@ -338,10 +400,19 @@ async fn run_file_mode(
         }
     };
 
+    let (monitor_event_tx, monitor_event_rx) = mpsc::unbounded_channel();
+    let (monitor_command_tx, mut monitor_command_rx) = mpsc::unbounded_channel();
+    let monitor_task = monitor.then(|| {
+        tokio::spawn(ConnectionMonitor::new(connections, monitor_command_tx).run(monitor_event_rx))
+    });
+    let monitor_tx = monitor.then_some(monitor_event_tx.clone());
+
     let client_config = DeepgramClientConfig {
         api_key,
         callback,
-        silent,
+        silent: silent || monitor,
+        output,
+        monitor_tx,
         endpoint,
         encoding,
         sample_rate_override,
@@ -353,6 +424,7 @@ async fn run_file_mode(
         vad_events,
         punctuate,
         smart_format,
+        profanity_filter,
         sentiment,
         intents,
         topics,
@@ -383,6 +455,9 @@ async fn run_file_mode(
             Some(ready_tx),
             shutdown_rx,
         )));
+        let _ = monitor_event_tx.send(MonitorEvent::Registered {
+            connection_id: idx + 1,
+        });
     }
 
     tokio::spawn(async move {
@@ -400,18 +475,51 @@ async fn run_file_mode(
         connections,
     ));
 
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            println!("\nReceived Ctrl+C, initiating graceful shutdown...");
-            for shutdown_tx in shutdown_senders {
-                let _ = shutdown_tx.send(()).await;
+    if monitor {
+        loop {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    println!("\nReceived Ctrl+C, initiating graceful shutdown...");
+                    send_shutdown_all(&shutdown_senders).await;
+                    tasks_future.await;
+                    break;
+                }
+                command = monitor_command_rx.recv() => {
+                    match command {
+                        Some(MonitorCommand::TerminateConnection { connection_id }) => send_shutdown(&shutdown_senders, connection_id).await,
+                        Some(MonitorCommand::StopAll) => {
+                            send_shutdown_all(&shutdown_senders).await;
+                            tasks_future.await;
+                            break;
+                        }
+                        None => {
+                            tasks_future.await;
+                            break;
+                        }
+                    }
+                }
+                _ = &mut tasks_future => {
+                    println!("\nTranscription completed successfully");
+                    break;
+                }
             }
+        }
+    } else {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("\nReceived Ctrl+C, initiating graceful shutdown...");
+                send_shutdown_all(&shutdown_senders).await;
+                tasks_future.await;
+            }
+            _ = &mut tasks_future => {
+                println!("\nTranscription completed successfully");
+            }
+        }
+    }
 
-            tasks_future.await;
-        }
-        _ = &mut tasks_future => {
-            println!("\nTranscription completed successfully");
-        }
+    drop(monitor_event_tx);
+    if let Some(task) = monitor_task {
+        let _ = task.await;
     }
 
     Ok(())
@@ -439,6 +547,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             StreamSource::Microphone {
                 callback,
                 silent,
+                output,
+                monitor,
                 endpoint,
                 connections,
                 encoding,
@@ -451,6 +561,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 vad_events,
                 punctuate,
                 smart_format,
+                profanity_filter,
                 sentiment,
                 intents,
                 topics,
@@ -469,6 +580,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     connections,
                     callback,
                     silent,
+                    output,
+                    monitor,
                     endpoint,
                     encoding,
                     sample_rate,
@@ -480,6 +593,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     vad_events,
                     punctuate,
                     smart_format,
+                    profanity_filter,
                     sentiment,
                     intents,
                     topics,
@@ -499,6 +613,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 fast,
                 callback,
                 silent,
+                output,
+                monitor,
                 endpoint,
                 connections,
                 encoding,
@@ -511,6 +627,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 vad_events,
                 punctuate,
                 smart_format,
+                profanity_filter,
                 sentiment,
                 intents,
                 topics,
@@ -531,6 +648,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     fast,
                     callback,
                     silent,
+                    output,
+                    monitor,
                     endpoint,
                     encoding,
                     sample_rate,
@@ -542,6 +661,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     vad_events,
                     punctuate,
                     smart_format,
+                    profanity_filter,
                     sentiment,
                     intents,
                     topics,

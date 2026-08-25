@@ -13,6 +13,14 @@ pub enum StreamSource {
         #[arg(long)]
         silent: bool,
 
+        /// Output each Deepgram response as raw JSON
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        output: String,
+
+        /// Show an interactive connection monitor instead of transcript output
+        #[arg(long, conflicts_with = "output")]
+        monitor: bool,
+
         /// Override the Deepgram API base URL
         #[arg(long)]
         endpoint: Option<String>,
@@ -60,6 +68,10 @@ pub enum StreamSource {
         /// Enable smart formatting
         #[arg(long)]
         smart_format: bool,
+
+        /// Filter profanity from transcripts
+        #[arg(long)]
+        profanity_filter: bool,
 
         /// Enable sentiment analysis
         #[arg(long)]
@@ -124,6 +136,14 @@ pub enum StreamSource {
         #[arg(long)]
         silent: bool,
 
+        /// Output each Deepgram response as raw JSON
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        output: String,
+
+        /// Show an interactive connection monitor instead of transcript output
+        #[arg(long, conflicts_with = "output")]
+        monitor: bool,
+
         /// Override the Deepgram API base URL
         #[arg(long)]
         endpoint: Option<String>,
@@ -171,6 +191,10 @@ pub enum StreamSource {
         /// Enable smart formatting
         #[arg(long)]
         smart_format: bool,
+
+        /// Filter profanity from transcripts
+        #[arg(long)]
+        profanity_filter: bool,
 
         /// Enable sentiment analysis
         #[arg(long)]

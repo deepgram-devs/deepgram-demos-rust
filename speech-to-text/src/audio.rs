@@ -156,6 +156,30 @@ pub(crate) struct AudioFileReader {
     path: PathBuf,
 }
 
+/// Return a probe hint based on the file contents when the extension is known
+/// to be unreliable. In particular, AAC/ADTS files are sometimes delivered
+/// with a `.wav` suffix, which causes Symphonia to select the WAV demuxer.
+fn probe_extension(path: &Path) -> Option<String> {
+    let extension = path.extension().and_then(|ext| ext.to_str())?;
+
+    if !extension.eq_ignore_ascii_case("wav") {
+        return Some(extension.to_owned());
+    }
+
+    let header = std::fs::read(path).ok()?;
+    if header.starts_with(b"RIFF") && header.get(8..12) == Some(b"WAVE") {
+        return Some("wav".to_owned());
+    }
+
+    // ADTS sync words: 0xfff followed by MPEG-4/2 layer and protection bits.
+    if header.len() >= 2 && header[0] == 0xff && (header[1] & 0xf6) == 0xf0 {
+        return Some("aac".to_owned());
+    }
+
+    // Do not force a WAV demuxer for a file that is not a RIFF/WAVE file.
+    None
+}
+
 /// Return the number of bytes in a WAV data chunk.
 ///
 /// Some recording tools leave the data chunk length as zero while appending
@@ -294,8 +318,8 @@ impl AudioFileReader {
         let mss = MediaSourceStream::new(source, Default::default());
 
         let mut hint = Hint::new();
-        if let Some(ext) = self.path.extension() {
-            hint.with_extension(ext.to_str().unwrap_or(""));
+        if let Some(extension) = probe_extension(&self.path) {
+            hint.with_extension(&extension);
         }
 
         let meta_opts: MetadataOptions = Default::default();
@@ -315,7 +339,17 @@ impl AudioFileReader {
         let codec_params = &track.codec_params;
 
         let sample_rate = codec_params.sample_rate.ok_or("Sample rate not found")?;
-        let channels = codec_params.channels.ok_or("Channels not found")?.count() as u16;
+        let channels = codec_params
+            .channels
+            .map(|channels| channels.count())
+            .or_else(|| {
+                codec_params
+                    .channel_layout
+                    .map(|layout| layout.into_channels().count())
+            })
+            .ok_or_else(|| {
+                "Audio channel metadata not found (the file may be mislabeled; use the actual AAC/WAV extension)"
+            })? as u16;
         let total_frames = codec_params
             .n_frames
             .filter(|frames| *frames > 0)
@@ -481,5 +515,44 @@ impl AudioFileReader {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::probe_extension;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path(suffix: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("dg-stt-probe-{nonce}-{counter}{suffix}"))
+    }
+
+    #[test]
+    fn recognizes_adts_aac_with_wav_extension() {
+        let path = temp_path(".wav");
+        fs::write(&path, [0xff, 0xf1, 0x50, 0x80]).unwrap();
+
+        assert_eq!(probe_extension(&path).as_deref(), Some("aac"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn keeps_wav_hint_for_riff_wave_files() {
+        let path = temp_path(".wav");
+        let mut header = b"RIFF".to_vec();
+        header.extend_from_slice(&[0; 4]);
+        header.extend_from_slice(b"WAVE");
+        fs::write(&path, header).unwrap();
+
+        assert_eq!(probe_extension(&path).as_deref(), Some("wav"));
+        fs::remove_file(path).unwrap();
     }
 }

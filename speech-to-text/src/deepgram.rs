@@ -1,7 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
@@ -81,6 +81,10 @@ pub(crate) async fn run_deepgram_client(
 
     if config.smart_format {
         params.push("smart_format=true".to_string());
+    }
+
+    if config.profanity_filter {
+        params.push("profanity_filter=true".to_string());
     }
 
     if config.sentiment {
@@ -179,8 +183,16 @@ pub(crate) async fn run_deepgram_client(
     }
 
     let request = request_builder.body(())?;
+    let connect_started = Instant::now();
 
+    let monitor_tx_for_connect = config.monitor_tx.clone();
     let (ws_stream, response) = connect_async(request).await.map_err(|e| {
+        if let Some(tx) = &monitor_tx_for_connect {
+            let _ = tx.send(crate::monitor::MonitorEvent::Status {
+                connection_id,
+                status: crate::monitor::ConnectionStatus::Error(e.to_string()),
+            });
+        }
         if let tokio_tungstenite::tungstenite::Error::Http(ref resp) = e {
             if let Some(request_id) = resp.headers().get("dg-request-id") {
                 eprintln!(
@@ -198,6 +210,23 @@ pub(crate) async fn run_deepgram_client(
         e
     })?;
     println!("{prefix}Connected to Deepgram!");
+    if let Some(tx) = &config.monitor_tx {
+        let request_id = response
+            .headers()
+            .get("dg-request-id")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("unknown")
+            .to_string();
+        let _ = tx.send(crate::monitor::MonitorEvent::Connected {
+            connection_id,
+            request_id,
+            established_after: connect_started.elapsed(),
+        });
+        let _ = tx.send(crate::monitor::MonitorEvent::Status {
+            connection_id,
+            status: crate::monitor::ConnectionStatus::Connected,
+        });
+    }
     if let Some(request_id) = response.headers().get("dg-request-id") {
         println!(
             "{prefix}Request ID: {}",
@@ -245,7 +274,9 @@ pub(crate) async fn run_deepgram_client(
 
     let response_prefix = prefix.clone();
     let silent = config.silent;
+    let output_json = config.output == "json";
     let diarize = config.diarize;
+    let monitor_tx = config.monitor_tx.clone();
     let response_handler = tokio::spawn(async move {
         let mut last_message_time = tokio::time::Instant::now();
         let timeout_duration = Duration::from_secs(10);
@@ -256,6 +287,12 @@ pub(crate) async fn run_deepgram_client(
                     match msg {
                         Some(Ok(Message::Text(text))) => {
                             last_message_time = tokio::time::Instant::now();
+                            if output_json {
+                                if !silent {
+                                    println!("{}", text);
+                                }
+                                continue;
+                            }
                             match serde_json::from_str::<DeepgramResponse>(&text) {
                                 Ok(response) => {
                                     if response.message_type == "Metadata" {
@@ -267,6 +304,36 @@ pub(crate) async fn run_deepgram_client(
                                             serde_json::from_value::<Channel>(channel).ok()
                                         });
                                         if let Some(channel) = channel {
+                                            if let Some(tx) = &monitor_tx {
+                                                let words = channel
+                                                    .alternatives
+                                                    .first()
+                                                    .map(|alternative| {
+                                                        if alternative.words.is_empty() {
+                                                            alternative
+                                                                .transcript
+                                                                .split_whitespace()
+                                                                .map(str::to_string)
+                                                                .collect()
+                                                        } else {
+                                                            alternative
+                                                                .words
+                                                                .iter()
+                                                                .map(|word| word.word.clone())
+                                                                .collect()
+                                                        }
+                                                    })
+                                                    .unwrap_or_default();
+                                                let _ = tx.send(crate::monitor::MonitorEvent::Transcript {
+                                                    connection_id,
+                                                    words,
+                                                    is_final: response.is_final,
+                                                });
+                                                let _ = tx.send(crate::monitor::MonitorEvent::Status {
+                                                    connection_id,
+                                                    status: crate::monitor::ConnectionStatus::Streaming,
+                                                });
+                                            }
                                             for alternative in channel.alternatives {
                                                 if !alternative.transcript.trim().is_empty() && !silent {
                                                     if diarize && !alternative.words.is_empty() {
@@ -311,12 +378,24 @@ pub(crate) async fn run_deepgram_client(
                             }
                         }
                         Some(Ok(Message::Close(_))) => {
+                            if let Some(tx) = &monitor_tx {
+                                let _ = tx.send(crate::monitor::MonitorEvent::Status {
+                                    connection_id,
+                                    status: crate::monitor::ConnectionStatus::Closed,
+                                });
+                            }
                             if !silent {
                                 println!("{}WebSocket connection closed by server", response_prefix);
                             }
                             break;
                         }
                         Some(Err(e)) => {
+                            if let Some(tx) = &monitor_tx {
+                                let _ = tx.send(crate::monitor::MonitorEvent::Status {
+                                    connection_id,
+                                    status: crate::monitor::ConnectionStatus::Error(e.to_string()),
+                                });
+                            }
                             eprintln!("{}WebSocket error: {}", response_prefix, e);
                             break;
                         }

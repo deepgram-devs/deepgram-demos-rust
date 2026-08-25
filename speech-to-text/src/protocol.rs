@@ -1,9 +1,14 @@
 use serde::Deserialize;
+use tokio::sync::mpsc;
+
+use crate::monitor::MonitorEvent;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct DeepgramResponse {
     #[serde(rename = "type")]
     pub(crate) message_type: String,
+    #[serde(default)]
+    pub(crate) is_final: bool,
     // Deepgram uses different channel shapes for Results and control events:
     // Results uses an object, while SpeechStarted/UtteranceEnd may use a scalar
     // or an array. Keep this raw until the message type is known.
@@ -38,6 +43,8 @@ pub(crate) struct DeepgramClientConfig {
     pub(crate) api_key: Option<String>,
     pub(crate) callback: Option<String>,
     pub(crate) silent: bool,
+    pub(crate) output: String,
+    pub(crate) monitor_tx: Option<mpsc::UnboundedSender<MonitorEvent>>,
     pub(crate) endpoint: Option<String>,
     pub(crate) encoding: Option<String>,
     pub(crate) sample_rate_override: Option<u32>,
@@ -49,6 +56,7 @@ pub(crate) struct DeepgramClientConfig {
     pub(crate) vad_events: bool,
     pub(crate) punctuate: bool,
     pub(crate) smart_format: bool,
+    pub(crate) profanity_filter: bool,
     pub(crate) sentiment: bool,
     pub(crate) intents: bool,
     pub(crate) topics: bool,

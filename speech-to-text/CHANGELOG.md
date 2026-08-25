@@ -1,10 +1,22 @@
 # Changelog for Deepgram Rust Speech-to-Text (STT) CLI
 
+## 0.5.0 - 2026-08-25
+
+* Added `--numerals` to transcribe mode.
+* Added `--detect-language` to transcribe mode, emitting Deepgram's repeated multi-valued `detect_language` query parameters.
+* Added `--output json` to streaming mode for printing raw Deepgram response messages.
+
+## 2026-08-10
+
+* Added `--url` to transcribe mode for sending a remote HTTPS audio URL to Deepgram as a JSON request.
+* File streaming now detects AAC/ADTS content when an AAC file has a `.wav` extension.
+
 ## 2026-08-07
 
 * Streaming mode now prints the metadata message returned by Deepgram, including request ID, duration, and channel count.
 * Added `--version` to streaming mode for selecting a Deepgram model version.
 * Added `list-models` to display STT model names, modes, versions, UUIDs, and languages.
+* Added `--profanity-filter` to streaming and pre-recorded transcription modes.
 
 ## 0.4.0 - 2026-08-03
 

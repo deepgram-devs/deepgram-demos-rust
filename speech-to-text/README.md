@@ -17,6 +17,7 @@ A real-time speech-to-text CLI using Rust that connects to the Deepgram API via 
 - Configurable endpointing and utterance-end detection
 - WebSocket connection to Deepgram API for live transcription
 - Parallel streaming connections with the same input audio using `--connections`
+- Interactive connection monitor for streaming with `--monitor`
 - Callback support for webhook integration
 - Displays metadata and transcription results in real-time; parse errors written to `dg-stt-debug.log`
 - Deepgram request ID printed on connect (and on connection errors)
@@ -146,6 +147,13 @@ Transcribe a pre-recorded audio file using the Deepgram HTTP API:
 cargo run -- transcribe --file path/to/audio.mp3
 ```
 
+Ask Deepgram to fetch and transcribe audio from an HTTPS cloud URL. The audio is
+sent to Deepgram as a JSON payload and is not downloaded locally:
+
+```bash
+cargo run -- transcribe --url https://dpgr.am/spacewalk.wav
+```
+
 ### Stream Mode Options
 
 | Flag | Description |
@@ -156,6 +164,7 @@ cargo run -- transcribe --file path/to/audio.mp3
 | `--vad-events` | Enable voice activity detection events |
 | `--punctuate` | Add punctuation to transcripts |
 | `--smart-format` | Apply smart formatting (numbers, dates, etc.) |
+| `--profanity-filter` | Filter profanity from transcripts (presence-only flag) |
 | `--sentiment` | Enable sentiment analysis |
 | `--intents` | Enable intent recognition |
 | `--topics` | Enable topic detection |
@@ -164,6 +173,9 @@ cargo run -- transcribe --file path/to/audio.mp3
 | `--redact <TYPES>` | Redact sensitive data (e.g., `pii`, `pci`) |
 | `--multichannel` | Enable multichannel audio processing |
 | `--endpoint <URL>` | Override the Deepgram-compatible endpoint; if this points to a self-hosted endpoint, `DEEPGRAM_API_KEY` is optional |
+| `--url <URL>` | HTTPS cloud URL for Deepgram to fetch and transcribe as a JSON request (transcribe mode only) |
+| `--numerals <true\|false>` | Convert spoken numbers to numerical format (transcribe mode only) |
+| `--detect-language <LANG>...` | Restrict automatic language detection; accepts `en es fr` or `["en","es","fr"]` (transcribe mode only) |
 | `--connections <N>` | Open N parallel Deepgram streaming WebSocket connections fed by the same microphone or file audio |
 | `--keyterm <TERMS>` | Comma-separated keyterms for nova-3+ (e.g., `"Deepgram,nova-3"`) |
 | `--keywords <TERMS>` | Comma-separated keywords for nova-2 and older, with optional intensifier (e.g., `"Deepgram:2,API"`) |
@@ -172,6 +184,8 @@ cargo run -- transcribe --file path/to/audio.mp3
 | `--fast` | Stream file as fast as possible instead of real-time (file mode only) |
 | `--callback <URL>` | Send results to a webhook URL |
 | `--silent` | Suppress console output (useful with `--callback`) |
+| `--output <FORMAT>` | Streaming output format: `text` (default) or `json` for each raw Deepgram response message |
+| `--monitor` | Show an interactive dashboard for streaming connections; conflicts with `--output json` |
 
 ### Examples
 
@@ -269,11 +283,20 @@ cargo run -- transcribe --file audio.mp3 --model nova-2 --keywords "Deepgram:2,A
 # With specific model and language
 cargo run -- transcribe --file audio.mp3 --model nova-3 --language en-US
 
+# Format numbers and restrict automatic language detection
+cargo run -- transcribe --file audio.mp3 --numerals true --detect-language '["en","es","fr"]'
+
 # With redaction
 cargo run -- transcribe --file sensitive.wav --redact pii,pci
 
-# Output formats: text (default), json, or verbose-json
+# Output formats: text (default), json, or verbose-json (transcribe mode)
 cargo run -- transcribe --file audio.mp3 --output json
+
+# Stream raw Deepgram JSON response messages
+cargo run -- stream file --file audio.mp3 --fast --output json
+
+# Monitor three parallel streaming connections
+cargo run -- stream file --file audio.mp3 --connections 3 --monitor
 
 # Transcribe against a self-hosted HTTP endpoint without DEEPGRAM_API_KEY
 cargo run -- transcribe --file audio.mp3 --endpoint http://localhost:8080
