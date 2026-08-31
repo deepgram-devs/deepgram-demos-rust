@@ -3,6 +3,24 @@
 ## Unreleased
 
 ### Added
+- Removed the invalid `aura-2-perseo-it` entry from the TUI voice selector.
+- Displayed the verbose JSON log path as the first message after establishing a new connection.
+- Rejected unrecognized Deepgram TTS model families instead of implicitly treating them as Aura V1.
+- Made the JSON log location warning-colored and clickable to copy its full path to the clipboard.
+- Updated the TUI header to show a connection-error state when the WebSocket worker terminates with an error.
+- Ensured TUI Settings explicitly configure the Deepgram speak provider and documented Aura V1/Flux V2 version selection.
+- Persisted the verbose JSON logging preference in the Voice Agent YAML configuration.
+- Corrected TUI `UpdateListen` messages to omit unsupported fields for Flux and follow the Deepgram V1/V2 schema.
+- Persisted the TUI message timestamp-display preference in the Voice Agent YAML configuration.
+- Simplified the TUI status bar to show the active listen model and TTS voice concisely.
+- Added a command-palette action to copy the current Deepgram request ID to the clipboard.
+- New Voice Agent connections now clear the TUI conversation view and start with fresh message history.
+- Suppressed the audio output stream shutdown diagnostic in TUI sessions.
+- Added YAML persistence for historical prompts, TTS preferences, and listen transcription settings, plus historical-prompt selection and word-wise prompt navigation.
+- Added mouse selection for user and agent messages and a command-palette action to copy the complete conversation to the clipboard.
+- Kept HTTP-to-WebSocket upgrade diagnostics out of the TUI while retaining them as optional CLI diagnostics.
+- Added TUI verbose JSON logging to a request-ID-named file in the system temporary directory.
+- Added a `tui` subcommand with a searchable command palette, live conversation transcript, prompt editor, TTS/STT selectors, and Voice Agent control-message actions.
 - Added `--audio-encoding` support for `linear16`, `linear32`, `mulaw`, and `alaw` microphone audio.
 - Added `--audio-sample-rate` to configure microphone capture and Voice Agent input audio sample rate.
 - When `--audio-sample-rate` is omitted, the microphone's operating system default input rate is used.

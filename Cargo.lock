@@ -9520,17 +9520,22 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "voice-agent"
 version = "0.1.3"
 dependencies = [
+ "arboard",
  "bytes",
  "clap",
  "cpal 0.16.0",
+ "crossterm 0.29.0",
+ "directories",
  "dotenv",
  "env_logger",
  "futures-util",
  "log",
+ "ratatui 0.30.0",
  "reqwest 0.12.28",
  "rodio 0.21.1",
  "serde",
  "serde_json",
+ "serde_yaml",
  "tokio",
  "tokio-tungstenite 0.28.0",
  "url",

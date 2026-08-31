@@ -15,6 +15,7 @@ This is a Rust application that demonstrates bidirectional conversation using De
 - **Smart Microphone Control**: Automatically disables microphone during agent speech and re-enables 600ms after silence (prevents feedback)
 - **Silent Packet Injection**: Sends silent audio frames while muted to keep the WebSocket connection alive
 - **Sample Function Calling**: Optionally register sample client-side tools (`--enable-sample-functions`) to exercise the agent's function-calling flow
+- **Interactive TUI**: Run the `tui` subcommand for a searchable command palette, live conversation text, prompt editing, TTS/STT selection, and Voice Agent control messages
 
 ## Function Calling
 
@@ -62,6 +63,26 @@ cargo build
 ```
 
 ## Usage
+
+### Interactive TUI
+
+```bash
+cargo run -- tui
+```
+
+Press `Ctrl+P` to search all TUI commands. Connect from the palette, then use the prompt editor, TTS/STT selectors, control-message commands, **Toggle message timestamps**, or **Toggle verbose JSON logging**. Timestamped user and agent messages retain their original times in history, so toggling the option updates the complete conversation. When verbose JSON logging is enabled, the TUI extracts `request_id` from Deepgram’s `Welcome` message and writes every client and server JSON message for that session to `<temporary-directory>/<request_id>.txt`; if enabled mid-conversation, all retained earlier JSON messages are written before new messages. The path is shown in the event pane. The TUI displays `ConversationText` events as `You` and `Agent` messages while audio continues through the microphone and speakers.
+
+The JSON log location is displayed in the warning color; click it to copy its fully qualified path to the clipboard.
+
+Use **Select historical system prompt** to reuse a saved prompt. TUI preferences and up to 50 historical prompts are stored in the platform user configuration directory (on Unix-like systems: `$HOME/.config/deepgram/voice-agent.yml`), with unrelated YAML keys preserved. In the prompt editor, `Ctrl+Left` and `Ctrl+Right` move backward and forward one word at a time.
+
+Click a user or agent message to select it. Use **Copy conversation** from the command palette to copy the full conversation to the system clipboard. WebSocket upgrade diagnostics remain hidden from the TUI.
+
+Use **Copy request ID** to copy only the current Deepgram request ID from the connection’s `Welcome` message.
+
+User messages, agent messages, and client-side injection/control messages use different colors in the event pane.
+
+The TUI exposes the documented Voice Agent client controls: `UpdateListen`, `UpdateSpeak`, `UpdatePrompt`, `InjectAgentMessage`, `InjectUserMessage`, `ForceEndTurn`, and `AgentKeepAlive`. Actions that accept fields open an input dialog: agent injection asks for the message and `default`/`queue`/`interrupt` behavior, user injection asks for the message, think updates ask for the model, and listen/speak updates use selectors. Force-ending a turn requires Flux STT (V2). See [Deepgram Inputs: Client Messages](https://developers.deepgram.com/docs/voice-agent-inputs). The TTS chooser includes the complete current [Aura-2 catalog](https://developers.deepgram.com/docs/tts-models) and [Flux TTS catalog](https://developers.deepgram.com/docs/flux-tts/voices).
 
 1. **Run the application**:
 

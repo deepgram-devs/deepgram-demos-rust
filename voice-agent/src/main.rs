@@ -20,6 +20,9 @@ use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
 
+mod config;
+mod tui;
+
 const DEFAULT_SYSTEM_PROMPT: &str =
     "Keep your responses concise and focused. Answer in as few words as possible while remaining helpful. Do not use Markdown formatting in your responses.";
 
@@ -37,6 +40,11 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Run the interactive terminal UI
+    Tui {
+        #[command(flatten)]
+        launch: LaunchOptions,
+    },
     /// Manage reusable Deepgram agent configurations
     Config {
         #[command(subcommand)]
@@ -180,7 +188,7 @@ struct ConfigVariableDeleteArgs {
     yes: bool,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 struct LaunchOptions {
     /// Custom Deepgram endpoint URL to connect to
     #[arg(long, default_value = "wss://agent.deepgram.com")]
@@ -542,6 +550,9 @@ struct ThinkCredentials {
 struct SpeakProviderConfig {
     #[serde(rename = "type")]
     provider_type: String,
+    /// Deepgram TTS API version: v1 for Aura-2 and v2 for Flux TTS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
     /// Deepgram model name (used when provider_type is "deepgram")
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
@@ -752,9 +763,13 @@ impl AudioPlayer {
     fn new(
         mic_enabled: Arc<AtomicBool>,
         mute_on_playback: bool,
+        suppress_drop_message: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let stream_handle = rodio::OutputStreamBuilder::open_default_stream()
+        let mut stream_handle = rodio::OutputStreamBuilder::open_default_stream()
             .map_err(|e| format!("Failed to create audio output stream: {}", e))?;
+        if suppress_drop_message {
+            stream_handle.log_on_drop(false);
+        }
         let sink = Arc::new(Sink::connect_new(&stream_handle.mixer()));
 
         if mute_on_playback {
@@ -885,13 +900,14 @@ async fn connect_to_voice_agent(
     _sample_rate: u32,
     _channels: u16,
     verbose: bool,
+    console_diagnostics: bool,
 ) -> Result<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     Box<dyn std::error::Error>,
 > {
     let url = Url::parse(format!("{0}/v1/agent/converse", endpoint).as_str())?;
 
-    if verbose {
+    if verbose && console_diagnostics {
         info!("Voice Agent WebSocket URL: {}", url);
         info!(
             "Voice Agent WebSocket request headers: Authorization: Token <redacted>, Host: {}, Upgrade: websocket, Connection: Upgrade, Sec-WebSocket-Key: <redacted>, Sec-WebSocket-Version: 13",
@@ -911,23 +927,31 @@ async fn connect_to_voice_agent(
         .header("Sec-WebSocket-Version", "13")
         .body(())?;
 
-    debug!("Connecting to Deepgram Voice Agent WebSocket...");
+    if console_diagnostics {
+        debug!("Connecting to Deepgram Voice Agent WebSocket...");
+    }
     let upgrade_started_at = Instant::now();
     let (ws_stream, _response) = match connect_async(request).await {
         Ok(result) => result,
         Err(error) => {
-            info!(
-                "Voice Agent HTTP-to-WebSocket upgrade failed after {} ms",
-                upgrade_started_at.elapsed().as_millis()
-            );
+            if console_diagnostics {
+                debug!(
+                    "Voice Agent HTTP-to-WebSocket upgrade failed after {} ms",
+                    upgrade_started_at.elapsed().as_millis()
+                );
+            }
             return Err(error.into());
         }
     };
-    info!(
-        "Voice Agent HTTP-to-WebSocket upgrade completed in {} ms",
-        upgrade_started_at.elapsed().as_millis()
-    );
-    debug!("Connected to Deepgram Voice Agent successfully");
+    if console_diagnostics {
+        debug!(
+            "Voice Agent HTTP-to-WebSocket upgrade completed in {} ms",
+            upgrade_started_at.elapsed().as_millis()
+        );
+    }
+    if console_diagnostics {
+        debug!("Connected to Deepgram Voice Agent successfully");
+    }
 
     Ok(ws_stream)
 }
@@ -968,6 +992,18 @@ fn cleaned_values(values: &[String]) -> Vec<String> {
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string())
         .collect()
+}
+
+/// Deepgram Voice Agent selects Flux through V2 and Aura through V1.
+/// See https://developers.deepgram.com/docs/voice-agent-tts-models.
+fn deepgram_speak_version(model: &str) -> Option<&'static str> {
+    if model.starts_with("flux-") {
+        Some("v2")
+    } else if model.starts_with("aura-") {
+        Some("v1")
+    } else {
+        None
+    }
 }
 
 fn create_agent_config(
@@ -1033,6 +1069,7 @@ fn create_agent_config(
             SpeakConfig {
                 provider: SpeakProviderConfig {
                     provider_type: "eleven_labs".to_string(),
+                    version: None,
                     model: None,
                     model_id: Some(speak.model_id.to_string()),
                     language_code: Some(speak.language_code.to_string()),
@@ -1043,15 +1080,21 @@ fn create_agent_config(
                 }),
             }
         }
-        _ => SpeakConfig {
+        "deepgram" => SpeakConfig {
             provider: SpeakProviderConfig {
                 provider_type: "deepgram".to_string(),
+                version: Some(
+                    deepgram_speak_version(speak.model)
+                        .expect("Deepgram speak model is validated before creating Settings")
+                        .to_string(),
+                ),
                 model: Some(speak.model.to_string()),
                 model_id: None,
                 language_code: None,
             },
             endpoint: None,
         },
+        _ => unreachable!("speak provider is validated before creating Settings"),
     };
 
     VoiceAgentConfig {
@@ -1095,8 +1138,9 @@ fn create_agent_config(
                                 .or(think_aws_secret_access_key)
                                 .or(think_aws_session_token)
                                 .map(|_| ThinkCredentials {
-                                    credential_type:
-                                        think_credentials_type.unwrap_or("iam").to_string(),
+                                    credential_type: think_credentials_type
+                                        .unwrap_or("iam")
+                                        .to_string(),
                                     region: think_aws_region.unwrap_or_default().to_string(),
                                     access_key_id: think_aws_access_key_id
                                         .unwrap_or_default()
@@ -1212,6 +1256,18 @@ fn validate_think_options(options: &LaunchOptions) -> Result<(), Box<dyn std::er
     }
 
     Ok(())
+}
+
+fn validate_speak_options(options: &LaunchOptions) -> Result<(), Box<dyn std::error::Error>> {
+    match options.speak_provider.as_str() {
+        "eleven_labs" => Ok(()),
+        "deepgram" if deepgram_speak_version(&options.speak_model).is_some() => Ok(()),
+        "deepgram" => Err("Deepgram TTS requires an Aura or Flux model identifier".into()),
+        other => Err(format!(
+            "unsupported speak provider: {other}; expected deepgram or eleven_labs"
+        )
+        .into()),
+    }
 }
 
 fn load_eleven_labs_api_key(
@@ -1853,6 +1909,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ConfigVariableCommand::Delete(delete) => delete_agent_variable(delete).await,
             },
         },
+        Some(Command::Tui { launch }) => tui::run(launch).await,
     }
 }
 
@@ -1860,6 +1917,7 @@ async fn create_agent_configuration(
     args: ConfigCreateArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
     validate_think_options(&args.launch)?;
+    validate_speak_options(&args.launch)?;
     let api_key = env::var("DEEPGRAM_API_KEY")
         .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
     let project_id =
@@ -1890,6 +1948,7 @@ async fn run_voice_agent(
     // Load environment variables
 
     validate_think_options(&args)?;
+    validate_speak_options(&args)?;
 
     let api_key = env::var("DEEPGRAM_API_KEY")
         .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
@@ -1929,7 +1988,7 @@ async fn run_voice_agent(
     // Initialize audio player in a separate thread
     let mic_enabled_for_player = Arc::clone(&mic_enabled);
     std::thread::spawn(move || {
-        let audio_player = match AudioPlayer::new(mic_enabled_for_player, mute_on_playback) {
+        let audio_player = match AudioPlayer::new(mic_enabled_for_player, mute_on_playback, false) {
             Ok(player) => player,
             Err(e) => {
                 error!("Failed to create audio player: {}", e);
@@ -1975,6 +2034,7 @@ async fn run_voice_agent(
         sample_rate,
         channels,
         args.verbose,
+        true,
     )
     .await?;
 
@@ -2334,6 +2394,13 @@ mod tests {
 
         assert_eq!(config["agent"]["think"]["prompt"], DEFAULT_SYSTEM_PROMPT);
         assert!(DEFAULT_SYSTEM_PROMPT.contains("Do not use Markdown formatting"));
+    }
+
+    #[test]
+    fn deepgram_speak_provider_uses_documented_model_versions() {
+        assert_eq!(deepgram_speak_version("flux-alexis-en"), Some("v2"));
+        assert_eq!(deepgram_speak_version("aura-2-thalia-en"), Some("v1"));
+        assert_eq!(deepgram_speak_version("not-a-deepgram-voice"), None);
     }
 
     #[test]
