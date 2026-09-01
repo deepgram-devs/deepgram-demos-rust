@@ -76,9 +76,13 @@ The JSON log location is displayed in the warning color; click it to copy its fu
 
 Use **Select historical system prompt** to reuse a saved prompt. TUI preferences and up to 50 historical prompts are stored in the platform user configuration directory (on Unix-like systems: `$HOME/.config/deepgram/voice-agent.yml`), with unrelated YAML keys preserved. In the prompt editor, `Ctrl+Left` and `Ctrl+Right` move backward and forward one word at a time.
 
-Click a user or agent message to select it. Use **Copy conversation** from the command palette to copy the full conversation to the system clipboard. WebSocket upgrade diagnostics remain hidden from the TUI.
+Use **Select reusable agent configuration** to list configurations from your Deepgram project and select one for the next connection. When no project ID is configured, the TUI uses Deepgram's List Projects API and selects the first returned project; `DEEPGRAM_PROJECT_ID` or `--project-id` explicitly overrides that default. The selected configuration’s UUID is sent as the `agent` field in the next Settings message.
+
+Click any message in the conversation view to copy it to the clipboard; user and agent messages are also selected. Use **Copy conversation** from the command palette to copy the full conversation to the system clipboard. WebSocket upgrade diagnostics remain hidden from the TUI.
 
 Use **Copy request ID** to copy only the current Deepgram request ID from the connection’s `Welcome` message.
+
+Run `voice-agent tui --verbose` to write TUI connection and server errors to `voice-agent.log` in the current working directory.
 
 User messages, agent messages, and client-side injection/control messages use different colors in the event pane.
 

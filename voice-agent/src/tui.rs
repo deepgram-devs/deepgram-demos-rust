@@ -1,6 +1,6 @@
 //! Interactive terminal UI for the voice-agent client.
 use std::{
-    fs::File,
+    fs::{File, OpenOptions},
     io::{self, BufWriter, Write},
     sync::{mpsc as std_mpsc, Arc},
     time::Duration,
@@ -223,12 +223,113 @@ fn update_speak_message(model: &str) -> serde_json::Value {
     })
 }
 
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+struct ReusableAgentConfig {
+    agent_id: String,
+    #[serde(default)]
+    config: serde_json::Value,
+    #[serde(default)]
+    metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct ReusableAgentConfigurationsResponse {
+    #[serde(default)]
+    agents: serde_json::Value,
+}
+
+impl ReusableAgentConfig {
+    fn label(&self) -> String {
+        self.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .map(|name| format!("{name} ({})", self.agent_id))
+            .unwrap_or_else(|| self.agent_id.clone())
+    }
+}
+
+async fn list_reusable_agent_configurations(
+    project_id: Option<&str>,
+) -> Result<Vec<ReusableAgentConfig>, Box<dyn std::error::Error>> {
+    let api_key = env::var("DEEPGRAM_API_KEY")
+        .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
+    let project_id = resolve_project_id(&api_key, project_id, false).await?;
+    let url = format!("https://api.deepgram.com/v1/projects/{project_id}/agents");
+    let response = reqwest::Client::new()
+        .get(&url)
+        .header(reqwest::header::AUTHORIZATION, format!("Token {api_key}"))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await?;
+    if !status.is_success() {
+        return Err(
+            format!("Deepgram agent configuration listing failed ({status}): {body}").into(),
+        );
+    }
+    parse_reusable_agent_configurations(&body)
+}
+
+fn parse_reusable_agent_configurations(
+    body: &str,
+) -> Result<Vec<ReusableAgentConfig>, Box<dyn std::error::Error>> {
+    let response: ReusableAgentConfigurationsResponse =
+        serde_json::from_str(body).map_err(|error| {
+            format!("invalid agent configuration list response: {error}; body: {body}")
+        })?;
+    match response.agents {
+        serde_json::Value::Array(agents) => agents
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<Result<Vec<ReusableAgentConfig>, _>>()
+            .map_err(|error| format!("invalid agent configuration entry: {error}").into()),
+        serde_json::Value::Object(agents) if agents.contains_key("agent_id") => {
+            serde_json::from_value(serde_json::Value::Object(agents))
+                .map(|agent| vec![agent])
+                .map_err(|error| {
+                    format!("invalid single agent configuration entry: {error}").into()
+                })
+        }
+        serde_json::Value::Object(agents) => agents
+            .into_iter()
+            .map(|(agent_id, mut agent)| {
+                let object = agent.as_object_mut().ok_or_else(|| {
+                    serde_json::Error::io(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "invalid map-shaped agent configuration entry",
+                    ))
+                })?;
+                object
+                    .entry("agent_id".to_string())
+                    .or_insert(serde_json::Value::String(agent_id));
+                serde_json::from_value(agent)
+            })
+            .collect::<Result<Vec<ReusableAgentConfig>, _>>()
+            .map_err(|error| {
+                format!("invalid map-shaped agent configuration entry: {error}; body: {body}")
+                    .into()
+            }),
+        serde_json::Value::Null => Ok(Vec::new()),
+        other => Err(format!(
+            "invalid agents response type: expected array or object, got {other}"
+        )
+        .into()),
+    }
+}
+
 #[derive(Clone)]
 enum Command {
     Connect,
     Disconnect,
     Prompt,
     HistoricalPrompt,
+    SelectReusableConfiguration,
     Tts,
     Stt,
     SttLanguage,
@@ -275,6 +376,12 @@ const COMMANDS: &[(&str, &str, Command, Option<&str>)] = &[
         "Select historical system prompt",
         "Choose a saved system prompt for this connection",
         Command::HistoricalPrompt,
+        None,
+    ),
+    (
+        "Select reusable agent configuration",
+        "Load agent configurations from the current Deepgram project",
+        Command::SelectReusableConfiguration,
         None,
     ),
     (
@@ -375,6 +482,10 @@ struct Ui {
     stt_index: usize,
     stt_language: String,
     history_index: usize,
+    agent_config_index: usize,
+    agent_configs: Vec<ReusableAgentConfig>,
+    selected_agent_config_id: Option<String>,
+    project_id: Option<String>,
     input_mode: Option<InputMode>,
     input_buffer: String,
     input_cursor: usize,
@@ -385,7 +496,7 @@ struct Ui {
     selected_message: Option<usize>,
 }
 impl Ui {
-    fn new(args: &LaunchOptions, user_config: UserConfig) -> Self {
+    fn new(args: &LaunchOptions, user_config: UserConfig, project_id: Option<String>) -> Self {
         let voice_index = user_config
             .last_tts
             .voice
@@ -432,6 +543,10 @@ impl Ui {
             stt_index,
             stt_language,
             history_index: 0,
+            agent_config_index: 0,
+            agent_configs: Vec::new(),
+            selected_agent_config_id: None,
+            project_id,
             input_mode: None,
             input_buffer: String::new(),
             input_cursor: 0,
@@ -548,39 +663,43 @@ enum HistoryKind {
 }
 impl HistoryEntry {
     fn event(text: impl Into<String>) -> Self {
+        let text = text.into();
         Self {
             timestamp: String::new(),
-            text: text.into(),
+            copy_text: Some(text.clone()),
+            text,
             kind: HistoryKind::Event,
-            copy_text: None,
         }
     }
     fn message(role: &str, text: String) -> Self {
+        let text = format!("{role}: {text}");
         Self {
             timestamp: now_timestamp(),
-            text: format!("{role}: {text}"),
+            copy_text: Some(text.clone()),
+            text,
             kind: if role == "You" {
                 HistoryKind::User
             } else {
                 HistoryKind::Agent
             },
-            copy_text: None,
         }
     }
     fn client(text: impl Into<String>) -> Self {
+        let text = text.into();
         Self {
             timestamp: String::new(),
-            text: text.into(),
+            copy_text: Some(text.clone()),
+            text,
             kind: HistoryKind::Client,
-            copy_text: None,
         }
     }
     fn warning(text: impl Into<String>) -> Self {
+        let text = text.into();
         Self {
             timestamp: String::new(),
-            text: text.into(),
+            copy_text: Some(text.clone()),
+            text,
             kind: HistoryKind::Warning,
-            copy_text: None,
         }
     }
     fn log_path(path: String) -> Self {
@@ -604,6 +723,28 @@ fn now_timestamp() -> String {
         (seconds / 60) % 60,
         seconds % 60
     )
+}
+
+fn tui_error_log_path() -> std::path::PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("voice-agent.log")
+}
+
+fn initialize_tui_error_log() -> io::Result<()> {
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(tui_error_log_path())?;
+    Ok(())
+}
+
+fn log_tui_error(message: &str) -> io::Result<()> {
+    let mut log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(tui_error_log_path())?;
+    writeln!(log, "[{}] {message}", now_timestamp())
 }
 
 struct JsonLogger {
@@ -651,14 +792,22 @@ enum WorkerCommand {
     SetJsonLogging(bool),
 }
 
-pub async fn run(args: LaunchOptions) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(
+    args: LaunchOptions,
+    project_id: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let (worker_tx, mut events) = mpsc::unbounded_channel::<String>();
     let mut worker: Option<mpsc::UnboundedSender<WorkerCommand>> = None;
     let saved_config = config::load().unwrap_or_else(|error| {
         eprintln!("Unable to load voice-agent configuration: {error}");
         UserConfig::default()
     });
-    let mut ui = Ui::new(&args, saved_config);
+    let mut ui = Ui::new(&args, saved_config, project_id);
+    if args.verbose {
+        if let Err(error) = initialize_tui_error_log() {
+            ui.push_warning(format!("Unable to initialize voice-agent.log: {error}"));
+        }
+    }
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -706,6 +855,18 @@ async fn run_loop(
                 ui.push_log_path(path.to_string());
             } else if let Some(warning) = line.strip_prefix("__WARNING__|") {
                 ui.push_warning(warning.to_string());
+            } else if let Some(configs) = line.strip_prefix("__AGENT_CONFIGS__|") {
+                match serde_json::from_str::<Vec<ReusableAgentConfig>>(configs) {
+                    Ok(configs) if configs.is_empty() => {
+                        ui.push("No reusable agent configurations found")
+                    }
+                    Ok(configs) => {
+                        ui.agent_configs = configs;
+                        ui.agent_config_index = 0;
+                        ui.chooser = Some(4);
+                    }
+                    Err(error) => ui.push(format!("Agent configuration list error: {error}")),
+                }
             } else {
                 ui.push(line);
             }
@@ -781,10 +942,11 @@ fn handle_mouse(ui: &mut Ui, mouse: crossterm::event::MouseEvent, area: ratatui:
     };
     if let Some(path) = copy_text {
         match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(path)) {
-            Ok(()) => ui.push_client("→ Log path copied to clipboard"),
+            Ok(()) => ui.push_client("→ Message copied to clipboard"),
             Err(error) => ui.push(format!("Clipboard error: {error}")),
         }
-    } else if matches!(kind, HistoryKind::User | HistoryKind::Agent) {
+    }
+    if matches!(kind, HistoryKind::User | HistoryKind::Agent) {
         ui.selected_message = Some(index);
     }
 }
@@ -1068,8 +1230,13 @@ fn draw_chooser(f: &mut ratatui::Frame, ui: &Ui, kind: usize) {
             .collect()
     } else if kind == 2 {
         STT_LANGUAGES.iter().map(|s| s.to_string()).collect()
-    } else {
+    } else if kind == 3 {
         ui.user_config.historical_prompts.clone()
+    } else {
+        ui.agent_configs
+            .iter()
+            .map(ReusableAgentConfig::label)
+            .collect()
     };
     let chooser_title = if kind == 0 {
         Line::from(vec![
@@ -1124,9 +1291,12 @@ fn draw_chooser(f: &mut ratatui::Frame, ui: &Ui, kind: usize) {
             .iter()
             .position(|v| *v == ui.stt_language)
             .unwrap_or(0)
-    } else {
+    } else if kind == 3 {
         ui.history_index
             .min(ui.user_config.historical_prompts.len().saturating_sub(1))
+    } else {
+        ui.agent_config_index
+            .min(ui.agent_configs.len().saturating_sub(1))
     }));
     f.render_stateful_widget(list, area, &mut state);
 }
@@ -1341,8 +1511,10 @@ async fn handle_key(
                         .position(|v| *v == ui.stt_language)
                         .unwrap_or(0);
                     ui.stt_language = STT_LANGUAGES[i.saturating_sub(1)].into();
-                } else {
+                } else if kind == 3 {
                     ui.history_index = ui.history_index.saturating_sub(1);
+                } else {
+                    ui.agent_config_index = ui.agent_config_index.saturating_sub(1);
                 }
             }
             KeyCode::Down => {
@@ -1363,9 +1535,11 @@ async fn handle_key(
                         .position(|v| *v == ui.stt_language)
                         .unwrap_or(0);
                     ui.stt_language = STT_LANGUAGES[(i + 1) % STT_LANGUAGES.len()].into();
-                } else if !ui.user_config.historical_prompts.is_empty() {
+                } else if kind == 3 && !ui.user_config.historical_prompts.is_empty() {
                     ui.history_index =
                         (ui.history_index + 1) % ui.user_config.historical_prompts.len();
+                } else if kind == 4 && !ui.agent_configs.is_empty() {
+                    ui.agent_config_index = (ui.agent_config_index + 1) % ui.agent_configs.len();
                 }
             }
             KeyCode::Enter => {
@@ -1388,6 +1562,17 @@ async fn handle_key(
                         }
                     } else {
                         ui.push("No historical system prompts saved");
+                    }
+                    ui.chooser = None;
+                    return Ok(false);
+                }
+                if kind == 4 {
+                    if let Some(config) = ui.agent_configs.get(ui.agent_config_index) {
+                        ui.selected_agent_config_id = Some(config.agent_id.clone());
+                        ui.push(format!(
+                            "Selected reusable agent configuration: {}",
+                            config.label()
+                        ));
                     }
                     ui.chooser = None;
                     return Ok(false);
@@ -1521,8 +1706,15 @@ async fn execute_command(
                 ui.save_preferences(args);
                 let out = event_tx.clone();
                 let json_logging = ui.json_logging;
+                let reusable_config_id = ui.selected_agent_config_id.clone();
+                let verbose = a.verbose;
                 tokio::spawn(async move {
-                    if let Err(e) = worker_loop(a, rx, out.clone(), json_logging).await {
+                    if let Err(e) =
+                        worker_loop(a, rx, out.clone(), json_logging, reusable_config_id).await
+                    {
+                        if verbose {
+                            let _ = log_tui_error(&format!("Connection error: {e}"));
+                        }
                         let _ = out.send(format!("__CONNECTION_ERROR__|{e}"));
                     }
                 });
@@ -1544,6 +1736,31 @@ async fn execute_command(
         Command::HistoricalPrompt => {
             ui.chooser = Some(3);
             ui.history_index = 0;
+        }
+        Command::SelectReusableConfiguration => {
+            let project_id = ui.project_id.clone();
+            let out = event_tx.clone();
+            let verbose = args.verbose;
+            ui.push("Loading reusable agent configurations…");
+            tokio::spawn(async move {
+                match list_reusable_agent_configurations(project_id.as_deref()).await {
+                    Ok(configurations) => match serde_json::to_string(&configurations) {
+                        Ok(configurations) => {
+                            let _ = out.send(format!("__AGENT_CONFIGS__|{configurations}"));
+                        }
+                        Err(error) => {
+                            let _ = out.send(format!("Agent configuration list error: {error}"));
+                        }
+                    },
+                    Err(error) => {
+                        if verbose {
+                            let _ =
+                                log_tui_error(&format!("Agent configuration list error: {error}"));
+                        }
+                        let _ = out.send(format!("Agent configuration list error: {error}"));
+                    }
+                }
+            });
         }
         Command::Tts => {
             ui.chooser = Some(0);
@@ -1651,6 +1868,7 @@ async fn worker_loop(
     mut commands: mpsc::UnboundedReceiver<WorkerCommand>,
     out: mpsc::UnboundedSender<String>,
     json_logging: bool,
+    reusable_config_id: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     validate_speak_options(&args)?;
     let key = env::var("DEEPGRAM_API_KEY").map_err(|_| "DEEPGRAM_API_KEY is not set")?;
@@ -1698,11 +1916,11 @@ async fn worker_loop(
         None
     };
     record_json_message(&mut json_history, &mut json_log, "SERVER", &welcome_text)?;
-    let config = serde_json::to_string(&config_from_options(
-        &args,
-        rate,
-        load_eleven_labs_api_key(&args)?,
-    ))?;
+    let mut config = config_from_options(&args, rate, load_eleven_labs_api_key(&args)?);
+    if let Some(agent_id) = reusable_config_id {
+        config.agent = AgentConfiguration::Reference(agent_id);
+    }
+    let config = serde_json::to_string(&config)?;
     let (mut sink, mut stream) = ws.split();
     record_json_message(&mut json_history, &mut json_log, "CLIENT", &config)?;
     sink.send(Message::Text(config.into())).await?;
@@ -1756,7 +1974,12 @@ async fn worker_loop(
                                 let _ = out.send(format!("__MESSAGE__|{}|{}", if role == "user" { "You" } else { "Agent" }, content));
                             }
                             "Warning" => { let _ = out.send(format!("__WARNING__|Warning: {}", response.data)); }
-                            "Error" => { let _ = out.send(format!("Error: {}", response.data)); }
+                            "Error" => {
+                                if args.verbose {
+                                    let _ = log_tui_error(&format!("Server error: {}", response.data));
+                                }
+                                let _ = out.send(format!("Error: {}", response.data));
+                            }
                             _ => {}
                         }
                     }
@@ -1825,6 +2048,50 @@ mod tests {
             serde_json::json!({"type":"deepgram","version":"v1","model":"aura-2-thalia-en"})
         );
         assert!(flux["speak"]["provider"].get("voice").is_none());
+    }
+
+    #[test]
+    fn reusable_agent_configuration_list_accepts_array_and_map_responses() {
+        let agents = parse_reusable_agent_configurations(
+            &serde_json::json!({
+                "agents": [{
+                    "agent_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                    "metadata": {"name": "customer-service"}
+                }]
+            })
+            .to_string(),
+        )
+        .expect("documented agent list should deserialize");
+        assert_eq!(
+            agents[0].label(),
+            "customer-service (a1b2c3d4-e5f6-7890-abcd-ef1234567890)"
+        );
+
+        let agents = parse_reusable_agent_configurations(
+            &serde_json::json!({
+                "agents": {
+                    "a1b2c3d4-e5f6-7890-abcd-ef1234567890": {
+                        "metadata": {"name": "customer-service"}
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("map-shaped agent list should deserialize");
+        assert_eq!(agents[0].agent_id, "a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+
+        let agents = parse_reusable_agent_configurations(
+            &serde_json::json!({
+                "agents": {
+                    "agent_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                    "metadata": {"name": "customer-service"}
+                }
+            })
+            .to_string(),
+        )
+        .expect("single agent object should deserialize");
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].agent_id, "a1b2c3d4-e5f6-7890-abcd-ef1234567890");
     }
 
     #[test]

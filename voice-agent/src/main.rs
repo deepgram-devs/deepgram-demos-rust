@@ -42,6 +42,10 @@ struct Args {
 enum Command {
     /// Run the interactive terminal UI
     Tui {
+        /// Deepgram project that owns reusable agent configurations
+        #[arg(long, env = "DEEPGRAM_PROJECT_ID")]
+        project_id: Option<String>,
+
         #[command(flatten)]
         launch: LaunchOptions,
     },
@@ -1347,28 +1351,20 @@ async fn resolve_project_id(
 
     let projects: ProjectsResponse = serde_json::from_str(&body)
         .map_err(|error| format!("invalid response from project API: {error}; body: {body}"))?;
-    match projects.projects.as_slice() {
-        [] => Err("the API key has access to no Deepgram projects; provide a project ID with --project-id".into()),
-        [project] => {
-            info!(
-                "Using the only accessible Deepgram project: {} ({})",
-                project.name, project.project_id
-            );
-            Ok(project.project_id.clone())
-        }
-        _ => {
-            let available = projects
-                .projects
-                .iter()
-                .map(|project| format!("{} ({})", project.name, project.project_id))
-                .collect::<Vec<_>>()
-                .join(", ");
-            Err(format!(
-                "the API key has access to multiple Deepgram projects: {available}; specify one with --project-id"
-            )
-            .into())
-        }
-    }
+    select_default_project_id(&projects.projects)
+}
+
+fn select_default_project_id(
+    projects: &[ProjectSummary],
+) -> Result<String, Box<dyn std::error::Error>> {
+    let project = projects
+        .first()
+        .ok_or("the API key has access to no Deepgram projects")?;
+    debug!(
+        "Using the first Deepgram project returned by the List Projects API: {} ({})",
+        project.name, project.project_id
+    );
+    Ok(project.project_id.clone())
 }
 
 async fn create_reusable_agent_config(
@@ -1909,7 +1905,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ConfigVariableCommand::Delete(delete) => delete_agent_variable(delete).await,
             },
         },
-        Some(Command::Tui { launch }) => tui::run(launch).await,
+        Some(Command::Tui { launch, project_id }) => tui::run(launch, project_id).await,
     }
 }
 
@@ -2499,6 +2495,21 @@ mod tests {
 
         assert_eq!(response.projects[0].project_id, "project");
         assert_eq!(response.projects[0].name, "Support");
+    }
+
+    #[test]
+    fn default_project_selection_uses_the_first_list_projects_result() {
+        let projects = vec![
+            ProjectSummary {
+                project_id: "first".into(),
+                name: "First".into(),
+            },
+            ProjectSummary {
+                project_id: "second".into(),
+                name: "Second".into(),
+            },
+        ];
+        assert_eq!(select_default_project_id(&projects).unwrap(), "first");
     }
 
     #[test]

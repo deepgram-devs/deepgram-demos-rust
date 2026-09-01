@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### Added
+- Accepted singleton-object reusable configuration list responses in addition to array and map forms.
+- Made every conversation message type clickable to copy it to the clipboard.
+- Accepted both array- and map-shaped Deepgram reusable configuration list responses.
+- Added `voice-agent.log` error logging for TUI sessions launched with `--verbose`.
+- Defaulted reusable configuration listing to the first project returned by Deepgram's List Projects API.
+- Added a TUI command-palette selector for Deepgram reusable agent configurations.
 - Removed the invalid `aura-2-perseo-it` entry from the TUI voice selector.
 - Displayed the verbose JSON log path as the first message after establishing a new connection.
 - Rejected unrecognized Deepgram TTS model families instead of implicitly treating them as Aura V1.

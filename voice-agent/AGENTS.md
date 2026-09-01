@@ -14,13 +14,16 @@ Keep this file up-to-date whenever voice-agent functionality or user-facing beha
 - Each newly established voice-agent connection must clear the conversation/message view and begin with a fresh history.
 - The header connection status must always reflect the WebSocket state, including `Connection error` when a connection terminates because of an error.
 - The voice-agent TUI must use distinct colors for user messages, agent messages, and client-side injected/control messages sent to the API.
-- The voice-agent TUI must allow mouse selection of user and agent messages and provide a command-palette action to copy the complete conversation to the system clipboard.
+- Clicking any message type in the conversation view must copy that message to the system clipboard. User and agent messages must also remain selectable, and the command palette must provide an action to copy the complete conversation.
 - The voice-agent TUI must provide a separate command-palette action to copy only the current Deepgram `request_id` to the system clipboard, and must clear that ID when the connection ends.
 - HTTP-to-WebSocket upgrade diagnostics must not be rendered in the TUI; they may be retained in diagnostic logging when enabled.
 - The TUI must suppress rodio's `Dropping OutputStream` shutdown diagnostic so closing a connection does not print over the interface.
+- When the TUI is launched with `--verbose`, it must append connection and server errors to `voice-agent.log` in the current working directory.
 - The voice-agent TUI must provide a full system-prompt editor with text insertion, deletion, cursor navigation, and forward/backward navigation controls, and must send the edited prompt through the supported Voice Agent update message.
 - The system-prompt editor must support word-wise backward and forward movement using the terminal's control-arrow navigation (for example, `Ctrl+Left` and `Ctrl+Right`).
 - The TUI must provide a separate historical-system-prompt selector and persist selected/edited prompts for reuse.
+- The TUI must provide a command-palette selector for reusable configurations from the user's Deepgram project. Resolve the default project using `GET /v1/projects` and select the first returned project when no explicit project ID is configured; then list configurations with `GET /v1/projects/{project_id}/agents` and place the selected `agent_id` UUID in `Settings.agent` for the next connection.
+- The reusable configuration picker must accept sequence-shaped, map-shaped, and singleton-object `agents` responses from the Deepgram API; for map-shaped entries, use the map key as `agent_id` when necessary.
 - Persist TUI preferences as YAML at the platform-resolved Deepgram configuration path, using `$HOME/.config/deepgram/voice-agent.yml` on Unix-like systems and the equivalent per-user configuration directory on other platforms. Preserve unrelated YAML keys because other tools may use the same file.
 - Persist historical prompts, the last TTS voice/model, and the complete listen transcription configuration in that YAML file, and apply those preferences to subsequent voice-agent connections.
 - The voice-agent TUI must allow selecting every currently available Aura-2 and Flux TTS voice, selecting Flux or Aura-2 with the correct Voice Agent TTS API version, and must prompt for required fields before sending updates.
