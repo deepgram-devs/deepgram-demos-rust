@@ -128,7 +128,7 @@ pub enum StreamSource {
         #[arg(short, long)]
         file: PathBuf,
 
-        /// Stream audio as fast as possible instead of real-time rate
+        /// Stream audio at Deepgram's maximum supported 1.25x realtime rate
         #[arg(long)]
         fast: bool,
 

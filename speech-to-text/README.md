@@ -86,6 +86,12 @@ cargo run -- list-models
 
 Include non-latest model versions with `--include-outdated`. Use `--endpoint` to override the API base URL.
 
+Show the installed version and source commit:
+
+```bash
+dg-stt --version
+```
+
 ### Microphone Mode
 
 Stream audio from your microphone for real-time transcription:
@@ -134,7 +140,7 @@ cargo run -- stream file --file recording.wav
 
 #### Fast Streaming
 
-Use the `--fast` flag to stream the file as quickly as possible:
+Use the `--fast` flag to stream at Deepgram's maximum supported rate of 1.25× realtime:
 
 ```bash
 cargo run -- stream file --file podcast.mp3 --fast
@@ -182,7 +188,7 @@ cargo run -- transcribe --url https://dpgr.am/spacewalk.wav
 | `--keywords <TERMS>` | Comma-separated keywords for nova-2 and older, with optional intensifier (e.g., `"Deepgram:2,API"`) |
 | `--endpointing <MS>` | Endpointing silence threshold in ms (e.g., `300`) |
 | `--utterance-end <MS>` | Utterance end timeout in ms; sends `UtteranceEnd` after the configured gap (requires `--interim-results`) |
-| `--fast` | Stream file as fast as possible instead of real-time (file mode only) |
+| `--fast` | Stream at Deepgram's maximum supported 1.25× realtime rate (file mode only) |
 | `--callback <URL>` | Send results to a webhook URL |
 | `--silent` | Suppress console output (useful with `--callback`) |
 | `--verbose` | Display the unique models used after streaming completes |
@@ -230,7 +236,7 @@ cargo run -- stream file --file recording.wav
 # Feed the same file audio into five parallel Deepgram streams
 cargo run -- stream file --file recording.wav --connections 5
 
-# Transcribe an MP3 file as fast as possible
+# Transcribe an MP3 file at Deepgram's maximum supported 1.25x rate
 cargo run -- stream file --file podcast.mp3 --fast
 
 # Transcribe an M4A/AAC file with diarization

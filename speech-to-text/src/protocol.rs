@@ -25,6 +25,8 @@ pub(crate) struct ResponseMetadata {
     #[serde(default)]
     pub(crate) model_info: Option<ModelInfo>,
     #[serde(default)]
+    pub(crate) model_uuid: Option<String>,
+    #[serde(default)]
     pub(crate) diarize_info: Option<DiarizeInfo>,
 }
 

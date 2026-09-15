@@ -15,6 +15,12 @@ use symphonia::core::probe::Hint;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+const FAST_STREAM_RATE: f64 = 1.25;
+
+fn file_stream_rate(fast_mode: bool) -> f64 {
+    if fast_mode { FAST_STREAM_RATE } else { 1.0 }
+}
+
 pub(crate) fn codec_name(codec: CodecType) -> &'static str {
     use symphonia::core::codecs::*;
     match codec {
@@ -48,7 +54,7 @@ pub(crate) fn start_audio_fanout(
     connection_count: usize,
 ) -> (
     mpsc::UnboundedSender<Vec<u8>>,
-    Vec<mpsc::UnboundedReceiver<Vec<u8>>>,
+    Vec<AudioReceiver>,
     JoinHandle<()>,
 ) {
     let (source_tx, mut source_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -56,18 +62,81 @@ pub(crate) fn start_audio_fanout(
     let mut output_receivers = Vec::with_capacity(connection_count);
 
     for _ in 0..connection_count {
-        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (tx, rx) = mpsc::unbounded_channel::<AudioEvent>();
         output_senders.push(tx);
-        output_receivers.push(rx);
+        output_receivers.push(AudioReceiver::Unbounded(rx));
     }
 
     let fanout_task = tokio::spawn(async move {
         let mut output_senders = output_senders;
         while let Some(audio_data) = source_rx.recv().await {
-            output_senders.retain(|tx| tx.send(audio_data.clone()).is_ok());
+            output_senders.retain(|tx| tx.send(AudioEvent::Data(audio_data.clone())).is_ok());
             if output_senders.is_empty() {
                 break;
             }
+        }
+        for sender in output_senders {
+            let _ = sender.send(AudioEvent::End);
+        }
+    });
+
+    (source_tx, output_receivers, fanout_task)
+}
+
+pub(crate) enum AudioReceiver {
+    Unbounded(mpsc::UnboundedReceiver<AudioEvent>),
+    Bounded(mpsc::Receiver<AudioEvent>),
+}
+
+impl AudioReceiver {
+    pub(crate) async fn recv(&mut self) -> Option<AudioEvent> {
+        match self {
+            Self::Unbounded(rx) => rx.recv().await,
+            Self::Bounded(rx) => rx.recv().await,
+        }
+    }
+}
+
+pub(crate) enum AudioEvent {
+    Data(Vec<u8>),
+    End,
+}
+
+/// File streaming uses bounded channels end-to-end so a fast decoder cannot
+/// finish far ahead of the WebSocket sender and delay the Finalize message.
+pub(crate) fn start_bounded_audio_fanout(
+    connection_count: usize,
+    capacity: usize,
+) -> (mpsc::Sender<Vec<u8>>, Vec<AudioReceiver>, JoinHandle<()>) {
+    let (source_tx, mut source_rx) = mpsc::channel::<Vec<u8>>(capacity);
+    let mut output_senders = Vec::with_capacity(connection_count);
+    let mut output_receivers = Vec::with_capacity(connection_count);
+
+    for _ in 0..connection_count {
+        let (tx, rx) = mpsc::channel::<AudioEvent>(capacity);
+        output_senders.push(tx);
+        output_receivers.push(AudioReceiver::Bounded(rx));
+    }
+
+    let fanout_task = tokio::spawn(async move {
+        while let Some(audio_data) = source_rx.recv().await {
+            let mut active_senders = Vec::with_capacity(output_senders.len());
+            for sender in output_senders {
+                if sender
+                    .send(AudioEvent::Data(audio_data.clone()))
+                    .await
+                    .is_ok()
+                {
+                    active_senders.push(sender);
+                }
+            }
+            output_senders = active_senders;
+            if output_senders.is_empty() {
+                break;
+            }
+        }
+        for sender in output_senders {
+            let _ = sender.send(AudioEvent::End).await;
         }
     });
 
@@ -296,7 +365,7 @@ impl AudioFileReader {
 
     pub(crate) async fn stream_file(
         &self,
-        tx: mpsc::UnboundedSender<Vec<u8>>,
+        tx: mpsc::Sender<Vec<u8>>,
         config_tx: oneshot::Sender<(u32, u16)>,
         ready_rx: Option<oneshot::Receiver<()>>,
         fast_mode: bool,
@@ -413,7 +482,7 @@ impl AudioFileReader {
         if let Some(rx) = ready_rx {
             let _ = rx.await;
             if fast_mode {
-                println!("WebSocket ready, starting fast audio stream...");
+                println!("WebSocket ready, starting audio stream at {FAST_STREAM_RATE}x...");
             }
         }
 
@@ -437,6 +506,8 @@ impl AudioFileReader {
 
         let mut sample_buf = None;
         let mut frames_sent: u64 = 0;
+        let mut pacing_delay = Duration::ZERO;
+        let stream_rate = file_stream_rate(fast_mode);
 
         loop {
             let packet = match format.next_packet() {
@@ -477,7 +548,14 @@ impl AudioFileReader {
                             audio_data.extend_from_slice(&sample.to_le_bytes());
                         }
 
-                        if tx.send(audio_data).is_err() {
+                        // Pace before sending the next chunk. Sleeping after
+                        // sending the final chunk leaves the input channel open
+                        // and delays the Deepgram Finalize message.
+                        if !pacing_delay.is_zero() {
+                            tokio::time::sleep(pacing_delay).await;
+                        }
+
+                        if tx.send(audio_data).await.is_err() {
                             break;
                         }
 
@@ -496,12 +574,11 @@ impl AudioFileReader {
                             ));
                         }
 
-                        // If not in fast mode, simulate real-time streaming
-                        if !fast_mode {
-                            let sleep_duration =
-                                Duration::from_secs_f64(frame_count as f64 / sample_rate as f64);
-                            tokio::time::sleep(sleep_duration).await;
-                        }
+                        // Pace before the next chunk without delaying end-of-input.
+                        // Deepgram accepts streaming audio at up to 1.25x realtime.
+                        pacing_delay = Duration::from_secs_f64(
+                            frame_count as f64 / sample_rate as f64 / stream_rate,
+                        );
                     }
                 }
                 Err(SymphoniaError::IoError(_)) => continue,
@@ -520,7 +597,7 @@ impl AudioFileReader {
 
 #[cfg(test)]
 mod tests {
-    use super::probe_extension;
+    use super::{file_stream_rate, probe_extension};
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -554,5 +631,11 @@ mod tests {
 
         assert_eq!(probe_extension(&path).as_deref(), Some("wav"));
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn fast_mode_uses_deepgrams_maximum_streaming_rate() {
+        assert_eq!(file_stream_rate(false), 1.0);
+        assert_eq!(file_stream_rate(true), 1.25);
     }
 }

@@ -14,7 +14,10 @@ use std::path::PathBuf;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::audio::{AudioCapture, AudioFileReader, connection_prefix, start_audio_fanout};
+use crate::audio::{
+    AudioCapture, AudioFileReader, connection_prefix, start_audio_fanout,
+    start_bounded_audio_fanout,
+};
 use crate::cli::{Cli, Commands};
 use crate::deepgram::run_deepgram_client;
 use crate::monitor::{ConnectionMonitor, MonitorCommand, MonitorEvent};
@@ -97,11 +100,12 @@ mod tests {
     #[test]
     fn response_parser_reads_models_from_results_metadata() {
         let response: DeepgramResponse = serde_json::from_str(
-            r#"{"type":"Results","metadata":{"model_info":{"name":"nova-2","version":"2024-01-18.29447","arch":"nova-2"},"diarize_info":{"model_uuid":"diarizer","arch":"v1"}}}"#,
+            r#"{"type":"Results","metadata":{"model_info":{"name":"nova-2","version":"2024-01-18.29447","arch":"nova-2"},"model_uuid":"transcriber","diarize_info":{"model_uuid":"diarizer","arch":"v1"}}}"#,
         )
         .unwrap();
 
         let metadata = response.metadata.unwrap();
+        assert_eq!(metadata.model_uuid.as_deref(), Some("transcriber"));
         assert_eq!(metadata.model_info.unwrap().name.as_deref(), Some("nova-2"));
         assert_eq!(metadata.diarize_info.unwrap().arch.as_deref(), Some("v1"));
     }
@@ -396,9 +400,9 @@ async fn run_file_mode(
 
     println!("Starting Deepgram transcription from file...");
     println!("File: {}", file_path.display());
-    println!("Mode: {}", if fast { "Fast" } else { "Real-time" });
+    println!("Mode: {}", if fast { "Fast (1.25x)" } else { "Real-time" });
 
-    let (audio_tx, audio_receivers, fanout_task) = start_audio_fanout(connections);
+    let (audio_tx, audio_receivers, fanout_task) = start_bounded_audio_fanout(connections, 2);
     let (config_tx, config_rx) = oneshot::channel::<(u32, u16)>();
     let mut shutdown_senders = Vec::with_capacity(connections);
 
@@ -528,7 +532,7 @@ async fn run_file_mode(
                     }
                 }
                 _ = &mut tasks_future => {
-                    println!("\nTranscription completed successfully");
+                    println!("Transcription completed successfully");
                     break;
                 }
             }
@@ -541,7 +545,7 @@ async fn run_file_mode(
                 tasks_future.await;
             }
             _ = &mut tasks_future => {
-                println!("\nTranscription completed successfully");
+                println!("Transcription completed successfully");
             }
         }
     }

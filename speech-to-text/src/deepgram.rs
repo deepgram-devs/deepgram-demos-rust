@@ -6,8 +6,108 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
-use crate::audio::connection_prefix;
+use crate::audio::{AudioEvent, AudioReceiver, connection_prefix};
 use crate::protocol::{Channel, DeepgramClientConfig, DeepgramResponse, StreamResult};
+
+fn lifecycle_log(enabled: bool, prefix: &str, _started: Instant, message: impl std::fmt::Display) {
+    if enabled {
+        eprintln!("{prefix}{message}");
+    }
+}
+
+fn control_message_name(message: &Message) -> Option<&'static str> {
+    let Message::Text(text) = message else {
+        return None;
+    };
+
+    if text.contains("\"Finalize\"") {
+        Some("Finalize")
+    } else if text.contains("\"CloseStream\"") {
+        Some("CloseStream")
+    } else if text.contains("\"KeepAlive\"") {
+        Some("KeepAlive")
+    } else {
+        Some("text control message")
+    }
+}
+
+async fn finalize_and_close(
+    msg_tx: &mpsc::Sender<Message>,
+    finalize_rx: &mut oneshot::Receiver<()>,
+    shutdown_rx: &mut mpsc::Receiver<()>,
+    result_rx: &mut mpsc::UnboundedReceiver<()>,
+    prefix: &str,
+    lifecycle_verbose: bool,
+    lifecycle_started: Instant,
+    reason: &str,
+) -> StreamResult {
+    lifecycle_log(lifecycle_verbose, prefix, lifecycle_started, reason);
+    let finalize_msg = serde_json::json!({"type": "Finalize"});
+    let msg_str = serde_json::to_string(&finalize_msg)?;
+    msg_tx
+        .send(Message::Text(msg_str.into()))
+        .await
+        .map_err(|_| "WebSocket sender closed before Finalize could be queued")?;
+    lifecycle_log(
+        lifecycle_verbose,
+        prefix,
+        lifecycle_started,
+        "Finalize enqueued for WebSocket sender",
+    );
+
+    let finalized = tokio::select! {
+        biased;
+        result = &mut *finalize_rx => {
+            result.map_err(|_| "Deepgram connection closed before sending a from_finalize result")?;
+            lifecycle_log(
+                lifecycle_verbose,
+                prefix,
+                lifecycle_started,
+                "Main task received finalize acknowledgement",
+            );
+            true
+        }
+        _ = shutdown_rx.recv() => {
+            lifecycle_log(
+                lifecycle_verbose,
+                prefix,
+                lifecycle_started,
+                "Shutdown requested while waiting for from_finalize",
+            );
+            false
+        }
+        _ = result_rx.recv() => {
+            finalize_rx
+                .await
+                .map_err(|_| "Response handler exited before sending a from_finalize result")?;
+            lifecycle_log(
+                lifecycle_verbose,
+                prefix,
+                lifecycle_started,
+                "Response handler completed after sending finalize acknowledgement",
+            );
+            true
+        }
+    };
+
+    let close_stream_msg = serde_json::json!({"type": "CloseStream"});
+    let close_str = serde_json::to_string(&close_stream_msg)?;
+    msg_tx
+        .send(Message::Text(close_str.into()))
+        .await
+        .map_err(|_| "WebSocket sender closed before CloseStream could be queued")?;
+    lifecycle_log(
+        lifecycle_verbose,
+        prefix,
+        lifecycle_started,
+        if finalized {
+            "CloseStream enqueued after finalize acknowledgement"
+        } else {
+            "CloseStream enqueued after shutdown request"
+        },
+    );
+    Ok(())
+}
 
 fn add_used_models(
     response: &DeepgramResponse,
@@ -22,7 +122,8 @@ fn add_used_models(
         let name = model_info.name.as_deref().unwrap_or("unknown");
         let version = model_info.version.as_deref().unwrap_or("unknown");
         let arch = model_info.arch.as_deref().unwrap_or("unknown");
-        let model = format!("{name} (version: {version}, arch: {arch})");
+        let model_uuid = metadata.model_uuid.as_deref().unwrap_or("unknown");
+        let model = format!("{name} (version: {version}, arch: {arch}, model UUID: {model_uuid})");
         if seen.insert(model.clone()) {
             used_models.push(model);
         }
@@ -44,7 +145,7 @@ pub(crate) async fn run_deepgram_client(
     connection_count: usize,
     detected_sample_rate: u32,
     detected_channels: u16,
-    mut audio_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    mut audio_rx: AudioReceiver,
     ready_tx: Option<oneshot::Sender<()>>,
     mut shutdown_rx: mpsc::Receiver<()>,
     finalize_on_audio_end: bool,
@@ -274,21 +375,61 @@ pub(crate) async fn run_deepgram_client(
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<()>();
     let (finalize_tx, mut finalize_rx) = oneshot::channel::<()>();
-    let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<Message>();
+    let lifecycle_started = Instant::now();
+    let lifecycle_verbose = config.verbose;
+    lifecycle_log(
+        lifecycle_verbose,
+        &prefix,
+        lifecycle_started,
+        if finalize_on_audio_end {
+            "Streaming mode: file"
+        } else {
+            "Streaming mode: microphone"
+        },
+    );
+    // Keep a small bounded queue so fast file streaming cannot build a large
+    // backlog of audio ahead of the Finalize control message.
+    let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(8);
+    let sender_prefix = prefix.clone();
 
     // Spawn a task to handle sending messages to WebSocket
     let sender_task = tokio::spawn(async move {
         let mut ws_sender = ws_sender;
         while let Some(msg) = msg_rx.recv().await {
+            let control_name = control_message_name(&msg);
             if ws_sender.send(msg).await.is_err() {
+                lifecycle_log(
+                    lifecycle_verbose,
+                    &sender_prefix,
+                    lifecycle_started,
+                    "WebSocket sender failed while transmitting a message",
+                );
                 break;
             }
+            if let Some(name) = control_name {
+                lifecycle_log(
+                    lifecycle_verbose,
+                    &sender_prefix,
+                    lifecycle_started,
+                    format!("WebSocket sender transmitted {name}"),
+                );
+            }
         }
+        lifecycle_log(
+            lifecycle_verbose,
+            &sender_prefix,
+            lifecycle_started,
+            "WebSocket sender task exited",
+        );
     });
 
     // Spawn a keep-alive task that sends a message every 5 seconds
     let keepalive_tx = msg_tx.clone();
     let keepalive_task = tokio::spawn(async move {
+        if finalize_on_audio_end {
+            return;
+        }
+
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         interval.tick().await; // Skip the first immediate tick
 
@@ -297,7 +438,11 @@ pub(crate) async fn run_deepgram_client(
             // Send keep-alive message
             let keepalive_msg = serde_json::json!({"type": "KeepAlive"});
             if let Ok(msg_str) = serde_json::to_string(&keepalive_msg) {
-                if keepalive_tx.send(Message::Text(msg_str.into())).is_err() {
+                if keepalive_tx
+                    .send(Message::Text(msg_str.into()))
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -332,19 +477,22 @@ pub(crate) async fn run_deepgram_client(
                                     .as_ref()
                                     .is_ok_and(|response| response.from_finalize)
                                 {
+                                    lifecycle_log(
+                                        lifecycle_verbose,
+                                        &response_prefix,
+                                        lifecycle_started,
+                                        "Received from_finalize response (JSON output); final transcript processed",
+                                    );
                                     if let Some(tx) = finalize_tx.take() {
                                         let _ = tx.send(());
                                     }
+                                    break;
                                 }
                                 continue;
                             }
                             match parsed_response {
                                 Ok(response) => {
-                                    if response.from_finalize {
-                                        if let Some(tx) = finalize_tx.take() {
-                                            let _ = tx.send(());
-                                        }
-                                    }
+                                    let from_finalize = response.from_finalize;
                                     if response.message_type == "Metadata" {
                                         if !silent {
                                             println!("{}Metadata: {}", response_prefix, text);
@@ -413,6 +561,18 @@ pub(crate) async fn run_deepgram_client(
                                             }
                                         }
                                     }
+                                    if from_finalize {
+                                        lifecycle_log(
+                                            lifecycle_verbose,
+                                            &response_prefix,
+                                            lifecycle_started,
+                                            "Received from_finalize response; final transcript processed",
+                                        );
+                                        if let Some(tx) = finalize_tx.take() {
+                                            let _ = tx.send(());
+                                        }
+                                        break;
+                                    }
                                 }
                                 Err(e) => {
                                     eprintln!("Failed to parse response: {}", e);
@@ -461,79 +621,100 @@ pub(crate) async fn run_deepgram_client(
                 println!("{response_prefix}- {model}");
             }
         }
+        lifecycle_log(
+            lifecycle_verbose,
+            &response_prefix,
+            lifecycle_started,
+            "Response handler task exited",
+        );
         let _ = result_tx.send(());
     });
 
     let mut audio_count = 0;
     loop {
         tokio::select! {
-            Some(audio_data) = audio_rx.recv() => {
-                audio_count += 1;
-                if msg_tx.send(Message::Binary(audio_data.into())).is_err() {
-                    eprintln!("{prefix}Failed to send audio to WebSocket");
-                    break;
-                }
-            }
-            _ = shutdown_rx.recv() => {
-                println!("\n{prefix}Received shutdown signal, sending Finalize message...");
-                let finalize_msg = serde_json::json!({"type": "Finalize"});
-                if let Ok(msg_str) = serde_json::to_string(&finalize_msg) {
-                    let _ = msg_tx.send(Message::Text(msg_str.into()));
-                }
-
-                tokio::select! {
-                    finalize_result = &mut finalize_rx => {
-                        if finalize_result.is_err() {
-                            return Err("Deepgram connection closed before sending a from_finalize result".into());
-                        }
-                        println!("{prefix}Received final transcription result from Finalize");
-                        let close_stream_msg = serde_json::json!({"type": "CloseStream"});
-                        if let Ok(msg_str) = serde_json::to_string(&close_stream_msg) {
-                            let _ = msg_tx.send(Message::Text(msg_str.into()));
+            biased;
+            audio_event = audio_rx.recv() => {
+                match audio_event {
+                    Some(AudioEvent::Data(audio_data)) => {
+                        audio_count += 1;
+                        if msg_tx.send(Message::Binary(audio_data.into())).await.is_err() {
+                            eprintln!("{prefix}Failed to send audio to WebSocket");
+                            break;
                         }
                     }
-                    _ = result_rx.recv() => {}
+                    Some(AudioEvent::End) | None => {
+                        keepalive_task.abort();
+                        if finalize_on_audio_end {
+                            finalize_and_close(
+                                &msg_tx,
+                                &mut finalize_rx,
+                                &mut shutdown_rx,
+                                &mut result_rx,
+                                &prefix,
+                                lifecycle_verbose,
+                                lifecycle_started,
+                                "Explicit end-of-audio marker received; enqueueing Finalize",
+                            )
+                            .await?;
+                        } else {
+                            let close_stream_msg = serde_json::json!({"type": "CloseStream"});
+                            let close_str = serde_json::to_string(&close_stream_msg)?;
+                            let _ = msg_tx.send(Message::Text(close_str.into())).await;
+                        }
+                        break;
+                    }
                 }
+            }
+            shutdown_result = shutdown_rx.recv() => {
+                keepalive_task.abort();
+                lifecycle_log(
+                    lifecycle_verbose,
+                    &prefix,
+                    lifecycle_started,
+                    if finalize_on_audio_end {
+                        "Keepalive task aborted before file finalization"
+                    } else {
+                        "Keepalive task aborted before microphone finalization"
+                    },
+                );
+                if shutdown_result.is_none() {
+                    lifecycle_log(
+                        lifecycle_verbose,
+                        &prefix,
+                        lifecycle_started,
+                        "Shutdown channel closed without an explicit shutdown signal",
+                    );
+                }
+                lifecycle_log(
+                    lifecycle_verbose,
+                    &prefix,
+                    lifecycle_started,
+                    if shutdown_result.is_some() {
+                        "Explicit shutdown signal received; enqueueing Finalize"
+                    } else {
+                        "Shutdown channel closure received; enqueueing Finalize"
+                    },
+                );
+                finalize_and_close(
+                    &msg_tx,
+                    &mut finalize_rx,
+                    &mut shutdown_rx,
+                    &mut result_rx,
+                    &prefix,
+                    lifecycle_verbose,
+                    lifecycle_started,
+                    if shutdown_result.is_some() {
+                        "Explicit shutdown signal received; enqueueing Finalize"
+                    } else {
+                        "Shutdown channel closure received; enqueueing Finalize"
+                    },
+                )
+                .await?;
                 break;
             }
             _ = result_rx.recv() => {
                 // WebSocket connection was closed.
-                break;
-            }
-            else => {
-                if finalize_on_audio_end {
-                    println!("{prefix}Audio input finished, sending Finalize message...");
-                    let finalize_msg = serde_json::json!({"type": "Finalize"});
-                    if let Ok(msg_str) = serde_json::to_string(&finalize_msg) {
-                        let _ = msg_tx.send(Message::Text(msg_str.into()));
-                    }
-
-                    tokio::select! {
-                        finalize_result = &mut finalize_rx => {
-                            if finalize_result.is_err() {
-                                return Err("Deepgram connection closed before sending a from_finalize result".into());
-                            }
-                            println!("{prefix}Received final transcription result from Finalize");
-                            let close_stream_msg = serde_json::json!({"type": "CloseStream"});
-                            if let Ok(msg_str) = serde_json::to_string(&close_stream_msg) {
-                                let _ = msg_tx.send(Message::Text(msg_str.into()));
-                            }
-                        }
-                        _ = shutdown_rx.recv() => {
-                            println!("\n{prefix}Received shutdown signal while finalizing, sending CloseStream message...");
-                            let close_stream_msg = serde_json::json!({"type": "CloseStream"});
-                            if let Ok(msg_str) = serde_json::to_string(&close_stream_msg) {
-                                let _ = msg_tx.send(Message::Text(msg_str.into()));
-                            }
-                        }
-                        _ = result_rx.recv() => {}
-                    }
-                } else {
-                    let close_stream_msg = serde_json::json!({"type": "CloseStream"});
-                    if let Ok(msg_str) = serde_json::to_string(&close_stream_msg) {
-                        let _ = msg_tx.send(Message::Text(msg_str.into()));
-                    }
-                }
                 break;
             }
         }
@@ -547,17 +728,43 @@ pub(crate) async fn run_deepgram_client(
     // Stop sending messages
     drop(msg_tx);
 
-    // Wait for the response handler first — it completes as soon as the WS closes.
+    lifecycle_log(
+        lifecycle_verbose,
+        &prefix,
+        lifecycle_started,
+        "Audio/control loop exited; waiting for response handler",
+    );
+
+    // Wait for the response handler first — it completes after the final result
+    // has been processed or the WebSocket has closed.
     // Awaiting keepalive/sender first would hang: they can only exit after ws_sender
     // errors, which doesn't happen until the TCP teardown completes (several seconds).
     let _ = response_handler.await;
+    lifecycle_log(
+        lifecycle_verbose,
+        &prefix,
+        lifecycle_started,
+        "Response handler join completed",
+    );
 
     // WS is now closed; abort the other tasks rather than waiting for the chain to
     // propagate through sender_task → keepalive_task.
+    lifecycle_log(
+        lifecycle_verbose,
+        &prefix,
+        lifecycle_started,
+        "Aborting keepalive and WebSocket sender tasks",
+    );
     keepalive_task.abort();
     sender_task.abort();
     let _ = keepalive_task.await;
     let _ = sender_task.await;
+    lifecycle_log(
+        lifecycle_verbose,
+        &prefix,
+        lifecycle_started,
+        "Shutdown task cleanup completed",
+    );
 
     Ok(())
 }

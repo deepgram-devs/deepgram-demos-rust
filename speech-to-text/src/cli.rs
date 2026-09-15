@@ -6,6 +6,7 @@ use crate::transcribe::TranscribeArgs;
 #[derive(Parser)]
 #[command(name = "dg-stt")]
 #[command(about = "Deepgram Speech-to-Text CLI", long_about = None)]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (commit ", env!("DG_STT_GIT_COMMIT"), ")"))]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Commands,

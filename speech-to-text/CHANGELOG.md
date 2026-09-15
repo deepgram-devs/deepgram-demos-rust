@@ -9,6 +9,31 @@
 * Microphone streaming now follows the same `Finalize`/`from_finalize` shutdown
   flow as file streaming before closing the WebSocket.
 
+## 0.5.2 - 2026-09-15
+
+* File streaming exits immediately after processing the `from_finalize` result
+  instead of waiting for a separate WebSocket close frame.
+* Added root `--version` output with the package version and build commit hash.
+* Added backpressure to file audio WebSocket sends so `Finalize` is not delayed
+  behind an unbounded fast-streaming audio backlog.
+* Added verbose lifecycle logging for audio completion, Finalize delivery,
+  `from_finalize`, WebSocket shutdown, and task cleanup.
+* Keepalive messages now stop before finalization and are disabled for finite
+  file streams.
+* File audio fan-out now uses bounded channels to prevent the decoder from
+  getting ahead of WebSocket transmission and delaying finalization.
+* Real-time file pacing now sleeps before the next audio chunk, avoiding a
+  trailing delay after the final chunk has already been sent.
+* Added file-source and fan-out completion diagnostics to identify why a file
+  audio receiver has not closed before finalization.
+* File fan-out now sends an explicit end-of-audio marker so each connection
+  enters finalization immediately after its last audio chunk.
+* WebSocket clients now handle the explicit end marker directly instead of
+  relying on a `tokio::select!` fallback branch to detect end-of-input.
+* `--fast` now streams at Deepgram's maximum supported 1.25x realtime rate so
+  the API receives the complete audio before the Finalize flow.
+* Verbose model summaries now include the transcription model UUID.
+
 ## 0.5.0 - 2026-08-25
 
 * Added `--numerals` to transcribe mode.
