@@ -1,17 +1,17 @@
 {
-  "version": "0.4.0",
+  "version": "0.5.2",
   "description": "Deepgram real-time speech-to-text command-line client.",
   "homepage": "https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/speech-to-text",
   "license": "ISC",
-  "notes": "Installed from the dg-stt-v0.4.0 GitHub release.",
+  "notes": "Installed from the dg-stt-v0.5.2 GitHub release.",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/dg-stt-v0.4.0/dg-stt-0.4.0-windows-x64.zip",
-      "hash": "c2acb54266ce1b7f12a91fd3d2ad38ce4ac8b9f969737695bd0c5c72ac881719"
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/dg-stt-v0.5.2/dg-stt-0.5.2-windows-x64.zip",
+      "hash": "fe29f375c75dbe499f4300350ab2593f572e9f3fad57a7d324fa7a98be8b5c33"
     },
     "arm64": {
-      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/dg-stt-v0.4.0/dg-stt-0.4.0-windows-arm64.zip",
-      "hash": "00914995d77ebf0e8bef6e85a510286a3e3151e3d9a1f87677bfce407a00f4cf"
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/dg-stt-v0.5.2/dg-stt-0.5.2-windows-arm64.zip",
+      "hash": "479157ef65925962ec0d005b1cdb65783bf7c2a8372cb65181d4817d57d66557"
     }
   },
   "bin": "dg-stt.exe"
