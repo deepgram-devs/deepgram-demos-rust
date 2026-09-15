@@ -13,6 +13,10 @@ pub enum StreamSource {
         #[arg(long)]
         silent: bool,
 
+        /// Display the unique models used after transcription completes
+        #[arg(long)]
+        verbose: bool,
+
         /// Output each Deepgram response as raw JSON
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
         output: String,
@@ -135,6 +139,10 @@ pub enum StreamSource {
         /// Suppress console output of transcripts
         #[arg(long)]
         silent: bool,
+
+        /// Display the unique models used after transcription completes
+        #[arg(long)]
+        verbose: bool,
 
         /// Output each Deepgram response as raw JSON
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]

@@ -1,5 +1,14 @@
 # Changelog for Deepgram Rust Speech-to-Text (STT) CLI
 
+## 0.5.1 - 2026-09-15
+
+* File streaming now sends `Finalize` after the audio input ends and waits for
+  Deepgram's `from_finalize` result before closing the WebSocket and exiting.
+* Added `--verbose` to streaming mode to display the unique models used by the
+  request after transcription completes.
+* Microphone streaming now follows the same `Finalize`/`from_finalize` shutdown
+  flow as file streaming before closing the WebSocket.
+
 ## 0.5.0 - 2026-08-25
 
 * Added `--numerals` to transcribe mode.

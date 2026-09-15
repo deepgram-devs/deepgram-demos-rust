@@ -9,11 +9,36 @@ pub(crate) struct DeepgramResponse {
     pub(crate) message_type: String,
     #[serde(default)]
     pub(crate) is_final: bool,
+    #[serde(default)]
+    pub(crate) from_finalize: bool,
+    #[serde(default)]
+    pub(crate) metadata: Option<ResponseMetadata>,
     // Deepgram uses different channel shapes for Results and control events:
     // Results uses an object, while SpeechStarted/UtteranceEnd may use a scalar
     // or an array. Keep this raw until the message type is known.
     #[serde(default)]
     pub(crate) channel: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ResponseMetadata {
+    #[serde(default)]
+    pub(crate) model_info: Option<ModelInfo>,
+    #[serde(default)]
+    pub(crate) diarize_info: Option<DiarizeInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ModelInfo {
+    pub(crate) name: Option<String>,
+    pub(crate) version: Option<String>,
+    pub(crate) arch: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct DiarizeInfo {
+    pub(crate) model_uuid: Option<String>,
+    pub(crate) arch: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,6 +68,7 @@ pub(crate) struct DeepgramClientConfig {
     pub(crate) api_key: Option<String>,
     pub(crate) callback: Option<String>,
     pub(crate) silent: bool,
+    pub(crate) verbose: bool,
     pub(crate) output: String,
     pub(crate) monitor_tx: Option<mpsc::UnboundedSender<MonitorEvent>>,
     pub(crate) endpoint: Option<String>,

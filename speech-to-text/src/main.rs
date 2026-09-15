@@ -84,6 +84,29 @@ mod tests {
     }
 
     #[test]
+    fn response_parser_recognizes_finalize_results() {
+        let response: DeepgramResponse = serde_json::from_str(
+            r#"{"type":"Results","from_finalize":true,"is_final":true,"channel":{"alternatives":[]}}"#,
+        )
+        .unwrap();
+
+        assert!(response.from_finalize);
+        assert!(response.is_final);
+    }
+
+    #[test]
+    fn response_parser_reads_models_from_results_metadata() {
+        let response: DeepgramResponse = serde_json::from_str(
+            r#"{"type":"Results","metadata":{"model_info":{"name":"nova-2","version":"2024-01-18.29447","arch":"nova-2"},"diarize_info":{"model_uuid":"diarizer","arch":"v1"}}}"#,
+        )
+        .unwrap();
+
+        let metadata = response.metadata.unwrap();
+        assert_eq!(metadata.model_info.unwrap().name.as_deref(), Some("nova-2"));
+        assert_eq!(metadata.diarize_info.unwrap().arch.as_deref(), Some("v1"));
+    }
+
+    #[test]
     fn wav_data_len_uses_bytes_when_declared_chunk_size_is_zero() {
         let mut wav = b"RIFF\0\0\0\0WAVEdata\0\0\0\0".to_vec();
         wav.extend_from_slice(&[0; 8]);
@@ -171,6 +194,7 @@ async fn run_microphone_mode(
     connections: usize,
     callback: Option<String>,
     silent: bool,
+    verbose: bool,
     output: String,
     monitor: bool,
     endpoint: Option<String>,
@@ -230,6 +254,7 @@ async fn run_microphone_mode(
         api_key,
         callback,
         silent: silent || monitor,
+        verbose,
         output,
         monitor_tx,
         endpoint,
@@ -270,6 +295,7 @@ async fn run_microphone_mode(
             audio_rx,
             None,
             shutdown_rx,
+            false,
         )));
         let _ = monitor_event_tx.send(MonitorEvent::Registered {
             connection_id: idx + 1,
@@ -337,6 +363,7 @@ async fn run_file_mode(
     fast: bool,
     callback: Option<String>,
     silent: bool,
+    verbose: bool,
     output: String,
     monitor: bool,
     endpoint: Option<String>,
@@ -411,6 +438,7 @@ async fn run_file_mode(
         api_key,
         callback,
         silent: silent || monitor,
+        verbose,
         output,
         monitor_tx,
         endpoint,
@@ -454,6 +482,7 @@ async fn run_file_mode(
             audio_rx,
             Some(ready_tx),
             shutdown_rx,
+            true,
         )));
         let _ = monitor_event_tx.send(MonitorEvent::Registered {
             connection_id: idx + 1,
@@ -547,6 +576,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             StreamSource::Microphone {
                 callback,
                 silent,
+                verbose,
                 output,
                 monitor,
                 endpoint,
@@ -580,6 +610,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     connections,
                     callback,
                     silent,
+                    verbose,
                     output,
                     monitor,
                     endpoint,
@@ -613,6 +644,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 fast,
                 callback,
                 silent,
+                verbose,
                 output,
                 monitor,
                 endpoint,
@@ -648,6 +680,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     fast,
                     callback,
                     silent,
+                    verbose,
                     output,
                     monitor,
                     endpoint,

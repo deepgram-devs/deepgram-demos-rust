@@ -21,6 +21,7 @@ A real-time speech-to-text CLI using Rust that connects to the Deepgram API via 
 - Callback support for webhook integration
 - Displays metadata and transcription results in real-time; parse errors written to `dg-stt-debug.log`
 - Deepgram request ID printed on connect (and on connection errors)
+- Optional `--verbose` summary of the unique transcription and diarization models used, printed once at the end
 
 ### Transcribe Mode (HTTP API)
 - Pre-recorded audio transcription for files
@@ -184,6 +185,7 @@ cargo run -- transcribe --url https://dpgr.am/spacewalk.wav
 | `--fast` | Stream file as fast as possible instead of real-time (file mode only) |
 | `--callback <URL>` | Send results to a webhook URL |
 | `--silent` | Suppress console output (useful with `--callback`) |
+| `--verbose` | Display the unique models used after streaming completes |
 | `--output <FORMAT>` | Streaming output format: `text` (default) or `json` for each raw Deepgram response message |
 | `--monitor` | Show an interactive dashboard for streaming connections; conflicts with `--output json` |
 
@@ -251,6 +253,12 @@ cargo run -- stream microphone --callback https://example.com/webhook
 
 # File with callback and silent mode
 cargo run -- stream file --file audio.mp3 --callback https://example.com/webhook --silent
+```
+
+Display the models used by a streaming request after it completes:
+
+```bash
+cargo run -- stream file --file audio.mp3 --verbose
 ```
 
 #### Transcribe Mode Examples

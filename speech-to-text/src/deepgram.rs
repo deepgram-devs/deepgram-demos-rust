@@ -1,4 +1,5 @@
 use futures_util::{SinkExt, StreamExt};
+use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -7,6 +8,35 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
 use crate::audio::connection_prefix;
 use crate::protocol::{Channel, DeepgramClientConfig, DeepgramResponse, StreamResult};
+
+fn add_used_models(
+    response: &DeepgramResponse,
+    used_models: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
+    let Some(metadata) = &response.metadata else {
+        return;
+    };
+
+    if let Some(model_info) = &metadata.model_info {
+        let name = model_info.name.as_deref().unwrap_or("unknown");
+        let version = model_info.version.as_deref().unwrap_or("unknown");
+        let arch = model_info.arch.as_deref().unwrap_or("unknown");
+        let model = format!("{name} (version: {version}, arch: {arch})");
+        if seen.insert(model.clone()) {
+            used_models.push(model);
+        }
+    }
+
+    if let Some(diarize_info) = &metadata.diarize_info {
+        let arch = diarize_info.arch.as_deref().unwrap_or("unknown");
+        let model_uuid = diarize_info.model_uuid.as_deref().unwrap_or("unknown");
+        let model = format!("diarization (arch: {arch}, model UUID: {model_uuid})");
+        if seen.insert(model.clone()) {
+            used_models.push(model);
+        }
+    }
+}
 
 pub(crate) async fn run_deepgram_client(
     config: DeepgramClientConfig,
@@ -17,6 +47,7 @@ pub(crate) async fn run_deepgram_client(
     mut audio_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     ready_tx: Option<oneshot::Sender<()>>,
     mut shutdown_rx: mpsc::Receiver<()>,
+    finalize_on_audio_end: bool,
 ) -> StreamResult {
     let prefix = connection_prefix(connection_id, connection_count);
 
@@ -242,6 +273,7 @@ pub(crate) async fn run_deepgram_client(
     let (ws_sender, mut ws_receiver) = ws_stream.split();
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<()>();
+    let (finalize_tx, mut finalize_rx) = oneshot::channel::<()>();
     let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<Message>();
 
     // Spawn a task to handle sending messages to WebSocket
@@ -275,26 +307,44 @@ pub(crate) async fn run_deepgram_client(
     let response_prefix = prefix.clone();
     let silent = config.silent;
     let output_json = config.output == "json";
+    let verbose = config.verbose;
     let diarize = config.diarize;
     let monitor_tx = config.monitor_tx.clone();
     let response_handler = tokio::spawn(async move {
-        let mut last_message_time = tokio::time::Instant::now();
-        let timeout_duration = Duration::from_secs(10);
+        let mut finalize_tx = Some(finalize_tx);
+        let mut used_models = Vec::new();
+        let mut seen_models = HashSet::new();
 
         loop {
             tokio::select! {
                 msg = ws_receiver.next() => {
                     match msg {
                         Some(Ok(Message::Text(text))) => {
-                            last_message_time = tokio::time::Instant::now();
+                            let parsed_response = serde_json::from_str::<DeepgramResponse>(&text);
+                            if let Ok(response) = &parsed_response {
+                                add_used_models(response, &mut used_models, &mut seen_models);
+                            }
                             if output_json {
                                 if !silent {
                                     println!("{}", text);
                                 }
+                                if parsed_response
+                                    .as_ref()
+                                    .is_ok_and(|response| response.from_finalize)
+                                {
+                                    if let Some(tx) = finalize_tx.take() {
+                                        let _ = tx.send(());
+                                    }
+                                }
                                 continue;
                             }
-                            match serde_json::from_str::<DeepgramResponse>(&text) {
+                            match parsed_response {
                                 Ok(response) => {
+                                    if response.from_finalize {
+                                        if let Some(tx) = finalize_tx.take() {
+                                            let _ = tx.send(());
+                                        }
+                                    }
                                     if response.message_type == "Metadata" {
                                         if !silent {
                                             println!("{}Metadata: {}", response_prefix, text);
@@ -403,13 +453,12 @@ pub(crate) async fn run_deepgram_client(
                         _ => {}
                     }
                 }
-                _ = tokio::time::sleep_until(last_message_time + timeout_duration) => {
-                    // No messages received for timeout duration, we're done
-                    if !silent {
-                        println!("{}No more messages received, finishing...", response_prefix);
-                    }
-                    break;
-                }
+            }
+        }
+        if verbose && !used_models.is_empty() {
+            println!("{response_prefix}Models used:");
+            for model in used_models {
+                println!("{response_prefix}- {model}");
             }
         }
         let _ = result_tx.send(());
@@ -426,11 +475,24 @@ pub(crate) async fn run_deepgram_client(
                 }
             }
             _ = shutdown_rx.recv() => {
-                println!("\n{prefix}Received shutdown signal, sending CloseStream message...");
-                // Send CloseStream message
-                let close_stream_msg = serde_json::json!({"type": "CloseStream"});
-                if let Ok(msg_str) = serde_json::to_string(&close_stream_msg) {
+                println!("\n{prefix}Received shutdown signal, sending Finalize message...");
+                let finalize_msg = serde_json::json!({"type": "Finalize"});
+                if let Ok(msg_str) = serde_json::to_string(&finalize_msg) {
                     let _ = msg_tx.send(Message::Text(msg_str.into()));
+                }
+
+                tokio::select! {
+                    finalize_result = &mut finalize_rx => {
+                        if finalize_result.is_err() {
+                            return Err("Deepgram connection closed before sending a from_finalize result".into());
+                        }
+                        println!("{prefix}Received final transcription result from Finalize");
+                        let close_stream_msg = serde_json::json!({"type": "CloseStream"});
+                        if let Ok(msg_str) = serde_json::to_string(&close_stream_msg) {
+                            let _ = msg_tx.send(Message::Text(msg_str.into()));
+                        }
+                    }
+                    _ = result_rx.recv() => {}
                 }
                 break;
             }
@@ -439,10 +501,38 @@ pub(crate) async fn run_deepgram_client(
                 break;
             }
             else => {
-                // Audio source exhausted (file done) — tell Deepgram we're finished
-                let close_stream_msg = serde_json::json!({"type": "CloseStream"});
-                if let Ok(msg_str) = serde_json::to_string(&close_stream_msg) {
-                    let _ = msg_tx.send(Message::Text(msg_str.into()));
+                if finalize_on_audio_end {
+                    println!("{prefix}Audio input finished, sending Finalize message...");
+                    let finalize_msg = serde_json::json!({"type": "Finalize"});
+                    if let Ok(msg_str) = serde_json::to_string(&finalize_msg) {
+                        let _ = msg_tx.send(Message::Text(msg_str.into()));
+                    }
+
+                    tokio::select! {
+                        finalize_result = &mut finalize_rx => {
+                            if finalize_result.is_err() {
+                                return Err("Deepgram connection closed before sending a from_finalize result".into());
+                            }
+                            println!("{prefix}Received final transcription result from Finalize");
+                            let close_stream_msg = serde_json::json!({"type": "CloseStream"});
+                            if let Ok(msg_str) = serde_json::to_string(&close_stream_msg) {
+                                let _ = msg_tx.send(Message::Text(msg_str.into()));
+                            }
+                        }
+                        _ = shutdown_rx.recv() => {
+                            println!("\n{prefix}Received shutdown signal while finalizing, sending CloseStream message...");
+                            let close_stream_msg = serde_json::json!({"type": "CloseStream"});
+                            if let Ok(msg_str) = serde_json::to_string(&close_stream_msg) {
+                                let _ = msg_tx.send(Message::Text(msg_str.into()));
+                            }
+                        }
+                        _ = result_rx.recv() => {}
+                    }
+                } else {
+                    let close_stream_msg = serde_json::json!({"type": "CloseStream"});
+                    if let Ok(msg_str) = serde_json::to_string(&close_stream_msg) {
+                        let _ = msg_tx.send(Message::Text(msg_str.into()));
+                    }
                 }
                 break;
             }
