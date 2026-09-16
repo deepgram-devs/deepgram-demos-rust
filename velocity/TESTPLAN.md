@@ -20,6 +20,7 @@ Automated coverage currently verifies:
 - Deepgram pre-recorded URL construction with smart formatting and key terms.
 - Deepgram streaming URL construction with smart formatting and key terms.
 - Audio peak meter scaling helpers.
+- LLM provider key-prefix detection.
 
 ## Manual Test Plan
 

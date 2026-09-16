@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added an optional LLM normalization layer between Deepgram transcription and typing or clipboard delivery.
+- Added provider detection and dynamic model discovery for OpenAI, Gemini, Anthropic, and Together AI.
+- Added GPUI settings for the LLM API key, provider, and model, persisted in the Velocity configuration file.
 - Restricted the Velocity release workflow to native Windows 11 x64 and ARM64 artifacts; Velocity is not released for macOS or Linux.
 
 ## 0.5.1 - 2026-07-19

@@ -32,9 +32,10 @@ use windows::Win32::{
 use windows::core::PCWSTR;
 
 use crate::audio::{self, AudioMeter};
-use crate::config::{self, Config, OutputMode};
+use crate::config::{self, Config, LlmProvider, OutputMode};
 use crate::deepgram;
 use crate::hotkey;
+use crate::llm;
 use crate::logger;
 use crate::startup;
 use crate::state;
@@ -65,6 +66,9 @@ static API_KEY_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SettingsSnapshot {
     api_key: String,
+    llm_api_key: String,
+    llm_provider: String,
+    llm_model: String,
     model: String,
     language: String,
     smart_format: bool,
@@ -310,7 +314,10 @@ struct SettingsView {
     app: Option<Arc<state::AppState>>,
     completion: Option<CompletionHandle>,
     api_key_input: Entity<InputState>,
+    llm_api_key_input: Entity<InputState>,
     model_select: Entity<SelectState<Vec<String>>>,
+    llm_provider_select: Entity<SelectState<Vec<String>>>,
+    llm_model_select: Entity<SelectState<Vec<String>>>,
     language_select: Entity<SelectState<Vec<String>>>,
     key_terms_input: Entity<InputState>,
     push_to_talk_input: Entity<InputState>,
@@ -320,6 +327,9 @@ struct SettingsView {
     history_limit_input: Entity<InputState>,
     output_mode_select: Entity<SelectState<Vec<String>>>,
     api_key: String,
+    llm_api_key: String,
+    llm_provider: String,
+    llm_model: String,
     model: String,
     language: String,
     smart_format: bool,
@@ -369,6 +379,11 @@ impl SettingsView {
                 .masked(true)
                 .placeholder("Deepgram API key")
         });
+        let llm_api_key_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder("OpenAI, Gemini, Anthropic, or Together AI key")
+        });
         let key_terms_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder("Recognition key terms, comma-separated")
         });
@@ -384,6 +399,27 @@ impl SettingsView {
             SelectState::new(
                 model_items.clone(),
                 index_path_for(&deepgram::DEFAULT_MODEL.to_string(), &model_items),
+                window,
+                cx,
+            )
+        });
+        let llm_provider_items = llm_provider_options();
+        let llm_model_items = vec!["Enter an LLM API key to load models".to_string()];
+        let llm_provider_select = cx.new(|cx| {
+            SelectState::new(
+                llm_provider_items.clone(),
+                index_path_for(
+                    &LlmProvider::Auto.as_label().to_string(),
+                    &llm_provider_items,
+                ),
+                window,
+                cx,
+            )
+        });
+        let llm_model_select = cx.new(|cx| {
+            SelectState::new(
+                llm_model_items.clone(),
+                index_path_for(&llm_model_items[0], &llm_model_items),
                 window,
                 cx,
             )
@@ -424,7 +460,10 @@ impl SettingsView {
             app,
             completion,
             api_key_input,
+            llm_api_key_input,
             model_select,
+            llm_provider_select,
+            llm_model_select,
             language_select,
             key_terms_input,
             push_to_talk_input,
@@ -434,6 +473,9 @@ impl SettingsView {
             history_limit_input,
             output_mode_select,
             api_key: String::new(),
+            llm_api_key: String::new(),
+            llm_provider: LlmProvider::Auto.as_label().to_string(),
+            llm_model: String::new(),
             model: deepgram::DEFAULT_MODEL.to_string(),
             language: deepgram::DO_NOT_SPECIFY_LANGUAGE_LABEL.to_string(),
             smart_format: false,
@@ -474,6 +516,22 @@ impl SettingsView {
                 this.api_key = value;
                 cx.notify();
             }),
+            subscribe_input_string(
+                cx,
+                window,
+                &self.llm_api_key_input,
+                |this, value, window, cx| {
+                    this.llm_api_key = value;
+                    if let Some(provider) = llm::detect_provider(&this.llm_api_key) {
+                        this.llm_provider = provider.as_label().to_string();
+                        this.llm_provider_select.update(cx, |select, cx| {
+                            select.set_selected_value(&this.llm_provider, window, cx);
+                        });
+                    }
+                    this.refresh_llm_models(window, cx);
+                    cx.notify();
+                },
+            ),
             subscribe_input_string(cx, window, &self.key_terms_input, |this, value, _, cx| {
                 this.key_terms = value;
                 cx.notify();
@@ -512,6 +570,21 @@ impl SettingsView {
             subscribe_select_string(cx, window, &self.model_select, |this, value, window, cx| {
                 this.model = value;
                 this.refresh_language_options(window, cx);
+                cx.notify();
+            }),
+            subscribe_select_string(
+                cx,
+                window,
+                &self.llm_provider_select,
+                |this, value, _, cx| {
+                    this.llm_provider = value;
+                    this.llm_model.clear();
+                    this.refresh_llm_models(window, cx);
+                    cx.notify();
+                },
+            ),
+            subscribe_select_string(cx, window, &self.llm_model_select, |this, value, _, cx| {
+                this.llm_model = value;
                 cx.notify();
             }),
             subscribe_select_string(cx, window, &self.language_select, |this, value, _, cx| {
@@ -641,6 +714,9 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) {
         self.api_key = config.api_key.clone().unwrap_or_default();
+        self.llm_api_key = config.llm_api_key.clone().unwrap_or_default();
+        self.llm_provider = config.llm_provider.as_label().to_string();
+        self.llm_model = config.llm_model.clone().unwrap_or_default();
         self.model = config.model.clone();
         self.language = config
             .language
@@ -677,6 +753,9 @@ impl SettingsView {
         self.api_key_input.update(cx, |input, cx| {
             input.set_value(self.api_key.clone(), window, cx)
         });
+        self.llm_api_key_input.update(cx, |input, cx| {
+            input.set_value(self.llm_api_key.clone(), window, cx)
+        });
         self.key_terms_input.update(cx, |input, cx| {
             input.set_value(self.key_terms.clone(), window, cx)
         });
@@ -699,6 +778,14 @@ impl SettingsView {
             let model = self.model.clone();
             select.set_selected_value(&model, window, cx);
         });
+
+        let llm_provider_items = llm_provider_options();
+        self.llm_provider_select.update(cx, |select, cx| {
+            select.set_items(llm_provider_items, window, cx);
+            let provider = self.llm_provider.clone();
+            select.set_selected_value(&provider, window, cx);
+        });
+        self.refresh_llm_models(window, cx);
 
         self.refresh_language_options(window, cx);
         self.refresh_audio_inputs(window, cx);
@@ -734,6 +821,66 @@ impl SettingsView {
             select.set_items(language_options, window, cx);
             let selected_language = self.language.clone();
             select.set_selected_value(&selected_language, window, cx);
+        });
+    }
+
+    fn refresh_llm_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let api_key = self.llm_api_key.trim().to_string();
+        let provider = provider_from_label(&self.llm_provider);
+        if api_key.is_empty() {
+            self.set_llm_models(
+                vec!["Enter an LLM API key to load models".to_string()],
+                None,
+                window,
+                cx,
+            );
+            return;
+        }
+
+        self.status = "Loading LLM models…".to_string();
+        cx.spawn(async move |this, cx| {
+            let result = std::thread::spawn(move || llm::list_models(provider, &api_key))
+                .join()
+                .map_err(|_| "LLM model discovery thread panicked".to_string())
+                .and_then(|result| result);
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(models) => {
+                        let selected = this.llm_model.clone();
+                        this.set_llm_models(models, Some(selected), window, cx);
+                        this.status = "LLM models loaded".to_string();
+                    }
+                    Err(error) => {
+                        this.set_llm_models(
+                            vec!["Unable to load models".to_string()],
+                            None,
+                            window,
+                            cx,
+                        );
+                        this.status = error;
+                    }
+                }
+                cx.notify();
+            })
+        })
+        .detach();
+    }
+
+    fn set_llm_models(
+        &mut self,
+        models: Vec<String>,
+        preferred: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = preferred
+            .filter(|value| models.iter().any(|model| model == value))
+            .or_else(|| models.first().cloned())
+            .unwrap_or_default();
+        self.llm_model = selected.clone();
+        self.llm_model_select.update(cx, |select, cx| {
+            select.set_items(models, window, cx);
+            select.set_selected_value(&selected, window, cx);
         });
     }
 
@@ -837,6 +984,13 @@ impl SettingsView {
 
         Some(Config {
             api_key: (!self.api_key.trim().is_empty()).then(|| self.api_key.trim().to_string()),
+            llm_api_key: (!self.llm_api_key.trim().is_empty())
+                .then(|| self.llm_api_key.trim().to_string()),
+            llm_provider: provider_from_label(&self.llm_provider),
+            llm_model: (!self.llm_model.trim().is_empty()
+                && !self.llm_model.starts_with("Enter an LLM")
+                && !self.llm_model.starts_with("Unable to load"))
+            .then(|| self.llm_model.trim().to_string()),
             smart_format: self.smart_format,
             model: self.model.clone(),
             language: deepgram::language_code_from_display(&self.model, &self.language),
@@ -862,6 +1016,9 @@ impl SettingsView {
     fn current_snapshot(&self) -> SettingsSnapshot {
         SettingsSnapshot {
             api_key: self.api_key.clone(),
+            llm_api_key: self.llm_api_key.clone(),
+            llm_provider: self.llm_provider.clone(),
+            llm_model: self.llm_model.clone(),
             model: self.model.clone(),
             language: self.language.clone(),
             smart_format: self.smart_format,
@@ -1043,6 +1200,35 @@ impl SettingsView {
             cx,
         );
 
+        let llm = self.render_settings_section(
+            SettingsSection::Configuration,
+            "LLM normalization",
+            v_form()
+                .with_size(Size::Large)
+                .child(
+                    field()
+                        .label("LLM API key")
+                        .child(Input::new(&self.llm_api_key_input).w_full()),
+                )
+                .child(
+                    field()
+                        .label("Provider")
+                        .child(Select::new(&self.llm_provider_select).w_full()),
+                )
+                .child(
+                    field()
+                        .label("Model")
+                        .child(Select::new(&self.llm_model_select).w_full()),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Normalize transcripts before typing or clipboard delivery."),
+                ),
+            cx,
+        );
+
         let hotkeys = self.render_settings_section(
             SettingsSection::Hotkeys,
             "Hotkeys",
@@ -1182,6 +1368,7 @@ impl SettingsView {
                                 .child(self.render_gradient_heading()),
                         )
                         .child(transcription)
+                        .child(llm)
                         .child(hotkeys)
                         .child(audio_output)
                         .child(system)
@@ -1778,6 +1965,20 @@ fn output_mode_options() -> Vec<String> {
         .into_iter()
         .map(|mode| mode.as_label().to_string())
         .collect()
+}
+
+fn llm_provider_options() -> Vec<String> {
+    LlmProvider::all()
+        .into_iter()
+        .map(|provider| provider.as_label().to_string())
+        .collect()
+}
+
+fn provider_from_label(label: &str) -> LlmProvider {
+    LlmProvider::all()
+        .into_iter()
+        .find(|provider| provider.as_label() == label)
+        .unwrap_or_default()
 }
 
 fn model_options() -> Vec<String> {

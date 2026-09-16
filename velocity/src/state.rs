@@ -10,6 +10,7 @@ use crate::config::{self, Config};
 use crate::focus_target::FocusTarget;
 use crate::history::TranscriptHistory;
 use crate::hotkey::HotkeyManager;
+use crate::llm;
 use crate::logger;
 use crate::output;
 
@@ -154,13 +155,33 @@ impl AppState {
 
     pub fn push_history_and_deliver(&self, text: String) {
         let config = self.config();
+        let normalized_text = if let (Some(api_key), Some(model)) =
+            (config.llm_api_key.as_deref(), config.llm_model.as_deref())
+        {
+            match llm::normalize(config.llm_provider, api_key, model, &text) {
+                Ok(normalized) => normalized,
+                Err(error) => {
+                    self.set_error(format!(
+                        "LLM normalization failed; using raw transcript: {error}"
+                    ));
+                    text.clone()
+                }
+            }
+        } else {
+            text.clone()
+        };
         let target = (!config.deliver_to_focused_app)
             .then(|| self.transcript_target())
             .flatten();
-        match output::deliver_text(&text, config.output_mode, config.append_newline, target) {
+        match output::deliver_text(
+            &normalized_text,
+            config.output_mode,
+            config.append_newline,
+            target,
+        ) {
             Ok(_) => {
                 let mut history = self.history.lock().unwrap();
-                history.push(text, config.history_limit);
+                history.push(normalized_text, config.history_limit);
                 if let Err(error) = history.save(&config::history_path()) {
                     self.set_error(format!("Failed to save transcript history: {error}"));
                 }

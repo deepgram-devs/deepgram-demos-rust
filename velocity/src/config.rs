@@ -19,6 +19,39 @@ pub enum OutputMode {
     Paste,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum LlmProvider {
+    #[default]
+    Auto,
+    OpenAi,
+    Gemini,
+    Anthropic,
+    Together,
+}
+
+impl LlmProvider {
+    pub fn as_label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto-detect",
+            Self::OpenAi => "OpenAI",
+            Self::Gemini => "Gemini",
+            Self::Anthropic => "Anthropic",
+            Self::Together => "Together AI",
+        }
+    }
+
+    pub fn all() -> [Self; 5] {
+        [
+            Self::Auto,
+            Self::OpenAi,
+            Self::Gemini,
+            Self::Anthropic,
+            Self::Together,
+        ]
+    }
+}
+
 impl OutputMode {
     pub fn as_label(self) -> &'static str {
         match self {
@@ -58,6 +91,12 @@ impl Default for HotkeyConfig {
 pub struct Config {
     pub api_key: Option<String>,
     #[serde(default)]
+    pub llm_api_key: Option<String>,
+    #[serde(default)]
+    pub llm_provider: LlmProvider,
+    #[serde(default)]
+    pub llm_model: Option<String>,
+    #[serde(default)]
     pub smart_format: bool,
     #[serde(default = "default_model")]
     pub model: String,
@@ -86,6 +125,9 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             api_key: None,
+            llm_api_key: None,
+            llm_provider: LlmProvider::Auto,
+            llm_model: None,
             smart_format: false,
             model: default_model(),
             language: None,
@@ -216,6 +258,13 @@ impl Config {
             };
         }
 
+        for value in [&mut self.llm_api_key, &mut self.llm_model] {
+            if let Some(text) = value {
+                let trimmed = text.trim();
+                *value = (!trimmed.is_empty()).then(|| trimmed.to_string());
+            }
+        }
+
         if self.history_limit == 0 {
             return Err("History limit must be greater than zero".to_string());
         }
@@ -277,6 +326,20 @@ mod tests {
 
         assert_eq!(config.key_terms, vec!["alpha", "beta"]);
         assert_eq!(config.audio_input.as_deref(), Some("Headset Mic"));
+    }
+
+    #[test]
+    fn normalize_trims_optional_llm_settings() {
+        let mut config = Config {
+            llm_api_key: Some("  sk-test  ".into()),
+            llm_model: Some("  gpt-test  ".into()),
+            ..Config::default()
+        };
+
+        config.normalize().unwrap();
+
+        assert_eq!(config.llm_api_key.as_deref(), Some("sk-test"));
+        assert_eq!(config.llm_model.as_deref(), Some("gpt-test"));
     }
 
     #[test]

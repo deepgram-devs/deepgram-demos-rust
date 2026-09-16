@@ -11,6 +11,7 @@ mod deepgram;
 mod focus_target;
 mod history;
 mod hotkey;
+mod llm;
 mod logger;
 mod output;
 mod settings;

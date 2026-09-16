@@ -81,6 +81,30 @@ Failures must be visible in the settings window, not only in logs. Plain text fi
 
 When the focused-app delivery toggle is enabled, Velocity must deliver completed transcripts to the application focused at the end of the transcription connection. When it is disabled, Velocity must deliver completed transcripts to the application that was focused when recording started.
 
+## LLM Transcript Normalization
+
+Velocity supports an optional LLM normalization layer between raw Deepgram transcription and every typing or clipboard action.
+
+- Keep the provider integration in a separate Rust module, currently `src/llm.rs`; do not embed provider HTTP logic in the GPUI settings view, tray code, or output code.
+- The normalization boundary must cover both prerecorded transcription and streaming transcription. Raw Deepgram text must pass through the same state-level normalization path before it is typed, copied, pasted, or stored in transcript history.
+- If no LLM API key and model are configured, preserve the existing behavior and deliver the raw Deepgram transcript.
+- The default system prompt must request readability improvements such as punctuation, capitalization, spacing, and obvious transcription corrections while preserving the message's meaning, intent, tone, and important details. The provider response must contain only the normalized message.
+- Support these providers:
+  - OpenAI
+  - Gemini
+  - Anthropic
+  - Together AI
+- Determine the provider from the supplied API-key format when the provider is set to auto-detect. The UI may also allow an explicit provider selection for keys that do not have a recognizable prefix or for compatible provider configurations.
+- Use TLS for every provider request. Never log or expose an API key in status text, logs, errors, test fixtures, source control, or generated documentation.
+- The GPUI settings screen must provide a masked LLM API-key field. This is separate from the Deepgram API-key field.
+- The GPUI settings screen must provide a provider drop-down containing auto-detect, OpenAI, Gemini, Anthropic, and Together AI.
+- After an API key and provider are available, query that provider's model-list API dynamically. Do not ship a hard-coded abbreviated model catalog as the source of truth.
+- Populate a second model drop-down from the provider response, preserve a saved model when it remains available, and show a visible loading or error status while discovery is in progress or fails.
+- Persist the LLM API key, selected provider, and selected model in `%USERPROFILE%\.config\deepgram\velocity.yml`; load them on startup and retain compatibility with configurations that do not contain these optional fields.
+- LLM model discovery and normalization requests must not block GPUI input or the tray message loop. Run network work asynchronously or on worker threads and surface failures in the settings/runtime status.
+- If normalization fails, keep the raw transcript available and show a detailed, key-free error. Do not silently discard a completed transcription.
+- Add automated tests for provider detection, optional configuration defaults/normalization, and response parsing where practical. Add manual coverage for each provider, dynamic model loading, saving/reloading the LLM settings, successful normalization, provider/API errors, and fallback behavior.
+
 ## Windows Sign-In Startup
 
 The `Launch Velocity when I sign in to Windows` setting is not part of `velocity.yml`.

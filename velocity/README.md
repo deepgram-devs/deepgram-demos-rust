@@ -5,7 +5,8 @@ Push-to-talk speech-to-text for Windows 11. Hold **Win+Ctrl+'** to record your v
 ## Requirements
 
 - Windows 11
-- A [Deepgram](https://deepgram.com) account and  API key
+- A [Deepgram](https://deepgram.com) account and API key
+- Optional: an OpenAI, Gemini, Anthropic, or Together AI API key for transcript normalization
 
 ## Setup
 
@@ -49,6 +50,7 @@ The settings window is available from the tray menu and is implemented directly 
 It lets you configure:
 
 - Deepgram API key
+- optional LLM API key, provider, and dynamically discovered model
 - transcription model
 - transcription language
 - Smart Formatting
@@ -100,6 +102,9 @@ history_limit: 20
 output_mode: direct-input
 append_newline: false
 deliver_to_focused_app: true
+llm_api_key: your-llm-api-key
+llm_provider: auto
+llm_model: your-selected-model
 hotkeys:
   push_to_talk: Win+Ctrl+'
   keep_talking: Win+Ctrl+Shift+'
@@ -107,6 +112,8 @@ hotkeys:
 ```
 
 The configuration file is watched for changes. Valid edits take effect without restarting. Invalid edits are rejected and the app keeps the last known good configuration. A backup copy is saved to `%USERPROFILE%\.config\deepgram\velocity.backup.yml` when the app runs.
+
+When an LLM API key is configured, Velocity identifies the provider from the key prefix when `llm_provider` is `auto`, queries that provider for available models, and sends each raw Deepgram transcript through a meaning-preserving normalization prompt before delivery. If normalization fails, Velocity keeps the raw transcript and shows the error in the settings status area.
 
 ## Models
 
