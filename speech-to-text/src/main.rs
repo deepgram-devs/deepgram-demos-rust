@@ -8,7 +8,7 @@ mod stream;
 mod transcribe;
 
 use clap::Parser;
-use dotenv::dotenv;
+use dotenvy::dotenv;
 use std::env;
 use std::path::PathBuf;
 use tokio::sync::{mpsc, oneshot};

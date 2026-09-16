@@ -396,10 +396,32 @@ The application automatically detects your microphone's sample rate and channel 
 - `symphonia`: Audio decoding library (for file streaming; supports MP3, WAV, FLAC, AAC, M4A, OGG, Vorbis, MKV, ALAC)
 - `indicatif`: Progress bars for file streaming
 - `serde`: JSON serialization/deserialization
-- `dotenv`: Environment variable loading
+- `dotenvy`: Environment variable loading
 - `futures-util`: Stream utilities
 - `clap`: Command-line argument parsing
 - `urlencoding`: URL encoding for query parameters
+
+## Testing
+
+Run the local test suite without making Deepgram API requests:
+
+```powershell
+cargo test --package dg-stt --bin dg-stt
+```
+
+Functional tests automatically skip unless `DEEPGRAM_API_KEY` is available.
+When configured, they call the hosted Deepgram API to validate model listing and
+the complete fast file-streaming `Finalize` flow:
+
+```powershell
+$env:DEEPGRAM_API_KEY = "your-api-key"
+cargo test --package dg-stt --test functional -- --nocapture
+```
+
+Do not commit the API key or place it in test fixtures.
+
+The `dg-stt` release workflow runs these functional tests with the repository's
+`DEEPGRAM_API_KEY` Actions secret before publishing release artifacts.
 
 ## Troubleshooting
 

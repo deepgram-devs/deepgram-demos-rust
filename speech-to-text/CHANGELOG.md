@@ -1,13 +1,14 @@
 # Changelog for Deepgram Rust Speech-to-Text (STT) CLI
 
-## 0.5.1 - 2026-09-15
+## 0.5.3 - 2026-09-16
 
-* File streaming now sends `Finalize` after the audio input ends and waits for
-  Deepgram's `from_finalize` result before closing the WebSocket and exiting.
-* Added `--verbose` to streaming mode to display the unique models used by the
-  request after transcription completes.
-* Microphone streaming now follows the same `Finalize`/`from_finalize` shutdown
-  flow as file streaming before closing the WebSocket.
+* Replaced unmaintained `dotenv` with maintained `dotenvy`.
+* Updated `indicatif` to 0.18.6, replacing its unmaintained `number_prefix`
+  dependency with `unit-prefix` and enabling only Unicode-width support.
+* Added optional hosted functional tests for model listing and the complete
+  fast file-streaming Finalize flow when `DEEPGRAM_API_KEY` is configured.
+* The release workflow now runs hosted functional tests with the
+  `DEEPGRAM_API_KEY` repository secret before publishing artifacts.
 
 ## 0.5.2 - 2026-09-15
 
@@ -33,6 +34,15 @@
 * `--fast` now streams at Deepgram's maximum supported 1.25x realtime rate so
   the API receives the complete audio before the Finalize flow.
 * Verbose model summaries now include the transcription model UUID.
+
+## 0.5.1 - 2026-09-15
+
+* File streaming now sends `Finalize` after the audio input ends and waits for
+  Deepgram's `from_finalize` result before closing the WebSocket and exiting.
+* Added `--verbose` to streaming mode to display the unique models used by the
+  request after transcription completes.
+* Microphone streaming now follows the same `Finalize`/`from_finalize` shutdown
+  flow as file streaming before closing the WebSocket.
 
 ## 0.5.0 - 2026-08-25
 

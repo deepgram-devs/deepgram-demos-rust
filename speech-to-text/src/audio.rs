@@ -597,7 +597,10 @@ impl AudioFileReader {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_stream_rate, probe_extension};
+    use super::{
+        AudioEvent, file_stream_rate, probe_extension, start_audio_fanout,
+        start_bounded_audio_fanout,
+    };
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -637,5 +640,34 @@ mod tests {
     fn fast_mode_uses_deepgrams_maximum_streaming_rate() {
         assert_eq!(file_stream_rate(false), 1.0);
         assert_eq!(file_stream_rate(true), 1.25);
+    }
+
+    #[tokio::test]
+    async fn bounded_file_fanout_preserves_order_and_sends_end_to_every_connection() {
+        let (tx, mut receivers, fanout_task) = start_bounded_audio_fanout(2, 4);
+
+        tx.send(vec![1]).await.unwrap();
+        tx.send(vec![2]).await.unwrap();
+        drop(tx);
+        fanout_task.await.unwrap();
+
+        for receiver in &mut receivers {
+            assert!(matches!(receiver.recv().await, Some(AudioEvent::Data(data)) if data == [1]));
+            assert!(matches!(receiver.recv().await, Some(AudioEvent::Data(data)) if data == [2]));
+            assert!(matches!(receiver.recv().await, Some(AudioEvent::End)));
+        }
+    }
+
+    #[tokio::test]
+    async fn microphone_fanout_sends_end_after_source_closes() {
+        let (tx, mut receivers, fanout_task) = start_audio_fanout(1);
+        let receiver = receivers.first_mut().unwrap();
+
+        tx.send(vec![7, 8]).unwrap();
+        drop(tx);
+
+        assert!(matches!(receiver.recv().await, Some(AudioEvent::Data(data)) if data == [7, 8]));
+        assert!(matches!(receiver.recv().await, Some(AudioEvent::End)));
+        fanout_task.await.unwrap();
     }
 }

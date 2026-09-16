@@ -789,3 +789,74 @@ fn parse_redact_entities(redact_value: &str) -> Vec<String> {
 
     entities
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{add_used_models, control_message_name, finalize_and_close};
+    use crate::protocol::DeepgramResponse;
+    use std::collections::HashSet;
+    use std::time::Instant;
+    use tokio::sync::{mpsc, oneshot};
+    use tokio_tungstenite::tungstenite::Message;
+
+    #[test]
+    fn identifies_websocket_control_messages() {
+        let finalize = Message::Text(r#"{"type":"Finalize"}"#.into());
+        let close = Message::Text(r#"{"type":"CloseStream"}"#.into());
+        let keepalive = Message::Text(r#"{"type":"KeepAlive"}"#.into());
+
+        assert_eq!(control_message_name(&finalize), Some("Finalize"));
+        assert_eq!(control_message_name(&close), Some("CloseStream"));
+        assert_eq!(control_message_name(&keepalive), Some("KeepAlive"));
+        assert_eq!(control_message_name(&Message::Binary(vec![1].into())), None);
+    }
+
+    #[test]
+    fn model_collection_includes_uuids_and_deduplicates_results() {
+        let response: DeepgramResponse = serde_json::from_str(
+            r#"{"type":"Results","metadata":{"model_info":{"name":"nova-3","version":"1","arch":"nova-3"},"model_uuid":"transcriber","diarize_info":{"model_uuid":"diarizer","arch":"v1"}}}"#,
+        )
+        .unwrap();
+        let mut models = Vec::new();
+        let mut seen = HashSet::new();
+
+        add_used_models(&response, &mut models, &mut seen);
+        add_used_models(&response, &mut models, &mut seen);
+
+        assert_eq!(models.len(), 2);
+        assert!(models[0].contains("model UUID: transcriber"));
+        assert!(models[1].contains("model UUID: diarizer"));
+    }
+
+    #[tokio::test]
+    async fn finalize_acknowledgement_precedes_close_stream() {
+        let (msg_tx, mut msg_rx) = mpsc::channel(4);
+        let (finalize_tx, mut finalize_rx) = oneshot::channel();
+        let (_shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel();
+
+        let task = tokio::spawn(async move {
+            finalize_and_close(
+                &msg_tx,
+                &mut finalize_rx,
+                &mut shutdown_rx,
+                &mut result_rx,
+                "",
+                false,
+                Instant::now(),
+                "test",
+            )
+            .await
+        });
+
+        let first = msg_rx.recv().await.unwrap();
+        assert_eq!(control_message_name(&first), Some("Finalize"));
+
+        result_tx.send(()).unwrap();
+        finalize_tx.send(()).unwrap();
+
+        let second = msg_rx.recv().await.unwrap();
+        assert_eq!(control_message_name(&second), Some("CloseStream"));
+        assert!(task.await.unwrap().is_ok());
+    }
+}

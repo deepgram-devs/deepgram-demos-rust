@@ -14,7 +14,32 @@ permissions:
   contents: write
 
 jobs:
+  functional-tests:
+    name: Hosted functional tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libasound2-dev pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run hosted functional tests
+        env:
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+        run: |
+          test -n "$DEEPGRAM_API_KEY"
+          cargo test --locked --package dg-stt --test functional -- --nocapture
+
   release:
+    needs: functional-tests
     uses: ./.github/workflows/reusable-rust-release.yml
     with:
       app: dg-stt
