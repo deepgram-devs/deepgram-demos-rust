@@ -1,5 +1,11 @@
 # Changelog for Deepgram Rust Speech-to-Text (STT) CLI
 
+## 0.5.4 - 2026-10-01
+
+* Added comma-separated `--tag` options to transcribe and streaming commands for
+  labeling Deepgram usage data. Tag values are URL-encoded and validated against
+  Deepgram's 128-character limit.
+
 ## 0.5.3 - 2026-09-16
 
 * Replaced unmaintained `dotenv` with maintained `dotenvy`.

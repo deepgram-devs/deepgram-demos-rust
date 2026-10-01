@@ -92,6 +92,10 @@ pub struct TranscribeArgs {
     /// Comma-separated keywords to boost recognition for (nova-2 and older, optional intensifier per word, e.g. --keywords "Deepgram:2,API,speech:-1")
     #[arg(long, conflicts_with = "keyterm")]
     pub keywords: Option<String>,
+
+    /// Comma-separated usage tags for grouping Deepgram usage data (max 128 characters each)
+    #[arg(long)]
+    pub tag: Option<String>,
 }
 
 // Response structures for pre-recorded API
@@ -236,6 +240,9 @@ pub async fn run_transcribe_mode(
     api_key: Option<String>,
     args: TranscribeArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let tags = crate::tags::parse(args.tag.as_deref());
+    crate::tags::validate(&tags)?;
+
     let (content_type, request_body) = if let Some(remote_url) = args.url.as_deref() {
         let parsed_url = reqwest::Url::parse(remote_url)
             .map_err(|error| format!("Invalid audio URL '{remote_url}': {error}"))?;
@@ -265,6 +272,8 @@ pub async fn run_transcribe_mode(
         .unwrap_or_else(|| "https://api.deepgram.com".to_string());
     let mut url = format!("{}/v1/listen?", base_url);
     let mut params = Vec::new();
+
+    crate::tags::append_query_params(&mut params, &tags);
 
     // Add model parameter
     if let Some(model_name) = args.model {

@@ -29,6 +29,10 @@ pub enum StreamSource {
         #[arg(long)]
         endpoint: Option<String>,
 
+        /// Comma-separated usage tags for grouping Deepgram usage data (max 128 characters each)
+        #[arg(long)]
+        tag: Option<String>,
+
         /// Number of parallel Deepgram streaming connections to open with the same input audio
         #[arg(long, default_value_t = 1)]
         connections: usize,
@@ -155,6 +159,10 @@ pub enum StreamSource {
         /// Override the Deepgram API base URL
         #[arg(long)]
         endpoint: Option<String>,
+
+        /// Comma-separated usage tags for grouping Deepgram usage data (max 128 characters each)
+        #[arg(long)]
+        tag: Option<String>,
 
         /// Number of parallel Deepgram streaming connections to open with the same input audio
         #[arg(long, default_value_t = 1)]

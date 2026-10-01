@@ -167,6 +167,8 @@ pub(crate) async fn run_deepgram_client(
     let mut url = format!("{}/v1/listen?", base_url);
     let mut params = Vec::new();
 
+    crate::tags::append_query_params(&mut params, &config.tags);
+
     // Add encoding parameter (default to linear16 if not specified)
     let encoding_value = config
         .encoding

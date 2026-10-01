@@ -5,6 +5,7 @@ mod models;
 mod monitor;
 mod protocol;
 mod stream;
+mod tags;
 mod transcribe;
 
 use clap::Parser;
@@ -224,7 +225,10 @@ async fn run_microphone_mode(
     utterance_end: Option<u32>,
     keyterm: Option<String>,
     keywords: Option<String>,
+    tags: Vec<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    tags::validate(&tags)?;
+
     if connections == 0 {
         return Err("--connections must be at least 1".into());
     }
@@ -284,6 +288,7 @@ async fn run_microphone_mode(
         utterance_end,
         keyterm,
         keywords,
+        tags,
     };
 
     let mut deepgram_tasks = Vec::with_capacity(connections);
@@ -393,7 +398,10 @@ async fn run_file_mode(
     utterance_end: Option<u32>,
     keyterm: Option<String>,
     keywords: Option<String>,
+    tags: Vec<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    tags::validate(&tags)?;
+
     if connections == 0 {
         return Err("--connections must be at least 1".into());
     }
@@ -468,6 +476,7 @@ async fn run_file_mode(
         utterance_end,
         keyterm,
         keywords,
+        tags,
     };
 
     let mut ready_receivers = Vec::with_capacity(connections);
@@ -607,8 +616,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 utterance_end,
                 keyterm,
                 keywords,
+                tag,
             } => {
                 let api_key = api_key_for_endpoint(endpoint.as_deref())?;
+                let tags = tags::parse(tag.as_deref());
                 run_microphone_mode(
                     api_key,
                     connections,
@@ -640,6 +651,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     utterance_end,
                     keyterm,
                     keywords,
+                    tags,
                 )
                 .await?
             }
@@ -675,8 +687,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 utterance_end,
                 keyterm,
                 keywords,
+                tag,
             } => {
                 let api_key = api_key_for_endpoint(endpoint.as_deref())?;
+                let tags = tags::parse(tag.as_deref());
                 run_file_mode(
                     api_key,
                     connections,
@@ -710,6 +724,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     utterance_end,
                     keyterm,
                     keywords,
+                    tags,
                 )
                 .await?
             }

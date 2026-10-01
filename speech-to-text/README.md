@@ -14,6 +14,7 @@ A real-time speech-to-text CLI using Rust that connects to the Deepgram API via 
 - Voice activity detection (VAD) events
 - Sentiment analysis, intent recognition, topic detection, and entity detection
 - Keyword/keyterm boosting for improved recognition of domain-specific terms
+- Usage tags for grouping and filtering Deepgram usage data
 - Configurable endpointing and utterance-end detection
 - WebSocket connection to Deepgram API for live transcription
 - Parallel streaming connections with the same input audio using `--connections`
@@ -186,6 +187,7 @@ cargo run -- transcribe --url https://dpgr.am/spacewalk.wav
 | `--connections <N>` | Open N parallel Deepgram streaming WebSocket connections fed by the same microphone or file audio |
 | `--keyterm <TERMS>` | Comma-separated keyterms for nova-3+ (e.g., `"Deepgram,nova-3"`) |
 | `--keywords <TERMS>` | Comma-separated keywords for nova-2 and older, with optional intensifier (e.g., `"Deepgram:2,API"`) |
+| `--tag <TAGS>` | Comma-separated usage tags (each tag is limited to 128 characters) |
 | `--endpointing <MS>` | Endpointing silence threshold in ms (e.g., `300`) |
 | `--utterance-end <MS>` | Utterance end timeout in ms; sends `UtteranceEnd` after the configured gap (requires `--interim-results`) |
 | `--fast` | Stream at Deepgram's maximum supported 1.25× realtime rate (file mode only) |
@@ -194,6 +196,9 @@ cargo run -- transcribe --url https://dpgr.am/spacewalk.wav
 | `--verbose` | Display the unique models used after streaming completes |
 | `--output <FORMAT>` | Streaming output format: `text` (default) or `json` for each raw Deepgram response message |
 | `--monitor` | Show an interactive dashboard for streaming connections; conflicts with `--output json` |
+
+Deepgram stores tags with usage data for filtering and grouping. The CLI sends one
+`tag` query parameter for each comma-separated value; see the [Deepgram tagging guide](https://developers.deepgram.com/guides/fundamentals/tagging-your-usage-data).
 
 ### Examples
 
@@ -205,6 +210,9 @@ cargo run -- stream microphone
 
 # Transcribe from microphone with punctuation and smart formatting
 cargo run -- stream microphone --punctuate --smart-format
+
+# Tag microphone usage by environment and application
+cargo run -- stream microphone --tag prod,speech-cli
 
 # Transcribe from microphone with speaker diarization
 cargo run -- stream microphone --diarize
@@ -232,6 +240,9 @@ cargo run -- stream microphone --connections 3
 
 # Transcribe a WAV file at real-time rate
 cargo run -- stream file --file recording.wav
+
+# Tag file-streaming usage
+cargo run -- stream file --file recording.wav --tag batch,podcast-import
 
 # Feed the same file audio into five parallel Deepgram streams
 cargo run -- stream file --file recording.wav --connections 5
@@ -272,6 +283,9 @@ cargo run -- stream file --file audio.mp3 --verbose
 ```bash
 # Simple transcription
 cargo run -- transcribe --file audio.mp3
+
+# Tag pre-recorded transcription usage
+cargo run -- transcribe --file audio.mp3 --tag prod,billing-audio
 
 # With punctuation and smart formatting
 cargo run -- transcribe --file audio.mp3 --punctuate true --smart-format true
@@ -419,6 +433,8 @@ cargo test --package dg-stt --test functional -- --nocapture
 ```
 
 Do not commit the API key or place it in test fixtures.
+
+For usage tags, see the manual checks in [MANUAL_TEST_PLAN.md](MANUAL_TEST_PLAN.md).
 
 The `dg-stt` release workflow runs these functional tests with the repository's
 `DEEPGRAM_API_KEY` Actions secret before publishing release artifacts.

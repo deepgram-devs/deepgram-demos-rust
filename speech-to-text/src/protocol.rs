@@ -96,4 +96,5 @@ pub(crate) struct DeepgramClientConfig {
     pub(crate) utterance_end: Option<u32>,
     pub(crate) keyterm: Option<String>,
     pub(crate) keywords: Option<String>,
+    pub(crate) tags: Vec<String>,
 }
