@@ -84,6 +84,8 @@ Use **Copy request ID** to copy only the current Deepgram request ID from the co
 
 Run `voice-agent tui --verbose` to write TUI connection and server errors to `voice-agent.log` in the current working directory.
 
+Use `--json-log <PATH>` with the CLI or `tui` subcommand to append every sent and received Voice Agent JSON message to the selected file. Each entry starts with a UTC timestamp in `YYYY-MM-DD HH:MM:SS.mmm UTC` 24-hour format, followed by `CLIENT` or `SERVER` and the raw payload. WebSocket binary audio frames are not logged. Since the file contains the raw payloads, it may include credentials or custom headers configured in the Settings message; protect the log file accordingly. See the [manual test plan](MANUAL_TEST_PLAN.md).
+
 User messages, agent messages, and client-side injection/control messages use different colors in the event pane.
 
 The TUI exposes the documented Voice Agent client controls: `UpdateListen`, `UpdateSpeak`, `UpdatePrompt`, `InjectAgentMessage`, `InjectUserMessage`, `ForceEndTurn`, and `AgentKeepAlive`. Actions that accept fields open an input dialog: agent injection asks for the message and `default`/`queue`/`interrupt` behavior, user injection asks for the message, think updates ask for the model, and listen/speak updates use selectors. Force-ending a turn requires Flux STT (V2). See [Deepgram Inputs: Client Messages](https://developers.deepgram.com/docs/voice-agent-inputs). The TTS chooser includes the complete current [Aura-2 catalog](https://developers.deepgram.com/docs/tts-models) and [Flux TTS catalog](https://developers.deepgram.com/docs/flux-tts/voices).
@@ -122,6 +124,7 @@ cargo run
 | `--audio-encoding <ENCODING>` | `linear16` | Microphone encoding for Voice Agent audio input: `linear16`, `linear32`, `mulaw`, or `alaw` |
 | `--audio-sample-rate <HZ>` | OS default | Microphone capture and Voice Agent audio input sample rate; when omitted, uses the operating system's default input rate |
 | `--save-audio <PATH>` | _(none)_ | Save the encoded microphone stream as a raw local file |
+| `--json-log <PATH>` | _(none)_ | Append sent and received Voice Agent JSON messages to a file; binary audio frames are excluded |
 | `--speak-model <MODEL>` | `aura-2-thalia-en` | TTS model for agent voice |
 | `--think-type <TYPE>` | `open_ai` | LLM provider type |
 | `--think-model <MODEL>` | `gpt-4o-mini` | LLM model |
@@ -164,6 +167,12 @@ cargo run -- --prompt "You are a helpful assistant that speaks only in rhymes."
 
 # Keep mic live during playback (e.g., using headphones)
 cargo run -- --no-mic-mute
+
+# Log Voice Agent JSON messages while audio continues over binary frames
+cargo run -- --json-log voice-agent-messages.log
+
+# Use the same file logging option with the TUI
+cargo run -- tui --json-log voice-agent-messages.log
 ```
 
 ### Listen Provider and Audio

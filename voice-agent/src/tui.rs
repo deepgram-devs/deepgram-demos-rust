@@ -1889,10 +1889,18 @@ async fn worker_loop(
     });
     let mut ws =
         connect_to_voice_agent(&key, &args.endpoint, rate, channels, args.verbose, false).await?;
+    let mut payload_logger = args
+        .json_log
+        .as_deref()
+        .map(crate::json_logging::JsonPayloadLogger::open)
+        .transpose()?;
     let welcome = ws
         .next()
         .await
         .ok_or("Voice Agent connection closed before Welcome message")??;
+    if let (Some(logger), Message::Text(text)) = (&mut payload_logger, &welcome) {
+        logger.record("SERVER", text)?;
+    }
     let welcome_text = match welcome {
         Message::Text(text) => text.to_string(),
         message => {
@@ -1923,8 +1931,14 @@ async fn worker_loop(
     let config = serde_json::to_string(&config)?;
     let (mut sink, mut stream) = ws.split();
     record_json_message(&mut json_history, &mut json_log, "CLIENT", &config)?;
-    sink.send(Message::Text(config.into())).await?;
+    sink.send(Message::Text(config.clone().into())).await?;
+    if let Some(logger) = &mut payload_logger {
+        logger.record("CLIENT", &config)?;
+    }
     let _ = out.send("__CONNECTED__".into());
+    if let Some(logger) = &payload_logger {
+        let _ = out.send(format!("__JSON_LOG__|{}", logger.path().display()));
+    }
     if let Some(log) = &json_log {
         let _ = out.send(format!("__JSON_LOG__|{}", log.path.display()));
     }
@@ -1944,7 +1958,10 @@ async fn worker_loop(
                 WorkerCommand::Stop => break,
                 WorkerCommand::Json(json) => {
                     record_json_message(&mut json_history, &mut json_log, "CLIENT", &json)?;
-                    sink.send(Message::Text(json.into())).await?
+                    sink.send(Message::Text(json.clone().into())).await?;
+                    if let Some(logger) = &mut payload_logger {
+                        logger.record("CLIENT", &json)?;
+                    }
                 }
                 WorkerCommand::SetJsonLogging(enabled) => {
                     if enabled && json_log.is_none() {
@@ -1966,6 +1983,9 @@ async fn worker_loop(
                 Message::Text(text) => {
                     let text = text.to_string();
                     record_json_message(&mut json_history, &mut json_log, "SERVER", &text)?;
+                    if let Some(logger) = &mut payload_logger {
+                        logger.record("SERVER", &text)?;
+                    }
                     if let Ok(response) = serde_json::from_str::<VoiceAgentResponse>(&text) {
                         match response.message_type.as_str() {
                             "ConversationText" => {

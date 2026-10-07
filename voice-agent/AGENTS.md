@@ -19,6 +19,7 @@ Keep this file up-to-date whenever voice-agent functionality or user-facing beha
 - HTTP-to-WebSocket upgrade diagnostics must not be rendered in the TUI; they may be retained in diagnostic logging when enabled.
 - The TUI must suppress rodio's `Dropping OutputStream` shutdown diagnostic so closing a connection does not print over the interface.
 - When the TUI is launched with `--verbose`, it must append connection and server errors to `voice-agent.log` in the current working directory.
+- The Voice Agent CLI must support `--json-log <PATH>` to append sent and received JSON text messages to a file, prefixing each entry with a UTC 24-hour timestamp and direction while excluding binary audio frames; the option must also work with the `tui` subcommand.
 - The voice-agent TUI must provide a full system-prompt editor with text insertion, deletion, cursor navigation, and forward/backward navigation controls, and must send the edited prompt through the supported Voice Agent update message.
 - The system-prompt editor must support word-wise backward and forward movement using the terminal's control-arrow navigation (for example, `Ctrl+Left` and `Ctrl+Right`).
 - The TUI must provide a separate historical-system-prompt selector and persist selected/edited prompts for reuse.

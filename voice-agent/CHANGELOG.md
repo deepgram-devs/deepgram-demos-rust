@@ -2,7 +2,10 @@
 
 ## Unreleased
 
+## [0.1.4] - 2026-10-07
+
 ### Added
+- Added `--json-log <PATH>` to append UTC-timestamped sent and received Voice Agent JSON messages while excluding binary audio frames.
 - Accepted singleton-object reusable configuration list responses in addition to array and map forms.
 - Made every conversation message type clickable to copy it to the clipboard.
 - Accepted both array- and map-shaped Deepgram reusable configuration list responses.
@@ -32,6 +35,9 @@
 - When `--audio-sample-rate` is omitted, the microphone's operating system default input rate is used.
 - Added `--save-audio` to save the encoded microphone stream as a raw local file.
 - Updated the default Voice Agent prompt to request responses without Markdown formatting.
+
+### Changed
+- Updated the locked Ratatui release to 0.30.2, which resolves the Voice Agent TUI's `lru` dependency to a patched release.
 
 ## [0.1.3] - 2026-07-14
 

@@ -21,6 +21,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
 
 mod config;
+mod json_logging;
 mod tui;
 
 const DEFAULT_SYSTEM_PROMPT: &str =
@@ -261,6 +262,10 @@ struct LaunchOptions {
     /// Save the encoded microphone stream to a raw local file
     #[arg(long, value_name = "PATH")]
     save_audio: Option<PathBuf>,
+
+    /// Append sent and received Voice Agent JSON messages to a file
+    #[arg(long, value_name = "PATH")]
+    json_log: Option<PathBuf>,
 
     /// Eleven Labs voice ID (used in the endpoint URL)
     #[arg(long)]
@@ -1700,151 +1705,169 @@ async fn handle_voice_agent_responses(
     mute_on_playback: bool,
     verbose: bool,
     function_response_tx: mpsc::UnboundedSender<String>,
+    json_logger: Option<Arc<tokio::sync::Mutex<json_logging::JsonPayloadLogger>>>,
 ) {
     while let Some(message) = ws_receiver.next().await {
         match message {
-            Ok(Message::Text(text)) => match serde_json::from_str::<VoiceAgentResponse>(&text) {
-                Ok(response) => {
-                    debug!("📨 Message Type: {}", response.message_type);
-
-                    match response.message_type.as_str() {
-                        "ConversationText" => {
-                            let role = response
-                                .data
-                                .get("role")
-                                .and_then(|r| r.as_str())
-                                .unwrap_or("");
-                            let content = response
-                                .data
-                                .get("content")
-                                .and_then(|c| c.as_str())
-                                .unwrap_or("");
-                            match role {
-                                "user" => info!("👤 You: {}", content),
-                                "assistant" => info!("🤖 Agent: {}", content),
-                                _ => debug!("ConversationText ({}): {}", role, content),
-                            }
-                        }
-                        "AgentThinking" => {
-                            debug!("🤔 Agent is thinking...");
-                        }
-                        "AgentStartedSpeaking" => {
-                            debug!("🗣️ Agent is speaking...");
-                        }
-                        "UserStartedSpeaking" => {
-                            debug!("🎙️ User started speaking");
-                        }
-                        "AgentAudioDone" => {
-                            debug!("🔊 Agent audio done");
-                        }
-                        "Welcome" => {
-                            let request_id = response
-                                .data
-                                .get("request_id")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-                            debug!("👋 Connected: request_id={}", request_id);
-                            if verbose {
-                                info!("Request ID: {}", request_id);
-                            }
-                        }
-                        "SettingsApplied" => {
-                            debug!("✅ Settings applied");
-                        }
-                        "Error" => {
-                            let desc = response
-                                .data
-                                .get("description")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown");
-                            let code = response
-                                .data
-                                .get("code")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-                            error!("❌ Agent error [{}]: {}", code, desc);
-                        }
-                        "Warning" => {
-                            let desc = response
-                                .data
-                                .get("description")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown");
-                            let code = response
-                                .data
-                                .get("code")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-                            log::warn!("⚠️ Agent warning [{}]: {}", code, desc);
-                        }
-                        "FunctionCallRequest" => {
-                            let functions = response
-                                .data
-                                .get("functions")
-                                .and_then(|f| f.as_array())
-                                .cloned()
-                                .unwrap_or_default();
-
-                            for function in functions {
-                                let id = function
-                                    .get("id")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or_default()
-                                    .to_string();
-                                let name = function
-                                    .get("name")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or_default()
-                                    .to_string();
-                                let arguments = function
-                                    .get("arguments")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("{}");
-                                let client_side = function
-                                    .get("client_side")
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(false);
-
-                                if !client_side {
-                                    debug!("Ignoring server-side function call request: {}", name);
-                                    continue;
-                                }
-
-                                info!("🔧 Function call: {}({})", name, arguments);
-                                let content = execute_sample_function(&name, arguments);
-
-                                let function_response = serde_json::json!({
-                                    "type": "FunctionCallResponse",
-                                    "id": id,
-                                    "name": name,
-                                    "content": content,
-                                });
-                                match serde_json::to_string(&function_response) {
-                                    Ok(text) => {
-                                        if let Err(e) = function_response_tx.send(text) {
-                                            error!("Failed to queue function call response: {}", e);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to serialize function call response: {}", e);
-                                    }
-                                }
-                            }
-                        }
-                        _ => {
-                            debug!(
-                                "📄 {}: {}",
-                                response.message_type,
-                                serde_json::to_string_pretty(&response.data).unwrap_or_default()
-                            );
-                        }
+            Ok(Message::Text(text)) => {
+                if let Some(logger) = &json_logger {
+                    if let Err(error) = logger.lock().await.record("SERVER", &text) {
+                        error!("Failed to write Voice Agent JSON log: {}", error);
                     }
                 }
-                Err(e) => {
-                    error!("Failed to parse response: {}", e);
-                    debug!("📨 Raw response: {}", text);
+                match serde_json::from_str::<VoiceAgentResponse>(&text) {
+                    Ok(response) => {
+                        debug!("📨 Message Type: {}", response.message_type);
+
+                        match response.message_type.as_str() {
+                            "ConversationText" => {
+                                let role = response
+                                    .data
+                                    .get("role")
+                                    .and_then(|r| r.as_str())
+                                    .unwrap_or("");
+                                let content = response
+                                    .data
+                                    .get("content")
+                                    .and_then(|c| c.as_str())
+                                    .unwrap_or("");
+                                match role {
+                                    "user" => info!("👤 You: {}", content),
+                                    "assistant" => info!("🤖 Agent: {}", content),
+                                    _ => debug!("ConversationText ({}): {}", role, content),
+                                }
+                            }
+                            "AgentThinking" => {
+                                debug!("🤔 Agent is thinking...");
+                            }
+                            "AgentStartedSpeaking" => {
+                                debug!("🗣️ Agent is speaking...");
+                            }
+                            "UserStartedSpeaking" => {
+                                debug!("🎙️ User started speaking");
+                            }
+                            "AgentAudioDone" => {
+                                debug!("🔊 Agent audio done");
+                            }
+                            "Welcome" => {
+                                let request_id = response
+                                    .data
+                                    .get("request_id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                debug!("👋 Connected: request_id={}", request_id);
+                                if verbose {
+                                    info!("Request ID: {}", request_id);
+                                }
+                            }
+                            "SettingsApplied" => {
+                                debug!("✅ Settings applied");
+                            }
+                            "Error" => {
+                                let desc = response
+                                    .data
+                                    .get("description")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown");
+                                let code = response
+                                    .data
+                                    .get("code")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                error!("❌ Agent error [{}]: {}", code, desc);
+                            }
+                            "Warning" => {
+                                let desc = response
+                                    .data
+                                    .get("description")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown");
+                                let code = response
+                                    .data
+                                    .get("code")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                log::warn!("⚠️ Agent warning [{}]: {}", code, desc);
+                            }
+                            "FunctionCallRequest" => {
+                                let functions = response
+                                    .data
+                                    .get("functions")
+                                    .and_then(|f| f.as_array())
+                                    .cloned()
+                                    .unwrap_or_default();
+
+                                for function in functions {
+                                    let id = function
+                                        .get("id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or_default()
+                                        .to_string();
+                                    let name = function
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or_default()
+                                        .to_string();
+                                    let arguments = function
+                                        .get("arguments")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("{}");
+                                    let client_side = function
+                                        .get("client_side")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+
+                                    if !client_side {
+                                        debug!(
+                                            "Ignoring server-side function call request: {}",
+                                            name
+                                        );
+                                        continue;
+                                    }
+
+                                    info!("🔧 Function call: {}({})", name, arguments);
+                                    let content = execute_sample_function(&name, arguments);
+
+                                    let function_response = serde_json::json!({
+                                        "type": "FunctionCallResponse",
+                                        "id": id,
+                                        "name": name,
+                                        "content": content,
+                                    });
+                                    match serde_json::to_string(&function_response) {
+                                        Ok(text) => {
+                                            if let Err(e) = function_response_tx.send(text) {
+                                                error!(
+                                                    "Failed to queue function call response: {}",
+                                                    e
+                                                );
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                "Failed to serialize function call response: {}",
+                                                e
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {
+                                debug!(
+                                    "📄 {}: {}",
+                                    response.message_type,
+                                    serde_json::to_string_pretty(&response.data)
+                                        .unwrap_or_default()
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to parse response: {}", e);
+                        debug!("📨 Raw response: {}", text);
+                    }
                 }
-            },
+            }
             Ok(Message::Binary(data)) => {
                 debug!("🔊 Received binary audio data: {} bytes", data.len());
                 if mute_on_playback {
@@ -1949,6 +1972,18 @@ async fn run_voice_agent(
     let api_key = env::var("DEEPGRAM_API_KEY")
         .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
 
+    let mut json_logger = args
+        .json_log
+        .as_deref()
+        .map(json_logging::JsonPayloadLogger::open)
+        .transpose()?;
+    if let Some(logger) = &json_logger {
+        info!(
+            "Logging Voice Agent JSON messages to {}",
+            logger.path().display()
+        );
+    }
+
     // Load Eleven Labs API key if using eleven_labs speak provider
     let eleven_labs_api_key = load_eleven_labs_api_key(&args)?;
 
@@ -2035,11 +2070,14 @@ async fn run_voice_agent(
     .await?;
 
     // Deepgram requires the server's Welcome message before receiving Settings.
-    let welcome = ws_stream
+    let welcome_message = ws_stream
         .next()
         .await
         .ok_or("Voice Agent connection closed before Welcome message")??;
-    let welcome = match welcome {
+    if let (Some(logger), Message::Text(text)) = (&mut json_logger, &welcome_message) {
+        logger.record("SERVER", text)?;
+    }
+    let welcome = match welcome_message {
         Message::Text(text) => serde_json::from_str::<VoiceAgentResponse>(&text)
             .map_err(|error| format!("invalid Voice Agent Welcome message: {error}"))?,
         message => {
@@ -2077,7 +2115,12 @@ async fn run_voice_agent(
     }
 
     let (mut ws_sender, ws_receiver) = ws_stream.split();
-    ws_sender.send(Message::Text(config_json.into())).await?;
+    ws_sender
+        .send(Message::Text(config_json.clone().into()))
+        .await?;
+    if let Some(logger) = &mut json_logger {
+        logger.record("CLIENT", &config_json)?;
+    }
     debug!("✅ Settings configuration sent successfully");
 
     // Wait a moment for configuration to be processed
@@ -2086,6 +2129,8 @@ async fn run_voice_agent(
     // Spawn task to handle WebSocket responses
     let playback_tx_clone = playback_tx.clone();
     let mic_enabled_for_ws = Arc::clone(&mic_enabled);
+    let json_logger = json_logger.map(|logger| Arc::new(tokio::sync::Mutex::new(logger)));
+    let response_json_logger = json_logger.clone();
     let response_handle = tokio::spawn(async move {
         handle_voice_agent_responses(
             ws_receiver,
@@ -2094,6 +2139,7 @@ async fn run_voice_agent(
             mute_on_playback,
             args.verbose,
             function_response_tx,
+            response_json_logger,
         )
         .await;
     });
@@ -2134,9 +2180,15 @@ async fn run_voice_agent(
                     match function_response {
                         Some(text) => {
                             debug!("📤 Sending function call response: {}", text);
-                            if let Err(e) = ws_sender.send(Message::Text(text.into())).await {
+                            if let Err(e) = ws_sender.send(Message::Text(text.clone().into())).await {
                                 error!("❌ Failed to send function call response: {}", e);
                                 break;
+                            }
+                            if let Some(logger) = &json_logger {
+                                if let Err(e) = logger.lock().await.record("CLIENT", &text) {
+                                    error!("Failed to write Voice Agent JSON log: {}", e);
+                                    break;
+                                }
                             }
                         }
                         None => function_responses_closed = true,
