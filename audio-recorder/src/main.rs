@@ -39,9 +39,9 @@ enum Commands {
     ListDevices,
     /// Record audio from an input device
     Record {
-        /// Output file path (default: output.wav)
-        #[arg(short, long, default_value = "output.wav")]
-        output: String,
+        /// Output file path (default: next available output-NNNN.wav)
+        #[arg(short, long)]
+        output: Option<String>,
 
         /// Specific device name to record from (default: system default input device)
         #[arg(short, long)]
@@ -67,8 +67,27 @@ fn main() -> Result<()> {
             device,
             duration,
             sample_rate,
-        } => record_audio(&output, device.as_deref(), duration, sample_rate),
+        } => {
+            let output_path = match output {
+                Some(path) => path,
+                None => next_default_output_path()?,
+            };
+            record_audio(&output_path, device.as_deref(), duration, sample_rate)
+        }
     }
+}
+
+fn next_default_output_path() -> Result<String> {
+    for number in 1..=9999 {
+        let path = format!("output-{number:04}.wav");
+        if !Path::new(&path).exists() {
+            return Ok(path);
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "No available default output filename remains (output-0001.wav through output-9999.wav already exist)"
+    ))
 }
 
 fn list_devices() -> Result<()> {

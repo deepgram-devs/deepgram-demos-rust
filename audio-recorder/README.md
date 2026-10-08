@@ -60,6 +60,8 @@ Record from the default microphone until you press Ctrl+C:
 cargo run -- record
 ```
 
+When `--output` is omitted, each run saves to the next available numbered file, such as `output-0001.wav`, `output-0002.wav`, and so on. Existing numbered files are preserved.
+
 #### Specify Output File
 
 Record to a specific file:
@@ -129,7 +131,7 @@ audio-recorder record [OPTIONS]
 ```
 
 **Options:**
-- `-o, --output <FILE>` - Output file path (default: output.wav)
+- `-o, --output <FILE>` - Output file path (default: next available `output-NNNN.wav`)
 - `-d, --device <NAME>` - Specific device name to record from (default: system default)
 - `-t, --duration <SECONDS>` - Duration in seconds (default: records until Ctrl+C)
 - `-h, --help` - Print help information
