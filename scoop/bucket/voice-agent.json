@@ -1,0 +1,18 @@
+{
+  "version": "0.1.5",
+  "description": "Deepgram Voice Agent client for real-time bidirectional conversations.",
+  "homepage": "https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/voice-agent",
+  "license": "ISC",
+  "notes": "Installed from the voice-agent-v0.1.5 GitHub release.",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/voice-agent-v0.1.5/voice-agent-0.1.5-windows-x64.zip",
+      "hash": "42e2b28e4735b567b67f3bd173dc1afb994a7cd2e117ba3db5842d4ad6aa3c53"
+    },
+    "arm64": {
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/voice-agent-v0.1.5/voice-agent-0.1.5-windows-arm64.zip",
+      "hash": "3e4ce6caf499ab54c6c1f807cccacffa0b5a1010fdb19d251ab6b6c1d4f8e0bd"
+    }
+  },
+  "bin": "voice-agent.exe"
+}
