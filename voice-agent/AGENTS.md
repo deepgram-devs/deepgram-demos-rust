@@ -5,6 +5,10 @@ Keep this file up-to-date whenever voice-agent functionality or user-facing beha
 ## Functional requirements
 
 - The voice-agent application must expose its interactive terminal UI as the `tui` subcommand (`voice-agent tui`); do not reintroduce a `--tui` flag.
+- The non-TUI Voice Agent CLI must accept `f` to send `ForceEndTurn` when configured for the Deepgram Flux V2 listen provider, and restore terminal input mode when the session ends.
+- The standard CLI must surface received end-of-turn events, including `EndOfTurn` messages and `TurnInfo` messages whose `event` is `EndOfTurn`.
+- When the Voice Agent server rejects Settings before `SettingsApplied`, the standard CLI must print pretty Settings JSON with credential values redacted; colorize JSON tokens when stderr is an interactive terminal and color is enabled.
+- CLI logger records and multiline diagnostics printed while raw keyboard input is enabled must use terminal-safe line endings so lines begin at column zero.
 - The voice-agent TUI must provide a searchable command palette that lists every available TUI function and displays the keyboard shortcut beside any command that has one. Shortcuts must be right-justified without colliding with command text.
 - The voice-agent TUI must support Space as a connect/disconnect toggle, `?` help, and terminal restoration before exit.
 - The bottom status bar must show the active listen model and TTS voice with concise human-readable labels.

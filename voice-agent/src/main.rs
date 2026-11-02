@@ -1,5 +1,5 @@
 use std::env;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 
 use std::time::Duration;
 
@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use futures_util::{SinkExt, StreamExt};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use rodio::{OutputStream, Sink, Source};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,6 +20,7 @@ use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
 
+mod cli_keyboard;
 mod config;
 mod json_logging;
 mod tui;
@@ -1531,17 +1532,152 @@ fn redact_voice_agent_json(mut value: serde_json::Value) -> serde_json::Value {
         .and_then(|endpoint| endpoint.get_mut("headers"))
         .and_then(|headers| headers.as_object_mut())
     {
-        let api_key_headers: Vec<String> = headers
+        let sensitive_headers: Vec<String> = headers
             .keys()
-            .filter(|key| key.eq_ignore_ascii_case("x-goog-api-key"))
+            .filter(|key| {
+                let normalized = key.to_ascii_lowercase().replace('_', "-");
+                normalized == "authorization"
+                    || normalized == "proxy-authorization"
+                    || normalized.contains("api-key")
+                    || normalized.contains("token")
+                    || normalized.contains("secret")
+                    || normalized.contains("credential")
+            })
             .cloned()
             .collect();
-        for key in api_key_headers {
+        for key in sensitive_headers {
             headers.insert(key, serde_json::json!("<redacted>"));
         }
     }
 
     value
+}
+
+fn settings_json_for_diagnostics(settings_json: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(settings_json)
+        .map(redact_voice_agent_json)
+        .and_then(|value| serde_json::to_string_pretty(&value))
+        .unwrap_or_else(|_| settings_json.to_string())
+}
+
+fn print_settings_json_for_validation_error(settings_json: &str) {
+    let pretty_json = settings_json_for_diagnostics(settings_json);
+    let use_color = io::stderr().is_terminal()
+        && env::var_os("NO_COLOR").is_none()
+        && env::var("TERM").as_deref() != Ok("dumb");
+    let pretty_json = if use_color {
+        colorize_json(&pretty_json)
+    } else {
+        pretty_json
+    };
+    let heading = if use_color {
+        "\x1b[1;36mVoice Agent Settings JSON (credential values redacted):\x1b[0m"
+    } else {
+        "Voice Agent Settings JSON (credential values redacted):"
+    };
+    let mut output = format!("\r\n{heading}\r\n");
+    for line in pretty_json.lines() {
+        output.push_str(line);
+        output.push_str("\r\n");
+    }
+
+    let mut stderr = io::stderr().lock();
+    if let Err(error) = stderr.write_all(output.as_bytes()) {
+        error!("Failed to print Voice Agent Settings JSON: {error}");
+    } else if let Err(error) = stderr.flush() {
+        error!("Failed to flush Voice Agent Settings JSON: {error}");
+    }
+}
+
+fn colorize_json(json: &str) -> String {
+    const RESET: &str = "\x1b[0m";
+    const KEY: &str = "\x1b[96m";
+    const STRING: &str = "\x1b[92m";
+    const NUMBER: &str = "\x1b[93m";
+    const LITERAL: &str = "\x1b[95m";
+    const PUNCTUATION: &str = "\x1b[90m";
+
+    let bytes = json.as_bytes();
+    let mut output = String::with_capacity(json.len() + json.len() / 3);
+    let mut index = 0;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                let start = index;
+                index += 1;
+                let mut escaped = false;
+                while index < bytes.len() {
+                    match bytes[index] {
+                        b'\\' if !escaped => escaped = true,
+                        b'"' if !escaped => {
+                            index += 1;
+                            break;
+                        }
+                        _ => escaped = false,
+                    }
+                    index += 1;
+                }
+
+                let next_non_whitespace = bytes[index..]
+                    .iter()
+                    .find(|byte| !byte.is_ascii_whitespace());
+                let color = if next_non_whitespace == Some(&b':') {
+                    KEY
+                } else {
+                    STRING
+                };
+                output.push_str(color);
+                output.push_str(&json[start..index]);
+                output.push_str(RESET);
+            }
+            b'0'..=b'9' | b'-' => {
+                let start = index;
+                while index < bytes.len()
+                    && matches!(bytes[index], b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')
+                {
+                    index += 1;
+                }
+                output.push_str(NUMBER);
+                output.push_str(&json[start..index]);
+                output.push_str(RESET);
+            }
+            b't' if json[index..].starts_with("true") => {
+                output.push_str(LITERAL);
+                output.push_str("true");
+                output.push_str(RESET);
+                index += 4;
+            }
+            b'f' if json[index..].starts_with("false") => {
+                output.push_str(LITERAL);
+                output.push_str("false");
+                output.push_str(RESET);
+                index += 5;
+            }
+            b'n' if json[index..].starts_with("null") => {
+                output.push_str(LITERAL);
+                output.push_str("null");
+                output.push_str(RESET);
+                index += 4;
+            }
+            b'{' | b'}' | b'[' | b']' | b',' | b':' => {
+                output.push_str(PUNCTUATION);
+                output.push(bytes[index] as char);
+                output.push_str(RESET);
+                index += 1;
+            }
+            _ => {
+                let character = json[index..]
+                    .chars()
+                    .next()
+                    .expect("index remains inside the JSON string");
+                output.push(character);
+                index += character.len_utf8();
+            }
+        }
+    }
+
+    output
 }
 
 async fn agent_variable_request(
@@ -1706,7 +1842,9 @@ async fn handle_voice_agent_responses(
     verbose: bool,
     function_response_tx: mpsc::UnboundedSender<String>,
     json_logger: Option<Arc<tokio::sync::Mutex<json_logging::JsonPayloadLogger>>>,
+    settings_json: String,
 ) {
+    let mut settings_applied = false;
     while let Some(message) = ws_receiver.next().await {
         match message {
             Ok(Message::Text(text)) => {
@@ -1749,6 +1887,13 @@ async fn handle_voice_agent_responses(
                             "AgentAudioDone" => {
                                 debug!("🔊 Agent audio done");
                             }
+                            "EndOfTurn" => log_end_of_turn(&response.data),
+                            "TurnInfo"
+                                if response.data.get("event").and_then(|value| value.as_str())
+                                    == Some("EndOfTurn") =>
+                            {
+                                log_end_of_turn(&response.data);
+                            }
                             "Welcome" => {
                                 let request_id = response
                                     .data
@@ -1761,6 +1906,7 @@ async fn handle_voice_agent_responses(
                                 }
                             }
                             "SettingsApplied" => {
+                                settings_applied = true;
                                 debug!("✅ Settings applied");
                             }
                             "Error" => {
@@ -1775,6 +1921,9 @@ async fn handle_voice_agent_responses(
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("");
                                 error!("❌ Agent error [{}]: {}", code, desc);
+                                if !settings_applied {
+                                    print_settings_json_for_validation_error(&settings_json);
+                                }
                             }
                             "Warning" => {
                                 let desc = response
@@ -1902,14 +2051,29 @@ async fn handle_voice_agent_responses(
     }
 }
 
+fn log_end_of_turn(data: &serde_json::Value) {
+    let trigger = data.get("trigger").and_then(|value| value.as_str());
+    let transcript = data.get("transcript").and_then(|value| value.as_str());
+
+    match (trigger, transcript) {
+        (Some(trigger), Some(transcript)) => {
+            info!("🛑 End of turn ({trigger}): {transcript}");
+        }
+        (Some(trigger), None) => info!("🛑 End of turn ({trigger})"),
+        (None, Some(transcript)) => info!("🛑 End of turn: {transcript}"),
+        (None, None) => info!("🛑 End of turn"),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging; defaults to "info" but RUST_LOG overrides (e.g. RUST_LOG=debug)
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Stdout)
+        .format_suffix("\r\n")
         .init();
 
-    dotenv::dotenv().ok();
+    dotenvy::dotenv().ok();
 
     let args = Args::parse();
     match args.command {
@@ -2131,26 +2295,39 @@ async fn run_voice_agent(
     let mic_enabled_for_ws = Arc::clone(&mic_enabled);
     let json_logger = json_logger.map(|logger| Arc::new(tokio::sync::Mutex::new(logger)));
     let response_json_logger = json_logger.clone();
+    let response_settings_json = config_json.clone();
+    let verbose = args.verbose;
+    let force_end_turn_supported = args.listen_provider == "deepgram"
+        && args.listen_model.starts_with("flux-")
+        && args.listen_version.as_deref() == Some("v2");
     let response_handle = tokio::spawn(async move {
         handle_voice_agent_responses(
             ws_receiver,
             playback_tx_clone,
             mic_enabled_for_ws,
             mute_on_playback,
-            args.verbose,
+            verbose,
             function_response_tx,
             response_json_logger,
+            response_settings_json,
         )
         .await;
     });
 
     // Main loop: send audio data to WebSocket
     info!("🎤 Voice Agent is ready! Start speaking...");
-    info!("Press Ctrl+C to stop");
+    let keyboard_controls = cli_keyboard::KeyboardControls::start();
+    if keyboard_controls.enabled {
+        info!("Keyboard controls: f sends ForceEndTurn (Flux V2 only); Ctrl+C stops");
+    } else {
+        info!("Press Ctrl+C to stop");
+    }
 
     let audio_handle = tokio::spawn(async move {
         let mut packet_count = 0u64;
         let mut function_responses_closed = false;
+        let mut keyboard_controls = keyboard_controls;
+        let mut keyboard_controls_open = keyboard_controls.enabled;
 
         loop {
             tokio::select! {
@@ -2192,6 +2369,34 @@ async fn run_voice_agent(
                             }
                         }
                         None => function_responses_closed = true,
+                    }
+                }
+                keyboard_command = keyboard_controls.commands.recv(), if keyboard_controls_open => {
+                    match keyboard_command {
+                        Some(cli_keyboard::KeyboardCommand::ForceEndTurn) => {
+                            if !force_end_turn_supported {
+                                warn!("ForceEndTurn requires --listen-provider deepgram, a Flux listen model, and --listen-version v2");
+                                continue;
+                            }
+
+                            let text = serde_json::json!({"type": "ForceEndTurn"}).to_string();
+                            if let Err(error) = ws_sender.send(Message::Text(text.clone().into())).await {
+                                error!("Failed to send ForceEndTurn: {}", error);
+                                break;
+                            }
+                            if let Some(logger) = &json_logger {
+                                if let Err(error) = logger.lock().await.record("CLIENT", &text) {
+                                    error!("Failed to write Voice Agent JSON log: {}", error);
+                                    break;
+                                }
+                            }
+                            info!("Sent ForceEndTurn");
+                        }
+                        Some(cli_keyboard::KeyboardCommand::Stop) => {
+                            info!("Received Ctrl+C, shutting down...");
+                            break;
+                        }
+                        None => keyboard_controls_open = false,
                     }
                 }
             }

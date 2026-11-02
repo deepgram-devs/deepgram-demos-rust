@@ -86,6 +86,10 @@ Run `voice-agent tui --verbose` to write TUI connection and server errors to `vo
 
 Use `--json-log <PATH>` with the CLI or `tui` subcommand to append every sent and received Voice Agent JSON message to the selected file. Each entry starts with a UTC timestamp in `YYYY-MM-DD HH:MM:SS.mmm UTC` 24-hour format, followed by `CLIENT` or `SERVER` and the raw payload. WebSocket binary audio frames are not logged. Since the file contains the raw payloads, it may include credentials or custom headers configured in the Settings message; protect the log file accordingly. See the [manual test plan](MANUAL_TEST_PLAN.md).
 
+In a standard interactive CLI session, press `f` to send `ForceEndTurn`; this requires the Deepgram Flux V2 listen configuration (`--listen-model flux-general-en --listen-version v2` or `--listen-model flux-general-multi --listen-version v2`). Received `EndOfTurn` messages are shown with their transcript and trigger at info level. Press `Ctrl+C` to stop the session. These controls are separate from the TUI command palette.
+
+If the Voice Agent server rejects the initial Settings message, the standard CLI prints pretty Settings JSON for inspection with credential values redacted. Interactive terminals get syntax colors; redirected output and `NO_COLOR` stay plain text.
+
 User messages, agent messages, and client-side injection/control messages use different colors in the event pane.
 
 The TUI exposes the documented Voice Agent client controls: `UpdateListen`, `UpdateSpeak`, `UpdatePrompt`, `InjectAgentMessage`, `InjectUserMessage`, `ForceEndTurn`, and `AgentKeepAlive`. Actions that accept fields open an input dialog: agent injection asks for the message and `default`/`queue`/`interrupt` behavior, user injection asks for the message, think updates ask for the model, and listen/speak updates use selectors. Force-ending a turn requires Flux STT (V2). See [Deepgram Inputs: Client Messages](https://developers.deepgram.com/docs/voice-agent-inputs). The TTS chooser includes the complete current [Aura-2 catalog](https://developers.deepgram.com/docs/tts-models) and [Flux TTS catalog](https://developers.deepgram.com/docs/flux-tts/voices).

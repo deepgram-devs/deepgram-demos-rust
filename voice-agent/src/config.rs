@@ -17,7 +17,7 @@ pub struct VoiceAgentConfig {
     pub listen: ListenConfig,
     /// Preserve unrelated YAML keys so this file can be shared with other tools.
     #[serde(flatten)]
-    pub other: BTreeMap<String, serde_yaml::Value>,
+    pub other: BTreeMap<String, noyalib::Value>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -48,7 +48,7 @@ pub fn load() -> io::Result<VoiceAgentConfig> {
         return Ok(VoiceAgentConfig::default());
     };
     match fs::read_to_string(path) {
-        Ok(contents) => serde_yaml::from_str(&contents)
+        Ok(contents) => noyalib::from_str(&contents)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(VoiceAgentConfig::default()),
         Err(error) => Err(error),
@@ -62,7 +62,7 @@ pub fn save(config: &VoiceAgentConfig) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let contents = serde_yaml::to_string(config)
+    let contents = noyalib::to_string(config)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     fs::write(path, contents)
 }

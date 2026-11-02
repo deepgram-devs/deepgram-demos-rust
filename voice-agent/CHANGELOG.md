@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## [0.1.5] - 2026-11-02
+
+### Added
+- Added an `f` keyboard shortcut to send `ForceEndTurn` from non-TUI CLI sessions configured for Deepgram Flux V2.
+- Added info-level handling for received `EndOfTurn` and Flux `TurnInfo` end-of-turn events in standard CLI sessions.
+- Print pretty, colorized Settings JSON when the Voice Agent server rejects initial settings in an interactive terminal.
+
+### Fixed
+- Fixed CLI terminal indentation by using carriage-return/newline log endings while raw keyboard input is active; Settings JSON stays pretty-printed and aligned too.
+
+### Changed
+- Updated compatible releases of arboard, bytes, clap, env_logger, log, serde, serde_json, tokio, and the TLS stack.
+- Replaced the unmaintained `dotenv` crate with `dotenvy`.
+- Replaced deprecated `serde_yaml` and unmaintained `unsafe-libyaml` with `noyalib`'s pure-Rust YAML parser.
+
 ## [0.1.4] - 2026-10-07
 
 ### Added
