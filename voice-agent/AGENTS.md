@@ -6,6 +6,10 @@ Keep this file up-to-date whenever voice-agent functionality or user-facing beha
 
 - The voice-agent application must expose its interactive terminal UI as the `tui` subcommand (`voice-agent tui`); do not reintroduce a `--tui` flag.
 - The non-TUI Voice Agent CLI must accept `f` to send `ForceEndTurn` when configured for the Deepgram Flux V2 listen provider, and restore terminal input mode when the session ends.
+- The optional `aec` Cargo feature is enabled by default. It must run AEC3 for both CLI and TUI sessions, keep microphone capture live during speaker playback by default, use the samples actually written to the output device as the render reference, and clear queued agent audio immediately on `UserStartedSpeaking`.
+- `--no-mic-mute` defaults to true; `--no-mic-mute=false` opts into microphone muting during playback.
+- AEC capture and render audio must be resampled and reblocked to 48 kHz mono 10 ms frames; only processed 24 kHz mono linear16 frames may be sent to Voice Agent. Missing, stale, discontinuous, invalid, or failed processing must fail closed to silence without raw microphone fallback.
+- AEC delay estimation must be adaptive by default. `--aec-delay-ms` and `AEC_DELAY_MS` may set an initial delay from 0 through 500 ms.
 - The standard CLI must surface received end-of-turn events, including `EndOfTurn` messages and `TurnInfo` messages whose `event` is `EndOfTurn`.
 - When the Voice Agent server rejects Settings before `SettingsApplied`, the standard CLI must print pretty Settings JSON with credential values redacted; colorize JSON tokens when stderr is an interactive terminal and color is enabled.
 - CLI logger records and multiline diagnostics printed while raw keyboard input is enabled must use terminal-safe line endings so lines begin at column zero.

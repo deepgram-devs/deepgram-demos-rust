@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## [0.1.6] - 2026-11-05
+
+### Added
+- Enabled the `aec` Cargo feature by default, using AEC3 for the standard CLI and TUI, with adaptive delay by default and an optional `--aec-delay-ms`/`AEC_DELAY_MS` estimate.
+- Added full-duplex echo cancellation using speaker samples written to the output device as the reference, with fail-closed silence handling for discontinuities and processing failures.
+
+### Fixed
+- Stop queued agent audio as soon as Deepgram reports `UserStartedSpeaking`, in both the CLI and TUI.
+
+### Changed
+- AEC builds keep microphone capture active during playback and stream only processed 24 kHz mono linear16 audio.
+- Set `--no-mic-mute` to true by default; `--no-mic-mute=false` opts into playback muting.
+- Added the pinned, optional `aec3` 0.4.0 dependency with default features disabled.
+
+### Security
+- Recorded the AEC3 dependency audit and remaining workspace-wide RustSec findings in `AEC_DEPENDENCY_AUDIT.md`.
+
 ## [0.1.5] - 2026-11-02
 
 ### Added

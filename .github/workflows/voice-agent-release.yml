@@ -8,7 +8,7 @@ on:
       tag:
         description: Existing voice-agent tag to build and publish
         required: true
-        default: voice-agent-v0.1.5
+        default: voice-agent-v0.1.6
 
 permissions:
   contents: write

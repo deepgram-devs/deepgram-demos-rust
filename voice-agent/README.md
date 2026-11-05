@@ -2,7 +2,7 @@
 
 This is a Rust application that demonstrates bidirectional conversation using Deepgram's Voice Agent WebSocket APIs. The application captures audio from your computer's microphone, streams it to Deepgram's Voice Agent, and handles the responses.
 
-⚠️ **IMPORTANT**: Please use headphones to avoid spoken audio, from the agent, back-feeding through your microphone. Alternatively, use `--no-mic-mute` if your setup handles echo cancellation externally.
+⚠️ **IMPORTANT**: AEC3 is enabled in the default build, so you can speak while the agent is playing audio. Acoustic conditions vary by microphone, speakers, and room; use headphones if you hear residual echo.
 
 ## Features
 
@@ -11,9 +11,9 @@ This is a Rust application that demonstrates bidirectional conversation using De
 - **Bidirectional Conversation**: Sends audio to the agent and receives responses
 - **Flexible CLI Configuration**: Configure endpoint, TTS model, LLM provider, and custom headers via command-line flags
 - **Reusable Agent Configurations**: Save agent settings to a Deepgram project and reuse them by UUID through dedicated subcommands
-- **Audio Response Handling**: Receives and plays back audio responses from the agent using rodio
-- **Smart Microphone Control**: Automatically disables microphone during agent speech and re-enables 600ms after silence (prevents feedback)
-- **Silent Packet Injection**: Sends silent audio frames while muted to keep the WebSocket connection alive
+- **Audio Response Handling**: Plays agent audio through CPAL when default AEC is enabled; `--no-default-features` uses the legacy rodio path
+- **Smart Microphone Control**: AEC keeps capture live by default; `--no-mic-mute=false` opts into muting during playback and re-enables capture after 600ms of silence
+- **Silent Packet Injection**: Sends silent audio frames while explicitly muted to keep the WebSocket connection alive
 - **Sample Function Calling**: Optionally register sample client-side tools (`--enable-sample-functions`) to exercise the agent's function-calling flow
 - **Interactive TUI**: Run the `tui` subcommand for a searchable command palette, live conversation text, prompt editing, TTS/STT selection, and Voice Agent control messages
 
@@ -90,6 +90,18 @@ In a standard interactive CLI session, press `f` to send `ForceEndTurn`; this re
 
 If the Voice Agent server rejects the initial Settings message, the standard CLI prints pretty Settings JSON for inspection with credential values redacted. Interactive terminals get syntax colors; redirected output and `NO_COLOR` stay plain text.
 
+### Acoustic echo cancellation
+
+AEC3 is enabled by default through the optional `aec` Cargo feature. It applies to both the standard CLI and TUI:
+
+```powershell
+cargo run -p voice-agent --
+cargo run -p voice-agent -- --aec-delay-ms 116
+cargo run -p voice-agent -- tui
+```
+
+The AEC build keeps microphone capture active while the agent speaks and uses the samples actually written to the selected speaker device as its render reference. Capture and render are resampled to 48 kHz mono for AEC3; processed microphone audio is sent as 24 kHz mono linear16. When Deepgram reports `UserStartedSpeaking`, queued agent playback is cleared immediately. The initial delay estimate is adaptive unless `--aec-delay-ms` or `AEC_DELAY_MS` sets a value from 0 through 500 ms. AEC builds require `--audio-encoding linear16`; `--audio-sample-rate` still selects the microphone device rate. `--no-mic-mute` defaults to true; pass `--no-mic-mute=false` to mute capture during playback.
+
 User messages, agent messages, and client-side injection/control messages use different colors in the event pane.
 
 The TUI exposes the documented Voice Agent client controls: `UpdateListen`, `UpdateSpeak`, `UpdatePrompt`, `InjectAgentMessage`, `InjectUserMessage`, `ForceEndTurn`, and `AgentKeepAlive`. Actions that accept fields open an input dialog: agent injection asks for the message and `default`/`queue`/`interrupt` behavior, user injection asks for the message, think updates ask for the model, and listen/speak updates use selectors. Force-ending a turn requires Flux STT (V2). See [Deepgram Inputs: Client Messages](https://developers.deepgram.com/docs/voice-agent-inputs). The TTS chooser includes the complete current [Aura-2 catalog](https://developers.deepgram.com/docs/tts-models) and [Flux TTS catalog](https://developers.deepgram.com/docs/flux-tts/voices).
@@ -142,7 +154,7 @@ cargo run
 | `--think-aws-session-token <TOKEN>` | _(none)_ | Required for STS credentials; also reads `AWS_SESSION_TOKEN` |
 | `--prompt <TEXT>` | Concise responses | System prompt / instructions for the agent; overrides the default concise-response prompt |
 | `--verbose` | _(off)_ | Print full Settings JSON at startup and the Voice Agent request ID after connecting |
-| `--no-mic-mute` | _(off)_ | Disable mic muting during playback |
+| `--no-mic-mute[=<BOOL>]` | `true` | Keep mic capture live during playback; pass `false` to mute it |
 | `--enable-sample-functions` | _(off)_ | Register sample client-side functions (`get_current_time`, `roll_dice`, `get_weather`) so the agent can call tools mid-conversation |
 
 ## Example Commands
@@ -169,8 +181,8 @@ cargo run -- --speak-model aura-2-apollo-en
 # Set a custom system prompt for the agent
 cargo run -- --prompt "You are a helpful assistant that speaks only in rhymes."
 
-# Keep mic live during playback (e.g., using headphones)
-cargo run -- --no-mic-mute
+# Opt into muting the microphone during playback
+cargo run -- --no-mic-mute=false
 
 # Log Voice Agent JSON messages while audio continues over binary frames
 cargo run -- --json-log voice-agent-messages.log
@@ -370,9 +382,9 @@ This application uses Deepgram's Voice Agent API. For more information:
 
 ## Current Features
 
-- **Full Audio Playback**: Complete implementation of audio response playback using rodio
-- **Smart Microphone Management**: Automatic microphone disable/enable based on agent speech, with `--no-mic-mute` opt-out
-- **Silent Packet Injection**: Keeps the WebSocket connection alive while mic is muted
+- **Full Audio Playback**: Plays agent audio through the AEC speaker path by default, with a rodio fallback in `--no-default-features` builds
+- **Smart Microphone Management**: Keeps capture live with AEC by default; `--no-mic-mute=false` enables playback muting
+- **Silent Packet Injection**: Keeps the WebSocket connection alive while the microphone is explicitly muted
 - **Real-time Audio Streaming**: Continuous audio capture and streaming to Deepgram
 - **Multiple Message Types**: Handles user transcripts, agent transcripts, thinking status, and audio data
 - **Binary and Text Audio**: Supports both base64-encoded and binary audio responses

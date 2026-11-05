@@ -57,3 +57,22 @@ These checks require a working Deepgram Voice Agent API key, microphone, and spe
 3. Launch `voice-agent tui`, change a persisted preference, then exit normally.
 4. Confirm the preference was saved and the unrelated setting and its value types were preserved.
 5. Restart the TUI and confirm the saved preference is restored.
+
+## AEC3 echo cancellation
+
+These checks need a working Deepgram API key, microphone, and speakers or headphones.
+
+1. Run the standard CLI with AEC3 enabled:
+
+   ```powershell
+   cargo run -p voice-agent -- --aec-delay-ms 116
+   ```
+
+2. Speak while the agent is speaking. Confirm near-end speech is still captured, agent playback is not fed back as user speech, and the session remains responsive.
+3. Interrupt agent speech by speaking. Confirm Deepgram's `UserStartedSpeaking` event clears already queued agent audio immediately in both CLI and TUI sessions.
+4. Repeat without `--aec-delay-ms` to check adaptive delay, then set `$env:AEC_DELAY_MS = '116'` and confirm the environment default works. Pass `--aec-delay-ms 0` and confirm the CLI value overrides the environment value.
+5. Confirm values above 500 are rejected. Confirm `--audio-encoding mulaw` is rejected by an AEC build.
+6. Repeat with the TUI using `cargo run -p voice-agent -- tui`. Speak during agent playback and confirm the microphone remains live while echo is suppressed.
+7. Run with `--no-mic-mute=false`. Confirm the microphone is muted during playback and resumes after 600 ms of silence.
+8. Use `--save-audio <PATH>` in a standard AEC session and confirm the raw file contains the processed 24 kHz linear16 stream, not the unprocessed microphone capture.
+9. Test with the normal device rates and, when supported, an explicit `--audio-sample-rate`. Confirm playback underruns and a new agent-speaking turn do not leak stale render audio into the microphone stream.

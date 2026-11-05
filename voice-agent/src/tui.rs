@@ -2,7 +2,7 @@
 use std::{
     fs::{File, OpenOptions},
     io::{self, BufWriter, Write},
-    sync::{mpsc as std_mpsc, Arc},
+    sync::Arc,
     time::Duration,
 };
 
@@ -1870,25 +1870,81 @@ async fn worker_loop(
     json_logging: bool,
     reusable_config_id: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    validate_aec_options(&args)?;
     validate_speak_options(&args)?;
     let key = env::var("DEEPGRAM_API_KEY").map_err(|_| "DEEPGRAM_API_KEY is not set")?;
     let capture = AudioCapture::new(args.audio_sample_rate)?;
     let rate = capture.config.sample_rate.0;
     let channels = capture.config.channels;
+    let wire_rate = voice_agent_input_sample_rate(rate);
     let mic = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    #[cfg(feature = "aec")]
+    let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<u8>>(64);
+    #[cfg(not(feature = "aec"))]
     let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    let (play_tx, play_rx) = std_mpsc::channel::<Vec<u8>>();
+    let (playback_control, playback_rx) = PlaybackControl::channel();
+    #[cfg(feature = "aec")]
+    let aec_worker = aec::AecWorker::spawn(args.aec_delay_ms, audio_tx.clone())?;
+    #[cfg(feature = "aec")]
+    let aec_sender_for_player = aec_worker.sender();
     let mute = !args.no_mic_mute;
     let mic_for_player = mic.clone();
+    let player_generation = Arc::clone(&playback_control.generation);
     std::thread::spawn(move || {
-        if let Ok(player) = AudioPlayer::new(mic_for_player, mute, true) {
-            for audio in play_rx {
-                let _ = player.play_audio(audio);
+        #[cfg(feature = "aec")]
+        let player = match AudioPlayer::new(
+            aec_sender_for_player,
+            Arc::clone(&player_generation),
+            mic_for_player,
+            mute,
+        ) {
+            Ok(player) => player,
+            Err(error) => {
+                log::error!("Failed to create AEC speaker output: {error}");
+                return;
+            }
+        };
+        #[cfg(not(feature = "aec"))]
+        let player = match AudioPlayer::new(mic_for_player, mute, true) {
+            Ok(player) => player,
+            Err(error) => {
+                log::error!("Failed to create audio player: {error}");
+                return;
+            }
+        };
+
+        let mut active_generation = player_generation.load(std::sync::atomic::Ordering::Acquire);
+        for command in playback_rx {
+            let current_generation = player_generation.load(std::sync::atomic::Ordering::Acquire);
+            if current_generation != active_generation {
+                player.clear();
+                active_generation = current_generation;
+            }
+            match command {
+                PlaybackCommand::Clear { generation } => {
+                    if generation >= active_generation {
+                        player.clear();
+                        active_generation = generation;
+                    }
+                }
+                PlaybackCommand::Audio { generation, data } if generation == active_generation => {
+                    if let Err(error) = player.play_audio(data) {
+                        log::warn!("Failed to play agent audio: {error}");
+                    }
+                }
+                PlaybackCommand::Audio { .. } => {}
             }
         }
     });
-    let mut ws =
-        connect_to_voice_agent(&key, &args.endpoint, rate, channels, args.verbose, false).await?;
+    let mut ws = connect_to_voice_agent(
+        &key,
+        &args.endpoint,
+        wire_rate,
+        channels,
+        args.verbose,
+        false,
+    )
+    .await?;
     let mut payload_logger = args
         .json_log
         .as_deref()
@@ -1924,7 +1980,7 @@ async fn worker_loop(
         None
     };
     record_json_message(&mut json_history, &mut json_log, "SERVER", &welcome_text)?;
-    let mut config = config_from_options(&args, rate, load_eleven_labs_api_key(&args)?);
+    let mut config = config_from_options(&args, wire_rate, load_eleven_labs_api_key(&args)?);
     if let Some(agent_id) = reusable_config_id {
         config.agent = AgentConfiguration::Reference(agent_id);
     }
@@ -1944,14 +2000,27 @@ async fn worker_loop(
     }
     // CPAL streams are not Send on some platforms (notably macOS). Keep the
     // stream on its own OS thread while the WebSocket worker remains Send.
+    let capture_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let capture_stop_for_thread = Arc::clone(&capture_stop);
+    #[cfg(feature = "aec")]
+    let capture_sender = aec_worker.sender();
+    #[cfg(not(feature = "aec"))]
     let encoding = args.audio_encoding.clone();
-    std::thread::spawn(move || {
-        if let Ok(_stream) = capture.start_capture(audio_tx, mic, &encoding) {
-            loop {
-                std::thread::sleep(Duration::from_secs(60));
+    let capture_thread = std::thread::spawn(move || {
+        #[cfg(feature = "aec")]
+        let stream = super::audio_aec::start_capture(&capture, capture_sender, mic, mute);
+        #[cfg(not(feature = "aec"))]
+        let stream = capture.start_capture(audio_tx, mic, &encoding);
+        match stream {
+            Ok(_stream) => {
+                while !capture_stop_for_thread.load(std::sync::atomic::Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
             }
+            Err(error) => log::error!("Failed to start microphone capture: {error}"),
         }
     });
+    let _capture_guard = CaptureThreadGuard::new(capture_stop, capture_thread);
     loop {
         tokio::select! {
             Some(command) = commands.recv() => match command {
@@ -1993,6 +2062,8 @@ async fn worker_loop(
                                 let content = response.data.get("content").and_then(|v| v.as_str()).unwrap_or("");
                                 let _ = out.send(format!("__MESSAGE__|{}|{}", if role == "user" { "You" } else { "Agent" }, content));
                             }
+                            "AgentStartedSpeaking" => playback_control.clear(),
+                            "UserStartedSpeaking" => playback_control.clear(),
                             "Warning" => { let _ = out.send(format!("__WARNING__|Warning: {}", response.data)); }
                             "Error" => {
                                 if args.verbose {
@@ -2004,13 +2075,14 @@ async fn worker_loop(
                         }
                     }
                 }
-                Message::Binary(audio) => { let _ = play_tx.send(audio.to_vec()); }
+                Message::Binary(audio) => { let _ = playback_control.play_audio(audio.to_vec()); }
                 _ => {}
             },
             Some(audio) = audio_rx.recv() => sink.send(Message::Binary(audio.into())).await?,
             else => break,
         }
     }
+    playback_control.clear();
     let _ = out.send("__DISCONNECTED__".into());
     Ok(())
 }

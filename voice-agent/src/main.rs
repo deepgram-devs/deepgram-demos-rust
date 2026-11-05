@@ -4,13 +4,18 @@ use std::io::{self, IsTerminal, Write};
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, Stream, StreamConfig};
+#[cfg(not(feature = "aec"))]
+use cpal::traits::StreamTrait;
+use cpal::traits::{DeviceTrait, HostTrait};
+#[cfg(not(feature = "aec"))]
+use cpal::Stream;
+use cpal::{Device, SampleFormat, StreamConfig};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
+#[cfg(not(feature = "aec"))]
 use rodio::{OutputStream, Sink, Source};
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -20,6 +25,10 @@ use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
 
+#[cfg(feature = "aec")]
+mod aec;
+#[cfg(feature = "aec")]
+mod audio_aec;
 mod cli_keyboard;
 mod config;
 mod json_logging;
@@ -260,6 +269,11 @@ struct LaunchOptions {
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     audio_sample_rate: Option<u32>,
 
+    /// Initial playback-to-microphone delay estimate for the AEC feature (0–500 ms)
+    #[cfg(feature = "aec")]
+    #[arg(long, env = "AEC_DELAY_MS", value_parser = clap::value_parser!(u16).range(0..=500))]
+    aec_delay_ms: Option<u16>,
+
     /// Save the encoded microphone stream to a raw local file
     #[arg(long, value_name = "PATH")]
     save_audio: Option<PathBuf>,
@@ -321,7 +335,13 @@ struct LaunchOptions {
     verbose: bool,
 
     /// Disable microphone muting during agent audio playback
-    #[arg(long)]
+    #[arg(
+        long,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = true
+    )]
     no_mic_mute: bool,
 
     /// Register a set of sample client-side functions (get_current_time, roll_dice,
@@ -588,6 +608,29 @@ struct AudioCapture {
     sample_format: SampleFormat,
 }
 
+struct CaptureThreadGuard {
+    stop: Arc<AtomicBool>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl CaptureThreadGuard {
+    fn new(stop: Arc<AtomicBool>, join: std::thread::JoinHandle<()>) -> Self {
+        Self {
+            stop,
+            join: Some(join),
+        }
+    }
+}
+
+impl Drop for CaptureThreadGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
 impl AudioCapture {
     fn new(sample_rate: Option<u32>) -> Result<Self, Box<dyn std::error::Error>> {
         let host = cpal::default_host();
@@ -641,6 +684,7 @@ impl AudioCapture {
         })
     }
 
+    #[cfg(not(feature = "aec"))]
     fn start_capture(
         &self,
         tx: mpsc::UnboundedSender<Vec<u8>>,
@@ -661,6 +705,7 @@ impl AudioCapture {
         Ok(stream)
     }
 
+    #[cfg(not(feature = "aec"))]
     fn build_stream<T>(
         &self,
         config: StreamConfig,
@@ -695,6 +740,7 @@ impl AudioCapture {
     }
 }
 
+#[cfg(not(feature = "aec"))]
 fn encoded_sample_width(encoding: &str) -> usize {
     match encoding {
         "linear16" => 2,
@@ -704,6 +750,7 @@ fn encoded_sample_width(encoding: &str) -> usize {
     }
 }
 
+#[cfg(not(feature = "aec"))]
 fn encode_audio_samples<T>(samples: &[T], encoding: &str) -> Vec<u8>
 where
     T: cpal::Sample,
@@ -727,6 +774,7 @@ where
     buf
 }
 
+#[cfg(not(feature = "aec"))]
 fn encode_mulaw(sample: f32) -> u8 {
     const BIAS: i32 = 0x84;
     const CLIP: i32 = 32635;
@@ -749,6 +797,7 @@ fn encode_mulaw(sample: f32) -> u8 {
     (!(sign | ((exponent as i32) << 4) | mantissa)) as u8
 }
 
+#[cfg(not(feature = "aec"))]
 fn encode_alaw(sample: f32) -> u8 {
     let sample = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
     let sign = if sample < 0 { 0x80 } else { 0 };
@@ -762,6 +811,44 @@ fn encode_alaw(sample: f32) -> u8 {
     }
 }
 
+enum PlaybackCommand {
+    Audio { generation: u64, data: Vec<u8> },
+    Clear { generation: u64 },
+}
+
+#[derive(Clone)]
+struct PlaybackControl {
+    tx: std_mpsc::Sender<PlaybackCommand>,
+    generation: Arc<AtomicU64>,
+}
+
+impl PlaybackControl {
+    fn channel() -> (Self, std_mpsc::Receiver<PlaybackCommand>) {
+        let (tx, rx) = std_mpsc::channel();
+        (
+            Self {
+                tx,
+                generation: Arc::new(AtomicU64::new(0)),
+            },
+            rx,
+        )
+    }
+
+    fn play_audio(&self, data: Vec<u8>) -> Result<(), std_mpsc::SendError<PlaybackCommand>> {
+        let generation = self.generation.load(Ordering::Acquire);
+        self.tx.send(PlaybackCommand::Audio { generation, data })
+    }
+
+    fn clear(&self) {
+        let generation = self
+            .generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        let _ = self.tx.send(PlaybackCommand::Clear { generation });
+    }
+}
+
+#[cfg(not(feature = "aec"))]
 struct AudioPlayer {
     _stream_handle: OutputStream,
     sink: Arc<Sink>,
@@ -769,6 +856,10 @@ struct AudioPlayer {
     mute_on_playback: bool,
 }
 
+#[cfg(feature = "aec")]
+type AudioPlayer = audio_aec::AudioPlayer;
+
+#[cfg(not(feature = "aec"))]
 impl AudioPlayer {
     fn new(
         mic_enabled: Arc<AtomicBool>,
@@ -833,6 +924,10 @@ impl AudioPlayer {
         })
     }
 
+    fn clear(&self) {
+        self.sink.clear();
+    }
+
     fn play_audio(&self, audio_data: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
         debug!(
             "🔊 Received audio data for playback: {} bytes",
@@ -862,12 +957,14 @@ impl AudioPlayer {
 }
 
 // Custom PCM source for rodio
+#[cfg(not(feature = "aec"))]
 struct PCMSource {
     samples: std::vec::IntoIter<f32>,
     sample_rate: u32,
     channels: u16,
 }
 
+#[cfg(not(feature = "aec"))]
 impl PCMSource {
     fn new(samples: Vec<f32>, sample_rate: u32, channels: u16) -> Self {
         Self {
@@ -878,6 +975,7 @@ impl PCMSource {
     }
 }
 
+#[cfg(not(feature = "aec"))]
 impl Iterator for PCMSource {
     type Item = f32;
 
@@ -886,6 +984,7 @@ impl Iterator for PCMSource {
     }
 }
 
+#[cfg(not(feature = "aec"))]
 impl Source for PCMSource {
     fn current_span_len(&self) -> Option<usize> {
         None
@@ -1216,6 +1315,31 @@ fn config_from_options(
         options.prompt.as_deref(),
         options.enable_sample_functions,
     )
+}
+
+fn voice_agent_input_sample_rate(device_sample_rate: u32) -> u32 {
+    #[cfg(feature = "aec")]
+    {
+        let _ = device_sample_rate;
+        aec::VOICE_AGENT_SAMPLE_RATE
+    }
+    #[cfg(not(feature = "aec"))]
+    {
+        device_sample_rate
+    }
+}
+
+#[cfg(feature = "aec")]
+fn validate_aec_options(options: &LaunchOptions) -> Result<(), Box<dyn std::error::Error>> {
+    if options.audio_encoding != "linear16" {
+        return Err("AEC builds require --audio-encoding linear16".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "aec"))]
+fn validate_aec_options(_options: &LaunchOptions) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
 }
 
 fn validate_think_options(options: &LaunchOptions) -> Result<(), Box<dyn std::error::Error>> {
@@ -1836,7 +1960,7 @@ async fn handle_voice_agent_responses(
             tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
         >,
     >,
-    audio_tx: std_mpsc::Sender<Vec<u8>>,
+    playback: PlaybackControl,
     mic_enabled: Arc<AtomicBool>,
     mute_on_playback: bool,
     verbose: bool,
@@ -1879,9 +2003,11 @@ async fn handle_voice_agent_responses(
                                 debug!("🤔 Agent is thinking...");
                             }
                             "AgentStartedSpeaking" => {
+                                playback.clear();
                                 debug!("🗣️ Agent is speaking...");
                             }
                             "UserStartedSpeaking" => {
+                                playback.clear();
                                 debug!("🎙️ User started speaking");
                             }
                             "AgentAudioDone" => {
@@ -2025,7 +2151,7 @@ async fn handle_voice_agent_responses(
                 }
 
                 // Handle binary audio data directly
-                if let Err(e) = audio_tx.send(data.to_vec()) {
+                if let Err(e) = playback.play_audio(data.to_vec()) {
                     error!("Failed to send binary audio to player: {}", e);
                 }
             }
@@ -2099,6 +2225,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn create_agent_configuration(
     args: ConfigCreateArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    validate_aec_options(&args.launch)?;
     validate_think_options(&args.launch)?;
     validate_speak_options(&args.launch)?;
     let api_key = env::var("DEEPGRAM_API_KEY")
@@ -2108,7 +2235,11 @@ async fn create_agent_configuration(
     let eleven_labs_api_key = load_eleven_labs_api_key(&args.launch)?;
     let audio_capture = AudioCapture::new(args.launch.audio_sample_rate)?;
     let sample_rate = audio_capture.config.sample_rate.0;
-    let config = config_from_options(&args.launch, sample_rate, eleven_labs_api_key);
+    let config = config_from_options(
+        &args.launch,
+        voice_agent_input_sample_rate(sample_rate),
+        eleven_labs_api_key,
+    );
     let agent_id = create_reusable_agent_config(
         &api_key,
         &project_id,
@@ -2130,6 +2261,7 @@ async fn run_voice_agent(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Load environment variables
 
+    validate_aec_options(&args)?;
     validate_think_options(&args)?;
     validate_speak_options(&args)?;
 
@@ -2167,22 +2299,48 @@ async fn run_voice_agent(
     // Create microphone control flag - start with mic enabled
     let mic_enabled = Arc::new(AtomicBool::new(true));
 
-    // Create channels for audio data
+    // AEC output is bounded so backpressure cannot grow memory or block a
+    // device callback. The legacy path retains its existing unbounded queue.
+    #[cfg(feature = "aec")]
+    let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<u8>>(64);
+    #[cfg(not(feature = "aec"))]
     let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    let (playback_tx, playback_rx) = std_mpsc::channel::<Vec<u8>>();
+    let (playback_control, playback_rx) = PlaybackControl::channel();
 
     // Channel for outbound text messages (e.g. FunctionCallResponse) generated
     // while handling WebSocket responses, forwarded to the socket alongside audio.
     let (function_response_tx, mut function_response_rx) = mpsc::unbounded_channel::<String>();
 
     let mute_on_playback = !args.no_mic_mute;
+    #[cfg(feature = "aec")]
+    info!("AEC enabled; microphone capture remains active during speaker playback");
     if !mute_on_playback {
         info!("Microphone muting during playback is disabled");
     }
 
+    #[cfg(feature = "aec")]
+    let aec_worker = aec::AecWorker::spawn(args.aec_delay_ms, audio_tx.clone())?;
+    #[cfg(feature = "aec")]
+    let aec_sender_for_player = aec_worker.sender();
+
     // Initialize audio player in a separate thread
     let mic_enabled_for_player = Arc::clone(&mic_enabled);
+    let player_generation = Arc::clone(&playback_control.generation);
     std::thread::spawn(move || {
+        #[cfg(feature = "aec")]
+        let audio_player = match AudioPlayer::new(
+            aec_sender_for_player,
+            Arc::clone(&player_generation),
+            mic_enabled_for_player,
+            mute_on_playback,
+        ) {
+            Ok(player) => player,
+            Err(e) => {
+                error!("Failed to create AEC speaker output: {}", e);
+                return;
+            }
+        };
+        #[cfg(not(feature = "aec"))]
         let audio_player = match AudioPlayer::new(mic_enabled_for_player, mute_on_playback, false) {
             Ok(player) => player,
             Err(e) => {
@@ -2191,18 +2349,33 @@ async fn run_voice_agent(
             }
         };
 
-        for audio_data in playback_rx {
-            if let Err(e) = audio_player.play_audio(audio_data) {
-                error!("Failed to play audio: {}", e);
+        let mut active_generation = player_generation.load(Ordering::Acquire);
+        for command in playback_rx {
+            let current_generation = player_generation.load(Ordering::Acquire);
+            if current_generation != active_generation {
+                audio_player.clear();
+                active_generation = current_generation;
+            }
+            match command {
+                PlaybackCommand::Clear { generation } => {
+                    if generation >= active_generation {
+                        audio_player.clear();
+                        active_generation = generation;
+                    }
+                }
+                PlaybackCommand::Audio { generation, data } if generation == active_generation => {
+                    if let Err(e) = audio_player.play_audio(data) {
+                        error!("Failed to play audio: {}", e);
+                    }
+                }
+                PlaybackCommand::Audio { .. } => {}
             }
         }
     });
 
-    // Start audio capture with microphone control
-    let mic_enabled_for_capture = Arc::clone(&mic_enabled);
+    #[cfg(not(feature = "aec"))]
     let _stream =
-        audio_capture.start_capture(audio_tx, mic_enabled_for_capture, &args.audio_encoding)?;
-    debug!("Audio capture started");
+        audio_capture.start_capture(audio_tx, Arc::clone(&mic_enabled), &args.audio_encoding)?;
 
     let mut audio_writer = args
         .save_audio
@@ -2217,7 +2390,8 @@ async fn run_voice_agent(
         info!("Saving encoded microphone audio to {}", path.display());
     }
 
-    let mut config = config_from_options(&args, sample_rate, eleven_labs_api_key);
+    let wire_sample_rate = voice_agent_input_sample_rate(sample_rate);
+    let mut config = config_from_options(&args, wire_sample_rate, eleven_labs_api_key);
     if let Some(agent_id) = agent_config_id {
         config.agent = AgentConfiguration::Reference(agent_id.to_string());
     }
@@ -2226,7 +2400,7 @@ async fn run_voice_agent(
     let mut ws_stream = connect_to_voice_agent(
         &api_key,
         &args.endpoint,
-        sample_rate,
+        wire_sample_rate,
         channels,
         args.verbose,
         true,
@@ -2291,7 +2465,7 @@ async fn run_voice_agent(
     sleep(Duration::from_millis(500)).await;
 
     // Spawn task to handle WebSocket responses
-    let playback_tx_clone = playback_tx.clone();
+    let playback_for_ws = playback_control.clone();
     let mic_enabled_for_ws = Arc::clone(&mic_enabled);
     let json_logger = json_logger.map(|logger| Arc::new(tokio::sync::Mutex::new(logger)));
     let response_json_logger = json_logger.clone();
@@ -2303,7 +2477,7 @@ async fn run_voice_agent(
     let response_handle = tokio::spawn(async move {
         handle_voice_agent_responses(
             ws_receiver,
-            playback_tx_clone,
+            playback_for_ws,
             mic_enabled_for_ws,
             mute_on_playback,
             verbose,
@@ -2409,6 +2583,17 @@ async fn run_voice_agent(
         }
     });
 
+    // Start AEC capture after the outbound receiver is polling so slow
+    // WebSocket setup cannot fill the bounded AEC audio queue.
+    #[cfg(feature = "aec")]
+    let _aec_capture_stream = audio_aec::start_capture(
+        &audio_capture,
+        aec_worker.sender(),
+        Arc::clone(&mic_enabled),
+        mute_on_playback,
+    )?;
+    debug!("Audio capture started");
+
     // Wait for either task to complete or for Ctrl+C
     tokio::select! {
         _ = response_handle => {
@@ -2422,6 +2607,7 @@ async fn run_voice_agent(
         }
     }
 
+    playback_control.clear();
     info!("🛑 Voice Agent stopped");
     Ok(())
 }
