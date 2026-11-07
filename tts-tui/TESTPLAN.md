@@ -45,7 +45,7 @@ cargo check -p tts-tui
 - Press `Ctrl+Enter` and verify the cache is bypassed and a fresh request is made.
 - Run with `--endpoint` pointing at a self-hosted or proxy Deepgram-compatible TTS endpoint and verify playback still works.
 - Run with `--tags production --tags demo` (or `--tags production,demo`) and use endpoint logging to verify the default tags plus both custom tags are sent.
-- Use endpoint logging or a test proxy to verify the outgoing `User-Agent` is `tts-tui/0.9.9` for the current release.
+- Use endpoint logging or a test proxy to verify the outgoing `User-Agent` is `tts-tui/0.10.0` for the current release.
 - Remove or invalidate the API key for an endpoint that requires one and verify the log panel shows a useful error.
 - Verify `tts-tui --help` does not list a `--normalize-volume` option.
 - Press `v` to enable volume normalization and verify the request query contains `normalize_volume=true`; press it again to disable normalization and verify the parameter is omitted.
@@ -62,7 +62,10 @@ cargo check -p tts-tui
 
 ### 2a. Flux TTS Voices
 
-- Open the Voices filter (`/`) and type `flux`; verify all 36 `flux-*-en` voices are shown, including the featured voices and the additional accent/character voices listed in the README.
+- Open the Voices filter (`/`) and type `flux`; verify all 266 Flux voices are shown, grouped under one header per language (English plus the languages listed in the README), with regional variants such as `Dutch (Flemish)` directly after their base language and no repeated language headers.
+- Filter for `early`; verify only Early Access voices (labelled `(flux EA)`, e.g. Bengali, Korean, Turkish, Chinese) are listed and that English, Dutch, French, German, Hindi, Italian, Japanese, Portuguese, Russian, and Spanish Flux voices are not.
+- Play an Early Access voice (e.g. `flux-eunji-ko`) and verify audio plays and the log notes the lack of text normalization; play a generally available non-English voice (e.g. `flux-anouk-nl`) and verify the note is absent.
+- Spot-check voices against https://developers.deepgram.com/docs/flux-tts/voices for gender markers and names in at least three languages.
 - Play a short phrase with a Flux voice and verify audio is generated and plays correctly.
 - Increase or decrease playback speed, then play a Flux voice and verify the log notes that Flux ignores playback speed.
 - Enable volume normalization, then play a Flux voice and verify the log notes that Flux ignores volume normalization.

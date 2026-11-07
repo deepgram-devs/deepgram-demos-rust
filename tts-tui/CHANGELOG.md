@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.0 - 2026-11-07
+
+### Features
+
+- Added all 266 Flux voices from the Deepgram documentation: English plus 41 other languages, including Early Access languages (Bengali, Bulgarian, Catalan, Chinese, Croatian, Czech, Danish, Estonian, Finnish, Greek, Gujarati, Hungarian, Indonesian, Kannada, Korean, Latvian, Lithuanian, Malay, Marathi, Norwegian, Polish, Romanian, Slovak, Slovenian, Swedish, Tagalog, Tamil, Telugu, Turkish, Ukrainian, Urdu, and Vietnamese).
+- Early Access Flux voices are labelled `(flux EA)` and match the `early` voice filter; playing one logs that Early Access languages have no text normalization yet.
+- Voices are grouped by language with a single header per language; regional variants such as Dutch (Flemish), German (Swiss), Portuguese (Brazil/Portugal), and Chinese (Mandarin/Taiwanese Mandarin/Cantonese) follow their base language.
+
+### Changes
+
+- Moved the Flux voice catalog into a dedicated `flux_voices` module with tests that check the voice count, ID format, and Early Access labelling.
+
 ## 0.9.9 - 2026-08-19
 
 ### Features
