@@ -11,6 +11,9 @@
 ### Changes
 
 - Moved the Flux voice catalog into a dedicated `flux_voices` module with tests that check the voice count, ID format, and Early Access labelling.
+- Updated dependencies to their latest compatible releases, including ratatui 0.30.2, reqwest 0.13.5, tokio 1.54, the AWS SDK (aws-config 1.13, SageMaker Runtime 1.123), clap 4.6.7, rust_decimal 1.43, and arboard 3.7, and refreshed all transitive dependencies in the lockfile.
+- Disabled the SageMaker SDK's legacy `rustls` feature so the AWS client no longer pulls in hyper 0.14, h2 0.3, and rustls 0.21; `cargo audit` now reports no advisories for `tts-tui`.
+- Kept rodio at 0.22 because rodio 0.23 requires a newer `cpal`/`alsa-sys` that conflicts with other workspace members.
 
 ## 0.9.9 - 2026-08-19
 
