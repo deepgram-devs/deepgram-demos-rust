@@ -1,5 +1,6 @@
 use crate::audio::AudioOutput;
 use crate::config::{self, AppConfig, ExperimentalFlags};
+use crate::flux_voices;
 use crate::persistence;
 use crate::theme::{Theme, DEFAULT_THEME_INDEX, THEMES};
 use anyhow::Result;
@@ -460,44 +461,6 @@ lazy_static! {
             Voice { id: "aura-2-theia-en".to_string(), name: "Theia (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
             Voice { id: "aura-2-vesta-en".to_string(), name: "Vesta (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Female },
             Voice { id: "aura-2-zeus-en".to_string(), name: "Zeus (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "English".to_string(), gender: Gender::Male },
-            // Flux (v2/speak) — English voices. Keep this list aligned with
-            // https://developers.deepgram.com/docs/flux-tts/voices.
-            Voice { id: "flux-hannah-en".to_string(), name: "Hannah (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-kit-en".to_string(), name: "Kit (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-alexis-en".to_string(), name: "Alexis (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-cliff-en".to_string(), name: "Cliff (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-sienna-en".to_string(), name: "Sienna (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-cole-en".to_string(), name: "Cole (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-brooke-en".to_string(), name: "Brooke (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-colin-en".to_string(), name: "Colin (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-gemma-en".to_string(), name: "Gemma (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-haley-en".to_string(), name: "Haley (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-heather-en".to_string(), name: "Heather (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-miles-en".to_string(), name: "Miles (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-sean-en".to_string(), name: "Sean (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-bree-en".to_string(), name: "Bree (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-brittany-en".to_string(), name: "Brittany (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-bruce-en".to_string(), name: "Bruce (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-conor-en".to_string(), name: "Conor (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-donovan-en".to_string(), name: "Donovan (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-drew-en".to_string(), name: "Drew (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-elise-en".to_string(), name: "Elise (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-jack-en".to_string(), name: "Jack (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-kai-en".to_string(), name: "Kai (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-kelsey-en".to_string(), name: "Kelsey (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-maeve-en".to_string(), name: "Maeve (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-marcelo-en".to_string(), name: "Marcelo (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-marcus-en".to_string(), name: "Marcus (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-meena-en".to_string(), name: "Meena (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-meghan-en".to_string(), name: "Meghan (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-naveen-en".to_string(), name: "Naveen (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-paige-en".to_string(), name: "Paige (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-priya-en".to_string(), name: "Priya (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-rufus-en".to_string(), name: "Rufus (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-sharon-en".to_string(), name: "Sharon (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Female },
-            Voice { id: "flux-tanner-en".to_string(), name: "Tanner (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-wade-en".to_string(), name: "Wade (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
-            Voice { id: "flux-wes-en".to_string(), name: "Wes (flux)".to_string(), vendor: "Deepgram".to_string(), model: "flux".to_string(), language: "English".to_string(), gender: Gender::Male },
             Voice { id: "aura-2-alvaro-es".to_string(), name: "Alvaro (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Male },
             Voice { id: "aura-2-aquila-es".to_string(), name: "Aquila (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Female },
             Voice { id: "aura-2-carina-es".to_string(), name: "Carina (aura-2)".to_string(), vendor: "Deepgram".to_string(), model: "aura-2".to_string(), language: "Spanish".to_string(), gender: Gender::Female },
@@ -553,6 +516,35 @@ lazy_static! {
     };
 }
 
+/// Combines the Aura/Aura-2 voices with the Flux catalog and groups them by
+/// language so the Voices panel shows one header per language. Regional
+/// variants such as "Dutch (Flemish)" follow their base language. Languages
+/// keep their order of first appearance and voices keep their relative order.
+fn build_voice_list() -> Vec<Voice> {
+    let mut voices: Vec<Voice> = DEEPGRAM_VOICES.values().flatten().cloned().collect();
+    voices.extend(flux_voices::flux_voices());
+    group_voices_by_language(voices)
+}
+
+fn base_language(language: &str) -> &str {
+    language.split(" (").next().unwrap_or(language)
+}
+
+fn group_voices_by_language(mut voices: Vec<Voice>) -> Vec<Voice> {
+    let mut order: Vec<String> = Vec::new();
+    for voice in &voices {
+        let base = base_language(&voice.language);
+        if !order.iter().any(|known| known == base) {
+            order.push(base.to_string());
+        }
+    }
+    voices.sort_by_key(|voice| {
+        let base = base_language(&voice.language);
+        order.iter().position(|known| known == base).unwrap_or(usize::MAX)
+    });
+    voices
+}
+
 impl App {
     pub fn new(
         deepgram_endpoint: String,
@@ -566,7 +558,7 @@ impl App {
         let mut voice_menu_state = ListState::default();
         voice_menu_state.select(Some(0)); // Select the first voice by default
 
-        let voices: Vec<Voice> = DEEPGRAM_VOICES.values().flatten().cloned().collect();
+        let voices = build_voice_list();
 
         let resolved_api_key = config::normalized_api_key(config.api.key.as_deref());
 
@@ -1913,5 +1905,59 @@ fn log_level_name(level: &LogLevel) -> &'static str {
         LogLevel::Success => "SUCCESS",
         LogLevel::Warning => "WARN",
         LogLevel::Error => "ERROR",
+    }
+}
+
+#[cfg(test)]
+mod voice_list_tests {
+    use super::*;
+
+    fn voice(id: &str, language: &str) -> Voice {
+        Voice {
+            id: id.to_string(),
+            name: id.to_string(),
+            vendor: "Deepgram".to_string(),
+            model: "test".to_string(),
+            language: language.to_string(),
+            gender: Gender::Female,
+        }
+    }
+
+    #[test]
+    fn groups_variants_after_their_base_language_preserving_order() {
+        let grouped = group_voices_by_language(vec![
+            voice("a", "Dutch"),
+            voice("b", "English"),
+            voice("c", "Dutch (Flemish)"),
+            voice("d", "Dutch"),
+        ]);
+        let ids: Vec<_> = grouped.iter().map(|v| v.id.as_str()).collect();
+        assert_eq!(ids, ["a", "c", "d", "b"]);
+    }
+
+    #[test]
+    fn language_headers_are_not_repeated() {
+        let voices = build_voice_list();
+        let mut seen = HashSet::new();
+        let mut previous: Option<&str> = None;
+        for voice in &voices {
+            if previous != Some(voice.language.as_str()) {
+                assert!(
+                    seen.insert(voice.language.as_str()),
+                    "language header repeated: {}",
+                    voice.language
+                );
+                previous = Some(voice.language.as_str());
+            }
+        }
+    }
+
+    #[test]
+    fn voice_list_includes_aura_and_every_flux_voice() {
+        let voices = build_voice_list();
+        assert!(voices.iter().any(|v| v.id == "aura-2-thalia-en"));
+        assert_eq!(voices.iter().filter(|v| v.id.starts_with("flux-")).count(), 266);
+        let ids: HashSet<_> = voices.iter().map(|v| v.id.as_str()).collect();
+        assert_eq!(ids.len(), voices.len());
     }
 }

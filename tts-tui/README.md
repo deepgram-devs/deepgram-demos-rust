@@ -5,7 +5,7 @@ A terminal user interface (TUI) built with Rust and Ratatui for interacting with
 ## Features
 
 - Play saved text snippets with any Deepgram Aura, Aura-2, or Flux voice
-- **Flux TTS support** — all 36 Flux voices (`flux-*-en`) are selectable alongside Aura and Aura-2; requests are automatically routed to Deepgram's `/v2/speak` endpoint
+- **Flux TTS support** — all 266 Flux voices across English plus 41 other languages, including Early Access languages, are selectable alongside Aura and Aura-2; requests are automatically routed to Deepgram's `/v2/speak` endpoint
 - **Flux expressivity** — use the Command Palette's `Select Flux Expressivity` popup to choose the API-default behavior or an explicit value from `-2` (calm) to `2` (animated)
 - Choose the TTS provider: Deepgram-compatible HTTP endpoint or Amazon SageMaker `InvokeEndpoint`
 - Browse and filter voices by name, language, or model via a dedicated popup (`/` with Voices panel focused)
@@ -179,7 +179,63 @@ Tags are sent as repeated `tag` query parameters for HTTP and WebSocket requests
 
 ### Flux TTS
 
-[Flux](https://developers.deepgram.com/docs/flux-tts/overview) is Deepgram's TTS model built for voice agent pipelines. All 36 Flux voices are available in the Voices panel, filterable with `flux` (e.g. `/` then type `flux`):
+[Flux](https://developers.deepgram.com/docs/flux-tts/overview) is Deepgram's TTS model built for voice agent pipelines. All 266 Flux voices from the [Flux voice catalog](https://developers.deepgram.com/docs/flux-tts/voices) are available in the Voices panel, grouped by language. Filter with `/` and type `flux` for every Flux voice, a language such as `korean`, or `early` for Early Access voices only.
+
+Early Access voices are labelled `(flux EA)` in the Voices panel. Early Access languages do not have text normalization yet, so numbers, dates, and abbreviations are read as written; write them out as words. When an Early Access voice is played, the log notes this. The non-English Flux voices are available on `api.deepgram.com`, `api.eu.deepgram.com`, and `api.in.deepgram.com`, but not yet on `api.au.deepgram.com`.
+
+Flux languages (regional variants such as Dutch (Flemish) and Portuguese (Brazil) are shown as their own groups next to the base language):
+
+| Language | Code | Voices | Status |
+|----------|------|--------|--------|
+| English | `en` | Hannah, Kit, Alexis, Cliff, Sienna, Cole, Brooke, Colin, Gemma, Haley, Heather, Miles, Sean, Bree, Brittany, Bruce, Conor, Donovan, Drew, Elise, Jack, Kai, Kelsey, Maeve, Marcelo, Marcus, Meena, Meghan, Naveen, Paige, Priya, Rufus, Sharon, Tanner, Wade, Wes | Generally available |
+| Dutch | `nl` | Anouk, Bram, Fleur, Irene, Luuk, Monique, Ruben, Sanne, Yvonne | Generally available |
+| Dutch (Flemish) | `nl` | Dirk, Lotte, Niels, Veerle | Generally available |
+| French | `fr` | Arnaud, Benoit, Brigitte, Camille, Chloe, Florian, Julien, Mathieu, Pierre, Thierry, Veronique, Yasmine | Generally available |
+| German | `de` | Benjamin, Christian, Janine, Magdalena, Moritz, Nadine, Rolf, Sonja, Sven, Tobias, Verena | Generally available |
+| German (Swiss) | `de` | Leonie, Yannick | Generally available |
+| Hindi | `hi` | Ajay, Anjali, Arjun, Divya, Jyoti, Nikhil, Pallavi, Prachi, Rahul, Rajesh, Ritu, Shreya, Sunita, Vikram | Generally available |
+| Italian | `it` | Angela, Chiara, Federico, Giorgio, Matteo, Paola, Rocco, Sofia, Stefano, Vincenzo, Vito | Generally available |
+| Japanese | `ja` | Ayumi, Hayato, Nozomi, Sayaka | Generally available |
+| Portuguese (Brazil) | `pt` | Bianca, Bruno, Claudia, Leandro, Marcia, Mariana, Marta, Mateus, Miguel, Renato, Roberto, Rodrigo | Generally available |
+| Portuguese (Portugal) | `pt` | Artur, Benedita, Catarina, Hugo, Pedro, Ricardo | Generally available |
+| Russian | `ru` | Andrei, Kirill, Maxim, Mikhail, Natalia, Nikolai, Olga, Polina, Vladimir | Generally available |
+| Spanish | `es` | Aina, Alfredo, Carmen, Cecilia, Duvan, Eduardo, Ernesto, Fernanda, Fiorella, Gustavo, Jaime, Martin, Mauricio, Patricia, Pilar, Rafael, Tomas, Valentina, Ysabel | Generally available |
+| Bengali | `bn` | Afsana, Ishrat, Mamun, Sabbir, Shuvo, Sumaiya | Early access |
+| Bulgarian | `bg` | Desislava, Gergana | Early access |
+| Catalan | `ca` | Jordi, Judit | Early access |
+| Chinese (Mandarin) | `zh` | Bo, Haoran, Jian, Jie, Lijuan, Shufen, Wenbo, Wenjing, Zhen | Early access |
+| Chinese (Taiwanese Mandarin) | `zh` | Chiaying, Kuanyu, Yawen, Yuting | Early access |
+| Chinese (Cantonese) | `zh` | Manlok | Early access |
+| Croatian | `hr` | Dalibor, Danijela, Domagoj, Jasna, Josipa, Mihaela, Vedran | Early access |
+| Czech | `cs` | Jakub | Early access |
+| Danish | `da` | Pernille, Rasmus, Rikke | Early access |
+| Estonian | `et` | Triin | Early access |
+| Finnish | `fi` | Kirsi, Teemu | Early access |
+| Greek | `el` | Kostas | Early access |
+| Gujarati | `gu` | Bhavna, Hetal, Jignesh | Early access |
+| Hungarian | `hu` | Bence, Eszter, Kinga, Tibor | Early access |
+| Indonesian | `id` | Dewi, Fajar, Fitri, Rizky, Teguh | Early access |
+| Kannada | `kn` | Manjunath | Early access |
+| Korean | `ko` | Eunji, Hyunwoo, Mikyung, Minjun, Soojin, Sungmin | Early access |
+| Latvian | `lv` | Agnese, Edgars | Early access |
+| Lithuanian | `lt` | Goda, Neringa | Early access |
+| Malay | `ms` | Haziq, Izzah | Early access |
+| Marathi | `mr` | Pooja, Pratik, Sneha | Early access |
+| Norwegian | `no` | Erlend, Espen, Ida, Signe, Silje, Vegard | Early access |
+| Polish | `pl` | Bartosz, Ewa, Justyna, Kacper, Konrad, Zuzanna | Early access |
+| Romanian | `ro` | Cosmin, Ioana | Early access |
+| Slovak | `sk` | Dominika, Juraj | Early access |
+| Slovenian | `sl` | Gregor, Katja | Early access |
+| Swedish | `sv` | Axel, Charlotta, Frida, Ludvig, Oskar, Pontus, Wilma | Early access |
+| Tagalog | `tl` | Jerome, Jomar, Liezel, Noel, Trisha | Early access |
+| Tamil | `ta` | Gokul, Kavya, Sowmya, Vinoth | Early access |
+| Telugu | `te` | Pavan, Ravi, Sravani | Early access |
+| Turkish | `tr` | Dilek, Ecem, Emre, Gizem, Mehmet, Serkan, Zeynep | Early access |
+| Ukrainian | `uk` | Denys, Solomiya | Early access |
+| Urdu | `ur` | Ambreen, Usman | Early access |
+| Vietnamese | `vi` | Hoa, Minh | Early access |
+
+English voices:
 
 | Voice ID | Name | Accent | Gender |
 |----------|------|--------|--------|

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.10.0 - 2026-11-07
+
+### Features
+
+- Added all 266 Flux voices from the Deepgram documentation: English plus 41 other languages, including Early Access languages (Bengali, Bulgarian, Catalan, Chinese, Croatian, Czech, Danish, Estonian, Finnish, Greek, Gujarati, Hungarian, Indonesian, Kannada, Korean, Latvian, Lithuanian, Malay, Marathi, Norwegian, Polish, Romanian, Slovak, Slovenian, Swedish, Tagalog, Tamil, Telugu, Turkish, Ukrainian, Urdu, and Vietnamese).
+- Early Access Flux voices are labelled `(flux EA)` and match the `early` voice filter; playing one logs that Early Access languages have no text normalization yet.
+- Voices are grouped by language with a single header per language; regional variants such as Dutch (Flemish), German (Swiss), Portuguese (Brazil/Portugal), and Chinese (Mandarin/Taiwanese Mandarin/Cantonese) follow their base language.
+
+### Changes
+
+- Moved the Flux voice catalog into a dedicated `flux_voices` module with tests that check the voice count, ID format, and Early Access labelling.
+- Updated dependencies to their latest compatible releases, including ratatui 0.30.2, reqwest 0.13.5, tokio 1.54, the AWS SDK (aws-config 1.13, SageMaker Runtime 1.123), clap 4.6.7, rust_decimal 1.43, and arboard 3.7, and refreshed all transitive dependencies in the lockfile.
+- Disabled the SageMaker SDK's legacy `rustls` feature so the AWS client no longer pulls in hyper 0.14, h2 0.3, and rustls 0.21; `cargo audit` now reports no advisories for `tts-tui`.
+- Kept rodio at 0.22 because rodio 0.23 requires a newer `cpal`/`alsa-sys` that conflicts with other workspace members.
+
 ## 0.9.9 - 2026-08-19
 
 ### Features

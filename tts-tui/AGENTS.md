@@ -1,6 +1,7 @@
 # AGENTS.md
 
 - Keep the AGENTS.md file updated with new or changed functional requirements for the application
+- Keep the Flux voice catalog in `src/flux_voices.rs` aligned with https://developers.deepgram.com/docs/flux-tts/voices, including Early Access languages; non-English voices must group under their language header and Early Access voices must be labelled `(flux EA)`
 - Deepgram TTS requests must include the default tags `tts-tui`, `appeng`, and `deepgram-demos-rust`; expose additional request tags through the `--tags` CLI option
 
 ## Releases

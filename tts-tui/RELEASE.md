@@ -1,6 +1,6 @@
 # TTS TUI Release Checklist
 
-The current release is `0.9.9` (2026-08-19).
+The current release is `0.10.0` (2026-11-07).
 
 ## Required Release Files
 

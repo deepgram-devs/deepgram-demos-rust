@@ -1,6 +1,7 @@
 mod app;
 mod audio;
 mod config;
+mod flux_voices;
 mod logging;
 mod persistence;
 mod sagemaker;

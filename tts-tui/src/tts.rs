@@ -150,6 +150,16 @@ pub async fn fetch_audio_for_playback(
     } else {
         message
     };
+    let message = if matches!(backend, TtsBackend::Deepgram { .. })
+        && crate::flux_voices::is_early_access_voice(voice_id)
+    {
+        format!(
+            "{} (note: early access Flux language has no text normalization; write numbers, dates, and abbreviations as words)",
+            message
+        )
+    } else {
+        message
+    };
 
     Ok((message, audio_data, is_cached, request_id))
 }
@@ -884,6 +894,6 @@ mod tests {
 
     #[test]
     fn client_user_agent_identifies_application_and_version() {
-        assert_eq!(CLIENT_USER_AGENT, "tts-tui/0.9.9");
+        assert_eq!(CLIENT_USER_AGENT, "tts-tui/0.10.0");
     }
 }
