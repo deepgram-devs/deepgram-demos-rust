@@ -1,17 +1,17 @@
 {
-  "version": "0.1.6",
-  "description": "Deepgram Voice Agent client for real-time bidirectional conversations.",
+  "version": "0.1.7",
+  "description": "Deepgram Voice Agent client with Think Live orchestration and AEC3 echo cancellation.",
   "homepage": "https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/voice-agent",
   "license": "ISC",
-  "notes": "Installed from the voice-agent-v0.1.6 GitHub release.",
+  "notes": "Installed from the voice-agent-v0.1.7 GitHub release.",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/voice-agent-v0.1.6/voice-agent-0.1.6-windows-x64.zip",
-      "hash": "ce1a8fbca09e33deb1cb5c59957fb989bb42ce601a3cb9194c3a060364e49b7b"
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/voice-agent-v0.1.7/voice-agent-0.1.7-windows-x64.zip",
+      "hash": "a3c88ccc34cc513a0cbb28e1d0b3e7cf5036715cf9dedd2b661a9ec2b28fa854"
     },
     "arm64": {
-      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/voice-agent-v0.1.6/voice-agent-0.1.6-windows-arm64.zip",
-      "hash": "618839eb3f15b1994a4b6936337edeeaef35b580177400a54fa6073e3f775519"
+      "url": "https://github.com/deepgram-devs/deepgram-demos-rust/releases/download/voice-agent-v0.1.7/voice-agent-0.1.7-windows-arm64.zip",
+      "hash": "17de0391d8087efc5048815cadd038f6a65eb6664459516f055090943c126d29"
     }
   },
   "bin": "voice-agent.exe"
