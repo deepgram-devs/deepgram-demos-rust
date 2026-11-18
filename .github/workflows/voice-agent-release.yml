@@ -8,7 +8,7 @@ on:
       tag:
         description: Existing voice-agent tag to build and publish
         required: true
-        default: voice-agent-v0.1.6
+        default: voice-agent-v0.1.7
 
 permissions:
   contents: write
@@ -22,5 +22,5 @@ jobs:
       cargo_package: voice-agent
       source_directory: voice-agent
       tag: ${{ inputs.tag || github.ref_name }}
-      description: Deepgram Voice Agent client for real-time bidirectional conversations.
+      description: Deepgram Voice Agent client with Think Live orchestration and AEC3 echo cancellation.
       homepage: https://github.com/deepgram-devs/deepgram-demos-rust/tree/main/voice-agent

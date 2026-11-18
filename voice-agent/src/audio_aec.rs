@@ -5,9 +5,11 @@ use std::{
     error::Error,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc::{self, SyncSender},
+        mpsc::{self, SyncSender, TrySendError},
         Arc, Mutex,
     },
+    thread,
+    time::{Duration, Instant},
 };
 
 use cpal::{
@@ -19,6 +21,24 @@ use log::{error, info};
 use super::{aec, AudioCapture};
 
 const PLAYBACK_QUEUE_CAPACITY: usize = 64;
+static LAST_PLAYBACK_ERROR: Mutex<Option<Instant>> = Mutex::new(None);
+
+pub(super) fn log_playback_error(error: &dyn std::fmt::Display) {
+    let now = Instant::now();
+    let Ok(mut last_error) = LAST_PLAYBACK_ERROR.lock() else {
+        return;
+    };
+    let should_log = last_error
+        .is_none_or(|last_error| now.duration_since(last_error) >= Duration::from_secs(1));
+    if should_log {
+        *last_error = Some(now);
+    }
+    drop(last_error);
+
+    if should_log {
+        error!("Failed to play audio: {error}");
+    }
+}
 
 pub(super) fn start_capture(
     capture: &AudioCapture,
@@ -203,6 +223,7 @@ impl AudioPlayer {
         generation: Arc<AtomicU64>,
         mic_enabled: Arc<AtomicBool>,
         mute_on_playback: bool,
+        log_reference_status: bool,
     ) -> Result<Self, Box<dyn Error>> {
         let device = cpal::default_host()
             .default_output_device()
@@ -303,10 +324,12 @@ impl AudioPlayer {
             _ => return Err("Unsupported AEC speaker sample format".into()),
         };
         stream.play()?;
-        info!(
-            "AEC speaker reference active at {} Hz, {} channel(s)",
-            sample_rate, channels
-        );
+        if log_reference_status {
+            info!(
+                "AEC speaker reference active at {} Hz, {} channel(s)",
+                sample_rate, channels
+            );
+        }
 
         Ok(Self {
             _stream: stream,
@@ -325,7 +348,11 @@ impl AudioPlayer {
         }
     }
 
-    pub(super) fn play_audio(&self, audio_data: Vec<u8>) -> Result<(), Box<dyn Error>> {
+    pub(super) fn play_audio(
+        &self,
+        audio_data: Vec<u8>,
+        generation: u64,
+    ) -> Result<(), Box<dyn Error>> {
         if audio_data.is_empty() {
             return Ok(());
         }
@@ -346,13 +373,30 @@ impl AudioPlayer {
             return Ok(());
         }
 
-        let generation = self.generation.load(Ordering::Acquire);
-        self.tx
-            .try_send(PlaybackPacket {
-                generation,
-                samples,
-            })
-            .map_err(|_| "AEC speaker queue is full; audio chunk dropped".into())
+        let mut packet = PlaybackPacket {
+            generation,
+            samples,
+        };
+        loop {
+            // This method runs on the playback dispatcher, never in CPAL's
+            // real-time output callback. Briefly wait for the device queue to
+            // drain instead of dropping TTS audio during network bursts.
+            // A barge-in changes the generation from the WebSocket task, so
+            // stale packets stop waiting and are discarded immediately.
+            if generation != self.generation.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            match self.tx.try_send(packet) {
+                Ok(()) => return Ok(()),
+                Err(TrySendError::Full(returned)) => {
+                    packet = returned;
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    return Err("AEC speaker output callback stopped".into());
+                }
+            }
+        }
     }
 }
 

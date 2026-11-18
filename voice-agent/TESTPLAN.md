@@ -25,3 +25,8 @@
 11a. Click the warning-colored JSON log location in the message view and verify the fully qualified log-file path is copied to the clipboard.
 11b. Enable verbose JSON logging before connecting and confirm the log location is the first message in the newly cleared message view.
 12. Change TTS and listen settings, exit and restart the TUI, and verify the last voice/model and listen provider/model/version/language/tuning settings are restored from `voice-agent.yml`; add an unrelated YAML key and confirm saving preserves it.
+13. Start with `--think-live`, connect, and verify the initial Settings JSON contains the Deepgram `think_live.provider` block while retaining the reasoning LLM under `think.provider`.
+14. Use **Adjust Think Live backchannel sensitivity**, enter a new value, and verify the complete configured provider block with that sensitivity is sent using `UpdateThink_Live`; wait for the `ThinkLiveUpdated` event in the UI.
+15. Use **Request dynamic agent filler** and verify it sends `InjectAgentMessage` with `is_dynamic: true` and no `message`; inspect the conversation behavior label after the generated filler arrives.
+16. Enable the sample functions with Think Live initial and follow-up filler options; inspect Settings JSON for the documented function fields, then allow a sample function call to remain pending and confirm filler plays.
+17. Confirm the TUI surfaces `FrustrationDetected`, including a visual warning once `escalated` is true, and labels backchannels, presence checks, and filler in conversation history.

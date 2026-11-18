@@ -334,6 +334,8 @@ enum Command {
     Stt,
     SttLanguage,
     UpdateThink,
+    UpdateThinkLive,
+    DynamicFiller,
     ToggleTimestamps,
     ToggleJsonLogging,
     CopyConversation,
@@ -351,6 +353,7 @@ enum InputMode {
     AgentMessage,
     UserMessage,
     ThinkModel,
+    ThinkLiveSensitivity,
 }
 
 const COMMANDS: &[(&str, &str, Command, Option<&str>)] = &[
@@ -409,6 +412,12 @@ const COMMANDS: &[(&str, &str, Command, Option<&str>)] = &[
         None,
     ),
     (
+        "Adjust Think Live backchannel sensitivity",
+        "Change sensitivity and send the complete Think Live provider block",
+        Command::UpdateThinkLive,
+        None,
+    ),
+    (
         "Toggle message timestamps",
         "Show or hide timestamps for all user and agent messages",
         Command::ToggleTimestamps,
@@ -436,6 +445,12 @@ const COMMANDS: &[(&str, &str, Command, Option<&str>)] = &[
         "Inject agent message",
         "Send InjectAgentMessage with a behavior",
         Command::InjectAgent,
+        None,
+    ),
+    (
+        "Request dynamic agent filler",
+        "Ask Think Live to generate one short filler line",
+        Command::DynamicFiller,
         None,
     ),
     (
@@ -796,6 +811,7 @@ pub async fn run(
     args: LaunchOptions,
     project_id: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    validate_think_live_options(&args)?;
     let (worker_tx, mut events) = mpsc::unbounded_channel::<String>();
     let mut worker: Option<mpsc::UnboundedSender<WorkerCommand>> = None;
     let saved_config = config::load().unwrap_or_else(|error| {
@@ -1111,6 +1127,10 @@ fn draw_input(f: &mut ratatui::Frame, ui: &Ui) {
         Some(InputMode::ThinkModel) => (
             " UPDATE THINK MODEL ",
             "Enter sends this model with the current system prompt",
+        ),
+        Some(InputMode::ThinkLiveSensitivity) => (
+            " THINK LIVE BACKCHANNEL SENSITIVITY ",
+            "Enter a value from 0 to 1; other configured settings are retained",
         ),
         None => (" INPUT ", ""),
     };
@@ -1438,6 +1458,33 @@ async fn handle_key(
                 ui.input_behavior = (ui.input_behavior + 1) % 3;
             }
             KeyCode::Enter => {
+                if matches!(mode, InputMode::ThinkLiveSensitivity) {
+                    let Ok(sensitivity) = ui.input_buffer.trim().parse::<f32>() else {
+                        ui.push_warning("Enter a number from 0 through 1");
+                        return Ok(false);
+                    };
+                    if !sensitivity.is_finite() || !(0.0..=1.0).contains(&sensitivity) {
+                        ui.push_warning("Backchannel sensitivity must be from 0 through 1");
+                        return Ok(false);
+                    }
+                    match (worker, think_live_provider_json(args)) {
+                        (Some(tx), Some(mut provider)) => {
+                            provider["agent_backchannel_sensitivity"] =
+                                serde_json::json!(sensitivity);
+                            let message = serde_json::json!({
+                                "type": "UpdateThink_Live",
+                                "think_live": {"provider": provider},
+                            });
+                            let _ = tx.send(WorkerCommand::Json(message.to_string()));
+                            ui.push_client("→ UpdateThink_Live sent; waiting for ThinkLiveUpdated");
+                        }
+                        _ => ui.push_warning(
+                            "Connect with --think-live to update Think Live settings",
+                        ),
+                    }
+                    ui.input_mode = None;
+                    return Ok(false);
+                }
                 if let Some(tx) = worker {
                     let json = match mode {
                         InputMode::AgentMessage => {
@@ -1456,12 +1503,18 @@ async fn handle_key(
                             "type": "UpdateThink",
                             "think": {"provider": {"type": args.think_type, "model": ui.input_buffer}, "prompt": ui.prompt}
                         }),
+                        InputMode::ThinkLiveSensitivity => {
+                            unreachable!("handled before message construction")
+                        }
                     };
                     let _ = tx.send(WorkerCommand::Json(json.to_string()));
                     ui.push_client(match mode {
                         InputMode::AgentMessage => "→ InjectAgentMessage sent",
                         InputMode::UserMessage => "→ InjectUserMessage sent",
                         InputMode::ThinkModel => "→ UpdateThink sent",
+                        InputMode::ThinkLiveSensitivity => {
+                            unreachable!("handled before message construction")
+                        }
                     });
                 }
                 ui.input_mode = None;
@@ -1773,6 +1826,22 @@ async fn execute_command(
             ui.input_buffer = args.think_model.clone();
             ui.input_cursor = ui.input_buffer.len();
         }
+        Command::UpdateThinkLive => {
+            if !args.think_live {
+                ui.push_warning(
+                    "Start the TUI with --think-live before updating Think Live settings",
+                );
+            } else if worker.is_none() {
+                ui.push_warning("Connect to a Voice Agent before updating Think Live settings");
+            } else {
+                ui.input_mode = Some(InputMode::ThinkLiveSensitivity);
+                ui.input_buffer = format!(
+                    "{}",
+                    args.think_live_backchannel_sensitivity.unwrap_or(0.73)
+                );
+                ui.input_cursor = ui.input_buffer.len();
+            }
+        }
         Command::ToggleTimestamps => {
             ui.timestamps = !ui.timestamps;
             ui.user_config.show_timestamps = ui.timestamps;
@@ -1834,6 +1903,23 @@ async fn execute_command(
             ui.input_cursor = 0;
             ui.input_behavior = 0;
         }
+        Command::DynamicFiller => {
+            if let Some(tx) = worker {
+                if args.think_live {
+                    let message = serde_json::json!({
+                        "type": "InjectAgentMessage",
+                        "behavior": "default",
+                        "is_dynamic": true,
+                    });
+                    let _ = tx.send(WorkerCommand::Json(message.to_string()));
+                    ui.push_client("→ Dynamic InjectAgentMessage sent");
+                } else {
+                    ui.push_warning("Start the TUI with --think-live to request dynamic filler");
+                }
+            } else {
+                ui.push_warning("Connect to a Voice Agent before requesting dynamic filler");
+            }
+        }
         Command::InjectUser => {
             ui.input_mode = Some(InputMode::UserMessage);
             ui.input_buffer.clear();
@@ -1871,6 +1957,7 @@ async fn worker_loop(
     reusable_config_id: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     validate_aec_options(&args)?;
+    validate_think_live_options(&args)?;
     validate_speak_options(&args)?;
     let key = env::var("DEEPGRAM_API_KEY").map_err(|_| "DEEPGRAM_API_KEY is not set")?;
     let capture = AudioCapture::new(args.audio_sample_rate)?;
@@ -1897,6 +1984,7 @@ async fn worker_loop(
             Arc::clone(&player_generation),
             mic_for_player,
             mute,
+            false,
         ) {
             Ok(player) => player,
             Err(error) => {
@@ -1928,7 +2016,14 @@ async fn worker_loop(
                     }
                 }
                 PlaybackCommand::Audio { generation, data } if generation == active_generation => {
-                    if let Err(error) = player.play_audio(data) {
+                    #[cfg(feature = "aec")]
+                    let result = player.play_audio(data, generation);
+                    #[cfg(not(feature = "aec"))]
+                    let result = player.play_audio(data);
+                    if let Err(error) = result {
+                        #[cfg(feature = "aec")]
+                        super::audio_aec::log_playback_error(error.as_ref());
+                        #[cfg(not(feature = "aec"))]
                         log::warn!("Failed to play agent audio: {error}");
                     }
                 }
@@ -2060,8 +2155,27 @@ async fn worker_loop(
                             "ConversationText" => {
                                 let role = response.data.get("role").and_then(|v| v.as_str()).unwrap_or("?");
                                 let content = response.data.get("content").and_then(|v| v.as_str()).unwrap_or("");
-                                let _ = out.send(format!("__MESSAGE__|{}|{}", if role == "user" { "You" } else { "Agent" }, content));
+                                let behavior = response.data.get("conversational_behavior").and_then(|v| v.as_str()).unwrap_or("default");
+                                let label = if role == "user" {
+                                    "You".to_string()
+                                } else if behavior == "default" {
+                                    "Agent".to_string()
+                                } else {
+                                    format!("Agent ({behavior})")
+                                };
+                                let _ = out.send(format!("__MESSAGE__|{label}|{content}"));
                             }
+                            "FrustrationDetected" => {
+                                let count = response.data.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let escalated = response.data.get("escalated").and_then(|v| v.as_bool()).unwrap_or(false);
+                                let message = format!("Think Live detected frustration (count {count})");
+                                if escalated {
+                                    let _ = out.send(format!("__WARNING__|{message}; escalation threshold reached"));
+                                } else {
+                                    let _ = out.send(message);
+                                }
+                            }
+                            "ThinkLiveUpdated" => { let _ = out.send("Think Live settings updated".into()); }
                             "AgentStartedSpeaking" => playback_control.clear(),
                             "UserStartedSpeaking" => playback_control.clear(),
                             "Warning" => { let _ = out.send(format!("__WARNING__|Warning: {}", response.data)); }

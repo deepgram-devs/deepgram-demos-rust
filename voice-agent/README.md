@@ -15,6 +15,7 @@ This is a Rust application that demonstrates bidirectional conversation using De
 - **Smart Microphone Control**: AEC keeps capture live by default; `--no-mic-mute=false` opts into muting during playback and re-enables capture after 600ms of silence
 - **Silent Packet Injection**: Sends silent audio frames while explicitly muted to keep the WebSocket connection alive
 - **Sample Function Calling**: Optionally register sample client-side tools (`--enable-sample-functions`) to exercise the agent's function-calling flow
+- **Think Live**: Optionally add Deepgram's conversational orchestration model for backchannels, presence checks, frustration events, and dynamic filler
 - **Interactive TUI**: Run the `tui` subcommand for a searchable command palette, live conversation text, prompt editing, TTS/STT selection, and Voice Agent control messages
 
 ## Function Calling
@@ -70,7 +71,7 @@ cargo build
 cargo run -- tui
 ```
 
-Press `Ctrl+P` to search all TUI commands. Connect from the palette, then use the prompt editor, TTS/STT selectors, control-message commands, **Toggle message timestamps**, or **Toggle verbose JSON logging**. Timestamped user and agent messages retain their original times in history, so toggling the option updates the complete conversation. When verbose JSON logging is enabled, the TUI extracts `request_id` from Deepgram’s `Welcome` message and writes every client and server JSON message for that session to `<temporary-directory>/<request_id>.txt`; if enabled mid-conversation, all retained earlier JSON messages are written before new messages. The path is shown in the event pane. The TUI displays `ConversationText` events as `You` and `Agent` messages while audio continues through the microphone and speakers.
+Press `Ctrl+P` to search all TUI commands. Connect from the palette, then use the prompt editor, TTS/STT selectors, control-message commands, **Toggle message timestamps**, or **Toggle verbose JSON logging**. Timestamped user and agent messages retain their original times in history, so toggling the option updates the complete conversation. When verbose JSON logging is enabled, the TUI extracts `request_id` from Deepgram’s `Welcome` message and writes every client and server JSON message for that session to `<temporary-directory>/<request_id>.txt`; if enabled mid-conversation, all retained earlier JSON messages are written before new messages. The path is shown in the event pane. The TUI displays `ConversationText` events as `You` and `Agent` messages, including Think Live behavior labels such as backchannel or filler, while audio continues through the microphone and speakers.
 
 The JSON log location is displayed in the warning color; click it to copy its fully qualified path to the clipboard.
 
@@ -104,7 +105,7 @@ The AEC build keeps microphone capture active while the agent speaks and uses th
 
 User messages, agent messages, and client-side injection/control messages use different colors in the event pane.
 
-The TUI exposes the documented Voice Agent client controls: `UpdateListen`, `UpdateSpeak`, `UpdatePrompt`, `InjectAgentMessage`, `InjectUserMessage`, `ForceEndTurn`, and `AgentKeepAlive`. Actions that accept fields open an input dialog: agent injection asks for the message and `default`/`queue`/`interrupt` behavior, user injection asks for the message, think updates ask for the model, and listen/speak updates use selectors. Force-ending a turn requires Flux STT (V2). See [Deepgram Inputs: Client Messages](https://developers.deepgram.com/docs/voice-agent-inputs). The TTS chooser includes the complete current [Aura-2 catalog](https://developers.deepgram.com/docs/tts-models) and [Flux TTS catalog](https://developers.deepgram.com/docs/flux-tts/voices).
+The TUI exposes the documented Voice Agent client controls: `UpdateListen`, `UpdateSpeak`, `UpdatePrompt`, `UpdateThink`, `UpdateThink_Live`, `InjectAgentMessage`, `InjectUserMessage`, `ForceEndTurn`, and `AgentKeepAlive`. Actions that accept fields open an input dialog: agent injection asks for the message and `default`/`queue`/`interrupt` behavior, user injection asks for the message, think updates ask for the model, and listen/speak updates use selectors. **Adjust Think Live backchannel sensitivity** prompts for a new value and sends the full provider block with other configured settings retained; the TUI waits for the `ThinkLiveUpdated` acknowledgement. **Request dynamic agent filler** sends `InjectAgentMessage` with `is_dynamic: true`. Both require `--think-live`. Force-ending a turn requires Flux STT (V2). See [Deepgram Inputs: Client Messages](https://developers.deepgram.com/docs/voice-agent-inputs). The TTS chooser includes the complete current [Aura-2 catalog](https://developers.deepgram.com/docs/tts-models) and [Flux TTS catalog](https://developers.deepgram.com/docs/flux-tts/voices).
 
 1. **Run the application**:
 
@@ -152,6 +153,15 @@ cargo run
 | `--think-aws-access-key-id <KEY>` | _(none)_ | AWS Bedrock access key ID; also reads `AWS_ACCESS_KEY_ID` |
 | `--think-aws-secret-access-key <KEY>` | _(none)_ | AWS Bedrock secret access key; also reads `AWS_SECRET_ACCESS_KEY` |
 | `--think-aws-session-token <TOKEN>` | _(none)_ | Required for STS credentials; also reads `AWS_SESSION_TOKEN` |
+| `--think-live` | _(off)_ | Enable Deepgram Think Live alongside the configured reasoning LLM |
+| `--think-live-backchannel-sensitivity <0..1>` | Server default | Likelihood of short agent backchannels; `0` disables them |
+| `--think-live-presence-check-max-count <N>` | Server default | Maximum silence prompts; `0` disables presence checks |
+| `--think-live-presence-check-interval-ms <MS>` | Server default | Delay between presence checks, from 1 to 60000 ms |
+| `--think-live-frustration-max-count <N>` | Server default | Frustration events before `escalated` becomes true; `0` disables events |
+| `--think-live-restricted-term <TERM>` | Server default | Term Think Live should not say; repeatable or comma-separated |
+| `--function-initial-agent-filler` | _(off)_ | Enable initial generated filler on the sample functions |
+| `--function-agent-filler-max-count <N>` | _(off)_ | Maximum additional generated fillers on sample functions |
+| `--function-agent-filler-interval-ms <MS>` | Server default | Silence interval between additional fillers (1000–60000 ms when enabled) |
 | `--prompt <TEXT>` | Concise responses | System prompt / instructions for the agent; overrides the default concise-response prompt |
 | `--verbose` | _(off)_ | Print full Settings JSON at startup and the Voice Agent request ID after connecting |
 | `--no-mic-mute[=<BOOL>]` | `true` | Keep mic capture live during playback; pass `false` to mute it |
@@ -189,6 +199,34 @@ cargo run -- --json-log voice-agent-messages.log
 
 # Use the same file logging option with the TUI
 cargo run -- tui --json-log voice-agent-messages.log
+```
+
+### Think Live and Function Fillers
+
+Think Live is off by default. Enable it alongside the reasoning LLM to add backchannels, presence checks, and frustration events. Omitted Think Live parameters use server defaults.
+
+```powershell
+cargo run -p voice-agent -- `
+  --think-live `
+  --think-live-backchannel-sensitivity 0.2 `
+  --think-live-presence-check-max-count 2 `
+  --think-live-presence-check-interval-ms 5000 `
+  --think-live-frustration-max-count 2 `
+  --think-live-restricted-term human `
+  --think-live-restricted-term transfer
+```
+
+To exercise generated filler while a sample client-side function runs, enable the sample functions and their filler options. From the TUI command palette, **Request dynamic agent filler** asks Think Live to generate one short line for an application-known wait. The CLI reports `FrustrationDetected` events and shows non-default `conversational_behavior` labels in conversation output.
+
+```powershell
+cargo run -p voice-agent -- `
+  --think-live `
+  --enable-sample-functions `
+  --function-initial-agent-filler `
+  --function-agent-filler-max-count 2 `
+  --function-agent-filler-interval-ms 7000
+
+cargo run -p voice-agent -- tui --think-live
 ```
 
 ### Listen Provider and Audio

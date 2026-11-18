@@ -1,8 +1,8 @@
 [package]
 name = "voice-agent"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
-description = "A Deepgram Voice Agent client for real-time bidirectional voice conversation via WebSocket"
+description = "Deepgram Voice Agent client with Think Live orchestration and AEC3 echo cancellation"
 
 [features]
 default = ["aec"]

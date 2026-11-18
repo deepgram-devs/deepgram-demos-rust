@@ -127,6 +127,15 @@ pub struct AecWorker {
     join: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone)]
+pub struct AecWorkerStopHandle(Arc<AtomicBool>);
+
+impl AecWorkerStopHandle {
+    pub fn request_stop(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
 impl AecWorker {
     pub fn spawn(
         initial_delay_ms: Option<u16>,
@@ -196,11 +205,15 @@ impl AecWorker {
     pub fn sender(&self) -> AecPacketSender {
         self.sender.clone()
     }
+
+    pub fn stop_handle(&self) -> AecWorkerStopHandle {
+        AecWorkerStopHandle(Arc::clone(&self.stop))
+    }
 }
 
 impl Drop for AecWorker {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
+        self.stop_handle().request_stop();
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }

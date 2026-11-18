@@ -1,8 +1,12 @@
 # AEC dependency audit
 
-Audit date: 2026-11-05
+Workspace review date: 2026-11-17
+
+The isolated AEC candidate graph audit below was last run on 2026-11-05. The workspace lockfile was refreshed and audited again on 2026-11-17.
 
 ## Candidate dependency
+
+AEC candidate graph audit date: 2026-11-05
 
 - Crate: `aec3 = "=0.4.0"`
 - Cargo feature: optional `aec`, enabled by default
@@ -16,8 +20,8 @@ The workspace lockfile resolves the AEC path to `aec3 0.4.0`, `crossbeam-channel
 
 ## Workspace audit
 
-`cargo audit` scanned 1,054 locked packages. It exits nonzero with 18 vulnerability advisories and 22 allowed warnings. The flagged packages are outside the voice-agent AEC-enabled dependency tree; `cargo tree --package voice-agent --features aec` shows the app using patched `tokio 1.54.1`, `rustls 0.23.46`, `rustls-webpki 0.103.16`, and `webpki-roots 1.0.11`.
+`cargo audit` scanned 1,054 locked packages against 1,527 advisories. It exits nonzero with 21 vulnerability advisories and 22 allowed warnings in other workspace dependency graphs. The current all-target Voice Agent graph was checked with `cargo tree -p voice-agent --all-features --target all` and does not contain the remaining vulnerable versions.
 
-Unresolved vulnerability packages: `crossbeam-epoch 0.9.18`, `ctutils 0.4.2`, `h2 0.3.27` and `0.4.13`, `quinn-proto 0.11.15` (five advisories), `rkyv 0.7.46`, `rtrb 0.3.4`, `rustls 0.21.12` (two advisories), `rustls-webpki 0.101.7` (four advisories), and `webpki-root-certs 1.0.7`.
+The Voice Agent release graph was updated to `openssl 0.10.82` and `openssl-sys 0.9.118` for the native-TLS WebSocket path, `rustix 1.1.6` for terminal/audio support, and `clipboard-win 5.4.3` for Windows clipboard support. These replace the previously audited OpenSSL vulnerabilities, Rustix unsoundness, and yanked clipboard package.
 
-Other audit warnings: unmaintained `async-std 1.13.2`, `dotenv 0.15.0`, `instant 0.1.13`, `paste 1.0.15`, `pin-utils 0.1.0`, `proc-macro-error2 2.0.1`, `rustybuzz 0.20.1`, `ttf-parser 0.25.1`, `unsafe-libyaml 0.2.11`, `zbus_names 4.3.1`, `zvariant 5.10.0`, and `zvariant_derive 5.10.0`; unsound `anyhow 1.0.102`, `event-listener 5.4.1`, `lru 0.12.5` (two advisories), and `memmap2 0.9.10`; yanked `async-executor 1.14.0`, `chacha20 0.10.0`, `clipboard-win 5.4.1`, and `spin 0.9.8` and `0.10.0`.
+The remaining workspace advisory packages include `crossbeam-epoch 0.9.18`, `ctutils 0.4.2`, `h2 0.3.27` and `0.4.13`, `quinn-proto 0.11.15`, `quinn-udp 0.5.14`, `rkyv 0.7.46`, `rtrb 0.3.4`, `rustls 0.21.12`, `rustls-webpki 0.101.7`, and `webpki-root-certs 1.0.7`. Workspace warnings include unmaintained, unsound, and yanked packages outside the Voice Agent graph.

@@ -326,6 +326,42 @@ struct LaunchOptions {
     #[arg(long, env = "AWS_SESSION_TOKEN")]
     think_aws_session_token: Option<String>,
 
+    /// Enable Deepgram Think Live orchestration alongside the reasoning LLM
+    #[arg(long)]
+    think_live: bool,
+
+    /// Probability of Think Live backchannel responses, from 0 through 1
+    #[arg(long)]
+    think_live_backchannel_sensitivity: Option<f32>,
+
+    /// Maximum presence-check prompts after user silence (0 disables checks)
+    #[arg(long, value_parser = clap::value_parser!(u32))]
+    think_live_presence_check_max_count: Option<u32>,
+
+    /// Milliseconds between presence-check prompts (1–60000)
+    #[arg(long, value_parser = clap::value_parser!(u32))]
+    think_live_presence_check_interval_ms: Option<u32>,
+
+    /// Maximum frustration events before the escalated flag is set (0 disables events)
+    #[arg(long, value_parser = clap::value_parser!(u32))]
+    think_live_frustration_max_count: Option<u32>,
+
+    /// Think Live terms it must not say (repeatable or comma-separated)
+    #[arg(long = "think-live-restricted-term", value_delimiter = ',')]
+    think_live_restricted_terms: Vec<String>,
+
+    /// Enable a model-generated initial filler for the sample client functions
+    #[arg(long)]
+    function_initial_agent_filler: bool,
+
+    /// Maximum additional model-generated fillers for sample functions
+    #[arg(long, value_parser = clap::value_parser!(u32))]
+    function_agent_filler_max_count: Option<u32>,
+
+    /// Silence in milliseconds between additional sample-function fillers (1000–60000)
+    #[arg(long, value_parser = clap::value_parser!(u32))]
+    function_agent_filler_interval_ms: Option<u32>,
+
     /// Agent system prompt / instructions
     #[arg(long)]
     prompt: Option<String>,
@@ -389,6 +425,8 @@ struct AudioOutputConfig {
 struct AgentSettings {
     listen: ListenConfig,
     think: ThinkConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    think_live: Option<ThinkLiveConfig>,
     speak: SpeakConfig,
 }
 
@@ -408,6 +446,28 @@ struct ThinkConfig {
     endpoint: Option<ThinkEndpointConfig>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct ThinkLiveConfig {
+    provider: ThinkLiveProviderConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ThinkLiveProviderConfig {
+    #[serde(rename = "type")]
+    provider_type: String,
+    version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_backchannel_sensitivity: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_check_max_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_check_interval_ms: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frustration_max_count: Option<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    restricted_terms: Vec<String>,
+}
+
 /// A client-side function/tool definition sent in `agent.think.functions`.
 ///
 /// Omitting `endpoint` (as this demo always does) marks the function as
@@ -419,11 +479,21 @@ struct FunctionDefinition {
     name: String,
     description: String,
     parameters: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    initial_agent_filler: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_filler_max_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_filler_interval_ms: Option<u32>,
 }
 
 /// Sample client-side function definitions used to demonstrate and test
 /// tool-calling. Enabled with `--enable-sample-functions`.
-fn sample_functions() -> Vec<FunctionDefinition> {
+fn sample_functions(
+    initial_agent_filler: bool,
+    agent_filler_max_count: Option<u32>,
+    agent_filler_interval_ms: Option<u32>,
+) -> Vec<FunctionDefinition> {
     vec![
         FunctionDefinition {
             name: "get_current_time".to_string(),
@@ -432,6 +502,9 @@ fn sample_functions() -> Vec<FunctionDefinition> {
                 "type": "object",
                 "properties": {},
             }),
+            initial_agent_filler: initial_agent_filler.then_some(true),
+            agent_filler_max_count,
+            agent_filler_interval_ms,
         },
         FunctionDefinition {
             name: "roll_dice".to_string(),
@@ -447,6 +520,9 @@ fn sample_functions() -> Vec<FunctionDefinition> {
                 },
                 "required": []
             }),
+            initial_agent_filler: initial_agent_filler.then_some(true),
+            agent_filler_max_count,
+            agent_filler_interval_ms,
         },
         FunctionDefinition {
             name: "get_weather".to_string(),
@@ -461,6 +537,9 @@ fn sample_functions() -> Vec<FunctionDefinition> {
                 },
                 "required": ["location"]
             }),
+            initial_agent_filler: initial_agent_filler.then_some(true),
+            agent_filler_max_count,
+            agent_filler_interval_ms,
         },
     ]
 }
@@ -1132,6 +1211,10 @@ fn create_agent_config(
     think_aws_session_token: Option<&str>,
     prompt: Option<&str>,
     enable_sample_functions: bool,
+    think_live: Option<ThinkLiveConfig>,
+    function_initial_agent_filler: bool,
+    function_agent_filler_max_count: Option<u32>,
+    function_agent_filler_interval_ms: Option<u32>,
 ) -> VoiceAgentConfig {
     // Parse think headers from "key=value" format
     let mut headers = std::collections::HashMap::new();
@@ -1264,12 +1347,17 @@ fn create_agent_config(
                 },
                 prompt: Some(prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT).to_string()),
                 functions: if enable_sample_functions {
-                    sample_functions()
+                    sample_functions(
+                        function_initial_agent_filler,
+                        function_agent_filler_max_count,
+                        function_agent_filler_interval_ms,
+                    )
                 } else {
                     Vec::new()
                 },
                 endpoint: endpoint_config,
             },
+            think_live,
             speak: speak_config,
         }),
     }
@@ -1314,7 +1402,69 @@ fn config_from_options(
         options.think_aws_session_token.as_deref(),
         options.prompt.as_deref(),
         options.enable_sample_functions,
+        think_live_config(options),
+        options.function_initial_agent_filler,
+        options.function_agent_filler_max_count,
+        options.function_agent_filler_interval_ms,
     )
+}
+
+fn think_live_config(options: &LaunchOptions) -> Option<ThinkLiveConfig> {
+    options.think_live.then(|| ThinkLiveConfig {
+        provider: ThinkLiveProviderConfig {
+            provider_type: "deepgram".to_string(),
+            version: "v1".to_string(),
+            agent_backchannel_sensitivity: options.think_live_backchannel_sensitivity,
+            presence_check_max_count: options.think_live_presence_check_max_count,
+            presence_check_interval_ms: options.think_live_presence_check_interval_ms,
+            frustration_max_count: options.think_live_frustration_max_count,
+            restricted_terms: cleaned_values(&options.think_live_restricted_terms),
+        },
+    })
+}
+
+fn think_live_provider_json(options: &LaunchOptions) -> Option<serde_json::Value> {
+    think_live_config(options).map(|config| serde_json::to_value(config.provider).unwrap())
+}
+
+fn validate_think_live_options(options: &LaunchOptions) -> Result<(), Box<dyn std::error::Error>> {
+    let has_think_live_parameters = options.think_live_backchannel_sensitivity.is_some()
+        || options.think_live_presence_check_max_count.is_some()
+        || options.think_live_presence_check_interval_ms.is_some()
+        || options.think_live_frustration_max_count.is_some()
+        || !options.think_live_restricted_terms.is_empty();
+    if has_think_live_parameters && !options.think_live {
+        return Err("Think Live options require --think-live".into());
+    }
+    if let Some(sensitivity) = options.think_live_backchannel_sensitivity {
+        if !sensitivity.is_finite() || !(0.0..=1.0).contains(&sensitivity) {
+            return Err("--think-live-backchannel-sensitivity must be from 0 through 1".into());
+        }
+    }
+    if let Some(interval) = options.think_live_presence_check_interval_ms {
+        if !(1..=60_000).contains(&interval) {
+            return Err(
+                "--think-live-presence-check-interval-ms must be from 1 through 60000".into(),
+            );
+        }
+    }
+    let has_function_filler = options.function_initial_agent_filler
+        || options.function_agent_filler_max_count.is_some()
+        || options.function_agent_filler_interval_ms.is_some();
+    if has_function_filler && !options.enable_sample_functions {
+        return Err("Sample-function filler options require --enable-sample-functions".into());
+    }
+    if has_function_filler && !options.think_live {
+        return Err("Sample-function filler options require --think-live".into());
+    }
+    if options.function_agent_filler_max_count.unwrap_or(0) > 0 {
+        if let Some(interval) = options.function_agent_filler_interval_ms {
+            if !(1_000..=60_000).contains(&interval) {
+                return Err("--function-agent-filler-interval-ms must be from 1000 through 60000 when additional filler is enabled".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn voice_agent_input_sample_rate(device_sample_rate: u32) -> u32 {
@@ -1993,12 +2143,38 @@ async fn handle_voice_agent_responses(
                                     .get("content")
                                     .and_then(|c| c.as_str())
                                     .unwrap_or("");
+                                let behavior = response
+                                    .data
+                                    .get("conversational_behavior")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("default");
                                 match role {
                                     "user" => info!("👤 You: {}", content),
+                                    "assistant" if behavior != "default" => {
+                                        info!("🤖 Agent ({}): {}", behavior, content)
+                                    }
                                     "assistant" => info!("🤖 Agent: {}", content),
                                     _ => debug!("ConversationText ({}): {}", role, content),
                                 }
                             }
+                            "FrustrationDetected" => {
+                                let count = response
+                                    .data
+                                    .get("count")
+                                    .and_then(|value| value.as_u64())
+                                    .unwrap_or(0);
+                                let escalated = response
+                                    .data
+                                    .get("escalated")
+                                    .and_then(|value| value.as_bool())
+                                    .unwrap_or(false);
+                                if escalated {
+                                    warn!("Think Live detected frustration (count {count}); escalation threshold reached");
+                                } else {
+                                    info!("Think Live detected frustration (count {count})");
+                                }
+                            }
+                            "ThinkLiveUpdated" => info!("Think Live settings updated"),
                             "AgentThinking" => {
                                 debug!("🤔 Agent is thinking...");
                             }
@@ -2227,6 +2403,7 @@ async fn create_agent_configuration(
 ) -> Result<(), Box<dyn std::error::Error>> {
     validate_aec_options(&args.launch)?;
     validate_think_options(&args.launch)?;
+    validate_think_live_options(&args.launch)?;
     validate_speak_options(&args.launch)?;
     let api_key = env::var("DEEPGRAM_API_KEY")
         .map_err(|_| "DEEPGRAM_API_KEY environment variable not set")?;
@@ -2263,6 +2440,7 @@ async fn run_voice_agent(
 
     validate_aec_options(&args)?;
     validate_think_options(&args)?;
+    validate_think_live_options(&args)?;
     validate_speak_options(&args)?;
 
     let api_key = env::var("DEEPGRAM_API_KEY")
@@ -2322,6 +2500,8 @@ async fn run_voice_agent(
     let aec_worker = aec::AecWorker::spawn(args.aec_delay_ms, audio_tx.clone())?;
     #[cfg(feature = "aec")]
     let aec_sender_for_player = aec_worker.sender();
+    #[cfg(feature = "aec")]
+    let aec_shutdown = aec_worker.stop_handle();
 
     // Initialize audio player in a separate thread
     let mic_enabled_for_player = Arc::clone(&mic_enabled);
@@ -2333,6 +2513,7 @@ async fn run_voice_agent(
             Arc::clone(&player_generation),
             mic_enabled_for_player,
             mute_on_playback,
+            true,
         ) {
             Ok(player) => player,
             Err(e) => {
@@ -2364,7 +2545,14 @@ async fn run_voice_agent(
                     }
                 }
                 PlaybackCommand::Audio { generation, data } if generation == active_generation => {
-                    if let Err(e) = audio_player.play_audio(data) {
+                    #[cfg(feature = "aec")]
+                    let result = audio_player.play_audio(data, generation);
+                    #[cfg(not(feature = "aec"))]
+                    let result = audio_player.play_audio(data);
+                    if let Err(e) = result {
+                        #[cfg(feature = "aec")]
+                        audio_aec::log_playback_error(e.as_ref());
+                        #[cfg(not(feature = "aec"))]
                         error!("Failed to play audio: {}", e);
                     }
                 }
@@ -2474,7 +2662,7 @@ async fn run_voice_agent(
     let force_end_turn_supported = args.listen_provider == "deepgram"
         && args.listen_model.starts_with("flux-")
         && args.listen_version.as_deref() == Some("v2");
-    let response_handle = tokio::spawn(async move {
+    let mut response_handle = tokio::spawn(async move {
         handle_voice_agent_responses(
             ws_receiver,
             playback_for_ws,
@@ -2497,7 +2685,9 @@ async fn run_voice_agent(
         info!("Press Ctrl+C to stop");
     }
 
-    let audio_handle = tokio::spawn(async move {
+    #[cfg(feature = "aec")]
+    let audio_aec_shutdown = aec_shutdown.clone();
+    let mut audio_handle = tokio::spawn(async move {
         let mut packet_count = 0u64;
         let mut function_responses_closed = false;
         let mut keyboard_controls = keyboard_controls;
@@ -2568,6 +2758,8 @@ async fn run_voice_agent(
                         }
                         Some(cli_keyboard::KeyboardCommand::Stop) => {
                             info!("Received Ctrl+C, shutting down...");
+                            #[cfg(feature = "aec")]
+                            audio_aec_shutdown.request_stop();
                             break;
                         }
                         None => keyboard_controls_open = false,
@@ -2595,11 +2787,15 @@ async fn run_voice_agent(
     debug!("Audio capture started");
 
     // Wait for either task to complete or for Ctrl+C
+    let mut response_completed = false;
+    let mut audio_completed = false;
     tokio::select! {
-        _ = response_handle => {
+        _ = &mut response_handle => {
+            response_completed = true;
             debug!("Response handler completed");
         }
-        _ = audio_handle => {
+        _ = &mut audio_handle => {
+            audio_completed = true;
             debug!("Audio handler completed");
         }
         _ = tokio::signal::ctrl_c() => {
@@ -2607,7 +2803,20 @@ async fn run_voice_agent(
         }
     }
 
+    if !response_completed {
+        response_handle.abort();
+        let _ = response_handle.await;
+    }
     playback_control.clear();
+    #[cfg(feature = "aec")]
+    {
+        drop(_aec_capture_stream);
+        aec_shutdown.request_stop();
+    }
+    if !audio_completed {
+        audio_handle.abort();
+        let _ = audio_handle.await;
+    }
     info!("🛑 Voice Agent stopped");
     Ok(())
 }
@@ -2656,6 +2865,10 @@ mod tests {
             None,
             None,
             false,
+            None,
+            false,
+            None,
+            None,
         );
 
         serde_json::to_value(config).expect("settings config should serialize")
@@ -2796,6 +3009,10 @@ mod tests {
             Some("session-token"),
             None,
             false,
+            None,
+            false,
+            None,
+            None,
         );
         let config = serde_json::to_value(config).expect("settings should serialize");
 

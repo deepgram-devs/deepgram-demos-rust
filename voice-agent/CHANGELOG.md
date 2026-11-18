@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## [0.1.7] - 2026-11-17
+
+### Added
+- Added optional Deepgram Think Live settings alongside the reasoning LLM, including CLI options for backchannel sensitivity, presence checks, frustration events, and restricted terms.
+- Added Think Live support for sample-function initial and follow-up fillers, plus TUI actions for `UpdateThink_Live` and on-demand dynamic filler.
+- Displayed Think Live conversation behavior labels and handled `FrustrationDetected` and `ThinkLiveUpdated` events in the CLI and TUI.
+
+### Fixed
+- Prevented transient AEC speaker-queue saturation from dropping TTS chunks; the playback dispatcher waits off the audio callback thread and discards packets when a newer interruption generation arrives.
+- Rate-limited repeated AEC playback error messages to at most one per second.
+- Stopped the AEC worker before closing the outbound audio receiver during CLI shutdown, avoiding a false worker-failure error on Ctrl+C.
+- Avoided polling a completed Tokio task handle a second time during CLI shutdown.
+- Kept the AEC speaker-reference startup status out of the TUI while retaining it in standard CLI logs.
+
+### Security
+- Updated locked `openssl`, `rustix`, and Windows `clipboard-win` to patched/non-yanked releases for the Voice Agent dependency graph; recorded the full-workspace audit findings in `AEC_DEPENDENCY_AUDIT.md`.
+
 ## [0.1.6] - 2026-11-05
 
 ### Added

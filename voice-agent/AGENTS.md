@@ -9,6 +9,10 @@ Keep this file up-to-date whenever voice-agent functionality or user-facing beha
 - The optional `aec` Cargo feature is enabled by default. It must run AEC3 for both CLI and TUI sessions, keep microphone capture live during speaker playback by default, use the samples actually written to the output device as the render reference, and clear queued agent audio immediately on `UserStartedSpeaking`.
 - `--no-mic-mute` defaults to true; `--no-mic-mute=false` opts into microphone muting during playback.
 - AEC capture and render audio must be resampled and reblocked to 48 kHz mono 10 ms frames; only processed 24 kHz mono linear16 frames may be sent to Voice Agent. Missing, stale, discontinuous, invalid, or failed processing must fail closed to silence without raw microphone fallback.
+- AEC playback queue saturation must not drop current-generation TTS chunks. Apply backpressure only on the playback dispatcher, never on the real-time device callback, and discard queued packets promptly when an interruption advances the playback generation.
+- Repeated AEC playback-error diagnostics must be rate-limited to at most one log entry per second.
+- On CLI shutdown, stop AEC capture and signal the AEC worker before dropping the outbound audio receiver; expected shutdown must not report the worker as failed.
+- CLI shutdown must not poll a Tokio task `JoinHandle` again after its completion was consumed by `tokio::select!`.
 - AEC delay estimation must be adaptive by default. `--aec-delay-ms` and `AEC_DELAY_MS` may set an initial delay from 0 through 500 ms.
 - The standard CLI must surface received end-of-turn events, including `EndOfTurn` messages and `TurnInfo` messages whose `event` is `EndOfTurn`.
 - When the Voice Agent server rejects Settings before `SettingsApplied`, the standard CLI must print pretty Settings JSON with credential values redacted; colorize JSON tokens when stderr is an interactive terminal and color is enabled.
@@ -26,6 +30,7 @@ Keep this file up-to-date whenever voice-agent functionality or user-facing beha
 - The voice-agent TUI must provide a separate command-palette action to copy only the current Deepgram `request_id` to the system clipboard, and must clear that ID when the connection ends.
 - HTTP-to-WebSocket upgrade diagnostics must not be rendered in the TUI; they may be retained in diagnostic logging when enabled.
 - The TUI must suppress rodio's `Dropping OutputStream` shutdown diagnostic so closing a connection does not print over the interface.
+- AEC speaker-reference startup status may be logged by the standard CLI but must not print over the TUI.
 - When the TUI is launched with `--verbose`, it must append connection and server errors to `voice-agent.log` in the current working directory.
 - The Voice Agent CLI must support `--json-log <PATH>` to append sent and received JSON text messages to a file, prefixing each entry with a UTC 24-hour timestamp and direction while excluding binary audio frames; the option must also work with the `tui` subcommand.
 - The voice-agent TUI must provide a full system-prompt editor with text insertion, deletion, cursor navigation, and forward/backward navigation controls, and must send the edited prompt through the supported Voice Agent update message.
@@ -45,6 +50,9 @@ Keep this file up-to-date whenever voice-agent functionality or user-facing beha
 - The JSON log location must appear as a warning-colored, clickable message in the message view. Clicking it must copy the fully qualified log-file path to the clipboard.
 - When verbose JSON logging is enabled before a new Voice Agent connection, the log location must be the first message displayed in the newly cleared message view.
 - The list of TTS voices can be filtered by the user
+- Think Live must remain optional and, when enabled, configure `agent.think_live.provider` as Deepgram v1 alongside the reasoning LLM, with CLI options for its backchannel, presence-check, frustration, and restricted-term settings.
+- Think Live sessions must show `conversational_behavior` labels, surface `FrustrationDetected` and `ThinkLiveUpdated`, and offer TUI controls to update the full Think Live provider block and request dynamic filler.
+- Sample-function filler settings must serialize as the documented function fields and require both `--think-live` and `--enable-sample-functions`.
 
 ## Catalog maintenance
 
